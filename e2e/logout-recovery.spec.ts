@@ -75,6 +75,44 @@ test("an unavailable session check keeps logout visibly unresolved", async ({ pa
   await expect(page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" })).toBeEnabled();
 });
 
+for (const invalid401 of [
+  { name: "an HTML access page", contentType: "text/html", body: "<html><body>Access denied</body></html>" },
+  { name: "an unauthenticated envelope without request ID", json: { error: { code: "unauthenticated", message: "Session ended" } } },
+  { name: "a 401 envelope with the wrong code", json: { error: { code: "forbidden", message: "Not allowed", requestId: "wrong-code" } } },
+]) {
+  test(`logout recovery rejects ${invalid401.name} as proof of anonymity`, async ({ page }) => {
+    let authenticated = true;
+    let sessionCalls = 0;
+    let logoutCalls = 0;
+    await page.route("**/api/auth/session", async (route) => {
+      sessionCalls += 1;
+      if (authenticated && sessionCalls !== 2) return route.fulfill({ json: { data: session, requestId: `session-${sessionCalls}` } });
+      if (sessionCalls === 2) {
+        if (invalid401.contentType) return route.fulfill({ status: 401, contentType: invalid401.contentType, body: invalid401.body });
+        return route.fulfill({ status: 401, json: invalid401.json });
+      }
+      return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "session-ended" } } });
+    });
+    await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
+    await page.route("**/api/auth/logout", async (route) => {
+      logoutCalls += 1;
+      if (logoutCalls === 1) return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Logout unavailable", requestId: "logout-503" } } });
+      authenticated = false;
+      return route.fulfill({ json: { data: { loggedOut: true }, requestId: "logout-retry" } });
+    });
+
+    await page.goto("/app");
+    await page.getByRole("button", { name: "ออกจากระบบ" }).click();
+    await expect(page).toHaveURL(/\/app$/);
+    await expect(page.getByRole("alert").filter({ hasText: "ระบบอาจยังเปิดเซสชันนี้อยู่" })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"))).toContain(user.id);
+
+    await page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect(logoutCalls).toBe(2);
+  });
+}
+
 test("an unresolved logout survives unavailable status on reload and can be recovered later", async ({ page }) => {
   let authenticated = true;
   let sessionCalls = 0;
