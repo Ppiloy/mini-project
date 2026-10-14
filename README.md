@@ -12,9 +12,12 @@ Use Node.js 24 and the committed lockfile. See [local setup](docs/local-setup.md
 npm ci
 npm run verify:release
 npm run test:e2e
+npm run test:e2e:real
 ```
 
 The release gate runs typecheck, API/calculation/operator tests, ordered SQL checksum verification, and the production build. Netlify publication is configured to stop when that gate fails. Seed, rotation, preview initialization, reset, and restore are explicit operator actions and are never build hooks.
+
+`test:e2e` runs the default browser suite against the local Vite and development API servers. `test:e2e:real` separately runs the actual-Express acceptance suite against a fresh disposable PGlite database; see [its setup and limits](e2e/real-backend/README.md). The default suite excludes that harness so it never starts it without its dedicated configuration.
 
 ## Handover
 
