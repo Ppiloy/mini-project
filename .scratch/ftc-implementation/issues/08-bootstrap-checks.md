@@ -1,7 +1,7 @@
 # Fictional account bootstrap and release checks
 
 Type: task
-Status: open
+Status: claimed
 Blocked by: 03
 
 Extract the authentication/bootstrap and build prerequisites from operations so they can proceed alongside evidence workflows. Implement an idempotent developer command to seed two fictional taxpayers and one officer using generated private credentials and scrypt. Repeat seeds must preserve existing passwords and cases; no frontend or Git credentials. Reject a wrong or ambiguous target environment and coordinate the trusted environment marker with ticket 07. Expose the configured officer identifier for server-only automatic assignment. Include private credential-file handling and an explicit credential rotation command that invalidates sessions.
