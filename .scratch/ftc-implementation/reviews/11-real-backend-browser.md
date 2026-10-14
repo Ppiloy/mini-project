@@ -1,6 +1,6 @@
 # Real-backend browser adversarial review
 
-Status: FAIL; repairs in progress.
+Status: PASS for the repaired application candidate; merger integration pending.
 
 Independent GPT-6 Luna reviewer assessed `55cd33b0499c7deddebb499ec739ec69130b27c5` against baseline `c4a98c2`. The five real-HTTP browser journeys passed independently on owned ports, but a delayed actual initial-session response reproduced a fixture/hosted identity race: fixture selection before session readiness skipped logout, and the late response replaced the fixture identity with the hosted account while the fixture mode remained active.
 
@@ -11,3 +11,7 @@ Independent rereview of `78ebfae37eb57139d1738d691cb2201d9596c743` confirmed tho
 Review of `7a4aeb7` then reproduced an obsolete session-status refresh reintroducing an active warning after an account change. Candidate `fd7e7f28423e9f8b5735ab2e30884f0673410b24` repaired React request-generation handling, but the next independent review remained FAIL: forwarding the delayed response unchanged including its rolling Set-Cookie header displaced the new login cookie, and browser Back/Forward from a newly created hosted case discarded typed fields without a warning. The candidate's nine browser tests and 86-test release gate passed; the independent probes demonstrate those gaps despite the passing suite. Repairs are active. Report: `ftc-session-generation-review.md` in the task visualization directory.
 
 External report: `ftc-review-real-backend-browser.md` in the task's 14 October 2026 visualization directory. This unit uses actual Express HTTP, committed migrations in PGlite, private generated fictional credentials and test-only Blob I/O. It does not establish hosted PostgreSQL concurrency, SDK/Blobs durability or redeploy behavior.
+
+Independent final rereview passed exact candidate `6518c33823fd4fba4e175958e4232e05024cbf04`: 11 actual-backend browser journeys and the 87-test/four-migration release gate. Delayed actual responses retain their headers and cannot displace a newer login or delete its cookie. A delayed-pool public HTTP regression first reproduced an old SID being recreated after logout; established-session persistence now updates an existing unexpired row rather than upserting a revoked SID. Browser Back/Forward and sign-out preserve dirty inputs unless the user confirms discard. The reviewer separately verified accepted dirty-editor sign-out, one prompt, login navigation and subsequent 401.
+
+The implementer then merged current integration documentation only, producing clean `464ee83ea63b9ab5d484d47638801b7f1dd7cb44`. Application/harness files are identical to the independently passed SHA. The final external verdict is `ftc-session-generation-review.md`; earlier failures remain described above. Hosted PostgreSQL concurrency remains a separate gate.
