@@ -26,6 +26,10 @@ export class ApiClientError extends Error {
   }
 }
 
+export type LogoutConfirmationResult =
+  | { confirmed: true }
+  | { confirmed: false; errors: unknown[] };
+
 export interface AuthSession {
   user: ApiUser;
   csrfToken: string;
@@ -90,13 +94,24 @@ function errorRequestId(value: unknown): string | undefined {
 
 /** Include the server support reference wherever an API failure is shown. */
 export function apiFailureContext(error: unknown): string {
-  const requestId = error instanceof ApiClientError ? error.requestId : undefined;
-  return `${requestId ? ` (รหัสคำขอ: ${requestId})` : ""} · รุ่นนโยบาย: rd-ftc-demo-2568-v1`;
+  return apiFailureContextFor([error]);
 }
 
 export function apiFailureMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : fallback;
-  return `${message}${apiFailureContext(error)}`;
+  return `${message}${apiFailureContextFor([error])}`;
+}
+
+/** Keep recovery guidance, server messages, and support identifiers together without repeating policy context. */
+export function apiFailureMessages(errors: readonly unknown[], fallback: string): string {
+  const messages = [...new Set(errors.filter((error): error is Error => error instanceof Error).map((error) => error.message).filter(Boolean))];
+  const details = messages.length ? ` (${messages.join("; ")})` : "";
+  return `${fallback}${details}${apiFailureContextFor(errors)}`;
+}
+
+function apiFailureContextFor(errors: readonly unknown[]): string {
+  const requestIds = [...new Set(errors.flatMap((error) => error instanceof ApiClientError && error.requestId ? [error.requestId] : []))];
+  return `${requestIds.length ? ` (รหัสคำขอ: ${requestIds.join(", ")})` : ""} · รุ่นนโยบาย: rd-ftc-demo-2568-v1`;
 }
 
 function isJsonResponse(response: Response): boolean {
@@ -177,16 +192,19 @@ export const hostedApi = {
   },
 };
 
-/** Returns true only when logout succeeded or the session endpoint confirms anonymity. */
-export async function logoutAndConfirm(csrfToken: string): Promise<boolean> {
+/** Confirms logout only after a valid logout response or an authoritative anonymous session response. */
+export async function logoutAndConfirm(csrfToken: string): Promise<LogoutConfirmationResult> {
+  let logoutError: unknown;
   try {
     await hostedApi.logout(csrfToken);
-    return true;
-  } catch {
-    try {
-      return (await hostedApi.session()) === null;
-    } catch {
-      return false;
-    }
+    return { confirmed: true };
+  } catch (error) {
+    logoutError = error;
+  }
+  try {
+    if ((await hostedApi.session()) === null) return { confirmed: true };
+    return { confirmed: false, errors: [logoutError] };
+  } catch (statusError) {
+    return { confirmed: false, errors: [logoutError, statusError] };
   }
 }

@@ -27,6 +27,7 @@ test("a failed logout stays visible and an authenticated session remains private
   await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toBeVisible();
   await page.getByRole("button", { name: "ออกจากระบบ" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "ออกจากระบบยังไม่สำเร็จ" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "logout-503" })).toContainText("rd-ftc-demo-2568-v1");
   await expect(page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" })).toBeEnabled();
   expect(logoutCalls).toBe(1);
 
@@ -72,6 +73,8 @@ test("an unavailable session check keeps logout visibly unresolved", async ({ pa
   await page.getByRole("button", { name: "ออกจากระบบ" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("alert").filter({ hasText: "ระบบอาจยังเปิดเซสชันนี้อยู่" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "logout-503" })).toContainText("session-503");
+  await expect(page.getByRole("alert").filter({ hasText: "rd-ftc-demo-2568-v1" })).toBeVisible();
   await expect(page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" })).toBeEnabled();
 });
 
@@ -290,6 +293,8 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "ยังออกจากระบบไม่สำเร็จ" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "cleanup-503" })).toContainText("session-1");
+  await expect(page.getByRole("alert").filter({ hasText: "rd-ftc-demo-2568-v1" })).toBeVisible();
   expect(await page.evaluate("Object.keys(sessionStorage).filter((key) => key.includes('owner-a')).length")).toBe(0);
 
   await page.evaluate("{ history.pushState({}, '', '/app'); window.dispatchEvent(new PopStateEvent('popstate')); }");
@@ -298,6 +303,7 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   await page.reload();
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("alert").filter({ hasText: "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "session-2" })).toContainText("rd-ftc-demo-2568-v1");
   await expect(page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" })).toBeVisible();
   await expect(page.getByText("ผู้เสียภาษี A")).toHaveCount(0);
 
@@ -306,4 +312,23 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   await expect.poll(() => logoutCalls).toBe(2);
   expect(logoutCalls).toBe(2);
   expect(activeUser).toBe(null);
+});
+
+test("a failed persisted logout retry shows the status request ID and keeps the intent retryable", async ({ page }) => {
+  let sessionCalls = 0;
+  let logoutCalls = 0;
+  await page.addInitScript(() => sessionStorage.setItem("ftc.hosted.logout.pending", JSON.stringify({ accountId: "taxpayer-logout", expectedRole: "taxpayer" })));
+  await page.route("**/api/auth/session", (route) => {
+    sessionCalls += 1;
+    if (sessionCalls === 1) return route.fulfill({ json: { data: session, requestId: "boot-session" } });
+    if (sessionCalls === 2) return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Status unavailable during retry", requestId: "retry-status-503" } } });
+    return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "retry-anonymous" } } });
+  });
+  await page.route("**/api/auth/logout", (route) => { logoutCalls += 1; return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Unexpected logout", requestId: "unexpected-logout" } } }); });
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "retry-status-503" })).toContainText("rd-ftc-demo-2568-v1");
+  expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"))).toContain("taxpayer-logout");
+  expect(logoutCalls).toBe(0);
 });
