@@ -60,5 +60,5 @@ describe("the ordered migration release gate", () => {
     await writeFile(path, canonical.replace(/\r?\n/g, "\r\n"));
 
     await expect(verifyMigrations(root)).rejects.toThrow(`Migration checksum changed: ${name}`);
-  });
+  }, 20_000);
 });

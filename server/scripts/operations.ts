@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getStore } from "@netlify/blobs";
 import { getDatabase } from "@netlify/database";
-import { loadEnvironmentMarker, resolveRuntimeEnvironmentConfig, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "../runtime/environment.js";
+import { ensureEnvironmentMarker, loadEnvironmentMarker, resolveRuntimeEnvironmentConfig, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "../runtime/environment.js";
 import type { PgPoolLike } from "../postgres.js";
 import { hashPassword, verifyPassword } from "../passwords.js";
 import { createEmptyDraft } from "../../shared/draft.js";
@@ -200,6 +200,7 @@ interface OperatorDependencies {
   now?: () => Date;
   writeOutput?: (line: string) => void;
   artifactPath?: (command: string, operationId: string) => string;
+  manifestPath?: (command: string, manifestId: string) => string;
   credentialsPath?: string;
 }
 
@@ -207,7 +208,16 @@ export interface CleanupCandidate {
   attachmentId: string;
   caseId: string;
   storageKey: string;
+  status: string;
   action: "delete-and-verify" | "verify-absent" | "blocked-ready-evidence" | "blocked-settle-period" | "blocked-snapshot-reference" | "blocked-marker-mismatch" | "blocked-active-lease";
+  requestedAt: string | null;
+  requestedAgeMs: number | null;
+  attemptCount: number;
+  lastAttemptAt: string | null;
+  lastErrorCategory: "none" | "prior-attempt-failed";
+  leaseAgeMs: number | null;
+  protection: "none" | "ready_evidence" | "submitted_snapshot_reference" | "marker_mismatch" | "active_claim_lease" | "upload_settle_period";
+  snapshotReferences: { snapshotId: string; kind: string }[];
 }
 export interface CleanupManifest {
   version: 1;
@@ -262,8 +272,10 @@ async function requireTargetMarker(pool: PgPoolLike, config: RuntimeEnvironmentC
 async function cleanupManifest(pool: PgPoolLike, blobs: OperatorBlobIO, marker: EnvironmentMarker, now: Date, settleMs: number, leaseMs: number): Promise<CleanupManifest> {
   const rows = await pool.query<{
     id: string; case_id: string; status: string; cleanup_pending: boolean; cleanup_requested_at: Date | string | null;
-    cleanup_claimed_at: Date | string | null; storage_key: string; environment_marker_id: string | null;
-  }>(`SELECT a.id,a.case_id,a.status,a.cleanup_pending,a.cleanup_requested_at,a.cleanup_claimed_at,a.storage_key,a.environment_marker_id
+    cleanup_claimed_at: Date | string | null; cleanup_attempt_count: number; cleanup_last_attempt_at: Date | string | null;
+    cleanup_last_error: string | null; storage_key: string; environment_marker_id: string | null;
+  }>(`SELECT a.id,a.case_id,a.status,a.cleanup_pending,a.cleanup_requested_at,a.cleanup_claimed_at,a.cleanup_attempt_count,
+          a.cleanup_last_attempt_at,a.cleanup_last_error,a.storage_key,a.environment_marker_id
       FROM attachments a JOIN ftc_cases c ON c.id=a.case_id
       WHERE a.storage_environment=$1 AND a.storage_store=$2 AND a.storage_region=$3
       ORDER BY a.case_id,a.id`, [marker.kind, marker.storageStore, marker.storageRegion]);
@@ -271,36 +283,51 @@ async function cleanupManifest(pool: PgPoolLike, blobs: OperatorBlobIO, marker: 
   const known = new Set(rows.rows.map((row) => row.storage_key));
   const candidates: CleanupCandidate[] = [];
   for (const row of rows.rows) {
-    if (row.status !== "deleted") {
-      candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: "blocked-ready-evidence" });
-      continue;
-    }
-    const snapshot = await pool.query<{ exists: boolean }>(
-      `SELECT EXISTS(SELECT 1 FROM calculation_snapshots s, jsonb_array_elements(s.evidence) item
-        WHERE s.case_id=$1 AND s.kind='submitted' AND item->>'id'=$2) AS exists`, [row.case_id, row.id]);
-    if (snapshot.rows[0]?.exists) {
-      candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: "blocked-snapshot-reference" });
-      continue;
-    }
-    if (row.environment_marker_id !== marker.id) {
-      candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: "blocked-marker-mismatch" });
-      continue;
-    }
-    if (row.cleanup_claimed_at && now.getTime() - new Date(row.cleanup_claimed_at).getTime() < leaseMs) {
-      candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: "blocked-active-lease" });
-      continue;
-    }
     const requested = row.cleanup_requested_at ? new Date(row.cleanup_requested_at).getTime() : Number.NaN;
-    if (!Number.isFinite(requested) || now.getTime() - requested < settleMs) {
-      candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: "blocked-settle-period" });
-      continue;
+    const claimed = row.cleanup_claimed_at ? new Date(row.cleanup_claimed_at).getTime() : Number.NaN;
+    const references = await pool.query<{ snapshot_id: string; kind: string }>(
+      `SELECT s.id AS snapshot_id,s.kind FROM calculation_snapshots s, jsonb_array_elements(s.evidence) item
+        WHERE s.case_id=$1 AND item->>'id'=$2 ORDER BY s.kind,s.id`, [row.case_id, row.id]);
+    let protection: CleanupCandidate["protection"] = "none";
+    if (row.status !== "deleted") {
+      protection = "ready_evidence";
+    } else if (references.rows.some((reference) => reference.kind === "submitted")) {
+      protection = "submitted_snapshot_reference";
+    } else if (row.environment_marker_id !== marker.id) {
+      protection = "marker_mismatch";
+    } else if (Number.isFinite(claimed) && now.getTime() - claimed < leaseMs) {
+      protection = "active_claim_lease";
+    } else if (!Number.isFinite(requested) || now.getTime() - requested < settleMs) {
+      protection = "upload_settle_period";
     }
-    const object = await blobs.get(marker, row.storage_key);
-    candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, action: object ? "delete-and-verify" : "verify-absent" });
+    const object = protection === "none" ? await blobs.get(marker, row.storage_key) : null;
+    const action: CleanupCandidate["action"] = protection === "ready_evidence" ? "blocked-ready-evidence"
+      : protection === "submitted_snapshot_reference" ? "blocked-snapshot-reference"
+        : protection === "marker_mismatch" ? "blocked-marker-mismatch"
+          : protection === "active_claim_lease" ? "blocked-active-lease"
+            : protection === "upload_settle_period" ? "blocked-settle-period"
+              : object ? "delete-and-verify" : "verify-absent";
+    candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, status: row.status, action,
+      requestedAt: row.cleanup_requested_at ? new Date(row.cleanup_requested_at).toISOString() : null,
+      requestedAgeMs: Number.isFinite(requested) ? now.getTime() - requested : null,
+      attemptCount: row.cleanup_attempt_count, lastAttemptAt: row.cleanup_last_attempt_at ? new Date(row.cleanup_last_attempt_at).toISOString() : null,
+      lastErrorCategory: row.cleanup_last_error ? "prior-attempt-failed" : "none",
+      leaseAgeMs: Number.isFinite(claimed) ? now.getTime() - claimed : null, protection,
+      snapshotReferences: references.rows.map((reference) => ({ snapshotId: reference.snapshot_id, kind: reference.kind })) });
   }
   const orphanKeys = objectKeys.map((item) => item.key).filter((key) => !known.has(key)).sort();
   return { version: 1, target: { kind: marker.kind, markerId: marker.id, store: marker.storageStore, region: marker.storageRegion },
     plannedAt: now.toISOString(), candidates, orphanKeys };
+}
+
+async function writeReviewManifest(command: string, manifestId: string, manifest: unknown, dependencies: OperatorDependencies, output: (line: string) => void): Promise<string> {
+  const serialized = `${JSON.stringify({ manifestId, manifest }, null, 2)}\n`;
+  const contentHash = createHash("sha256").update(serialized).digest("hex");
+  const path = dependencies.manifestPath?.(command, manifestId) ?? resolve(homedir(), ".ftc-private", `${command}-review-${manifestId}-${contentHash.slice(0, 12)}.json`);
+  if (!dependencies.manifestPath) assertPrivateOutputPath(path);
+  await writePrivateFile(path, serialized);
+  output(`${command} dry run ${manifestId}; Review manifest: ${path}; sha256: ${contentHash}`);
+  return path;
 }
 
 async function setCleanupResult(pool: PgPoolLike, candidate: CleanupCandidate, claim: string, success: boolean, now: Date): Promise<void> {
@@ -331,7 +358,7 @@ export async function runCleanupCommand(args: string[], dependencies: OperatorDe
   const manifestId = digest({ ...manifest, plannedAt: undefined });
   const output = dependencies.writeOutput ?? ((line: string) => process.stdout.write(`${line}\n`));
   if (!confirming) {
-    output(`Cleanup dry run ${manifestId}: ${manifest.candidates.length} tracked rows; ${manifest.orphanKeys.length} orphan key(s) left untouched.`);
+    await writeReviewManifest("cleanup", manifestId, manifest, dependencies, output);
     return { status: "planned", manifestId, manifest };
   }
   if (options.get("--confirm") !== manifestId) throw new Error("Cleanup manifest changed; review the new dry-run manifest before confirming.");
@@ -366,14 +393,66 @@ interface PreviewCredentialFile {
   credentials: { loginName: string; password: string }[];
   drafts: { ownerLogin: string; caseId: string; attachmentId: string; storageKey: string }[];
 }
-export interface PreviewInitializationResult { status: "initialized" | "replayed"; credentialPath: string; markerId: string }
+export interface PreviewInitializationManifest {
+  version: 1;
+  operationId: string;
+  target: { kind: "preview"; markerId: string | null; databaseFingerprint: string; store: string; region: string; deploymentContext: string };
+  priorMarker: { id: string; kind: string; databaseFingerprint: string; store: string; region: string; deploymentContext: string } | null;
+  action: "initialize" | "rotate-preview-branch" | "verify-existing-initialization";
+  accounts: { id: string; loginName: string; role: string; active: boolean }[];
+  initialization: { status: string | null; operationId: string | null };
+  sessionsToInvalidate: number;
+  drafts: { ownerLogin: string; caseId: string; attachmentId: string; storageKey: string }[];
+  evidence: { sha256: string; byteSize: number; objectAction: "create-or-verify" };
+  plannedAt: string;
+}
+export interface PreviewInitializationResult { status: "planned" | "initialized" | "replayed"; manifestId?: string; manifest?: PreviewInitializationManifest; credentialPath?: string; markerId?: string }
 
 const previewAccounts = [
   { loginName: "taxpayer-demo-a", role: "taxpayer", displayName: "ผู้เสียภาษีตัวอย่าง ก", maskedReference: "***-1001" },
   { loginName: "taxpayer-demo-b", role: "taxpayer", displayName: "ผู้เสียภาษีตัวอย่าง ข", maskedReference: "***-1002" },
   { loginName: "officer-demo", role: "officer", displayName: "เจ้าหน้าที่ตัวอย่าง", maskedReference: null },
 ] as const;
-const previewEvidenceBytes = Buffer.from("%PDF-1.7\nFTC fictional preview evidence; educational use only.\n%%EOF\n", "ascii");
+const loadPreviewEvidenceBytes = (): Promise<Buffer> => readFile(resolve(process.cwd(), "server/fixtures/fictional-preview-evidence.pdf"));
+
+function operationUuid(namespace: string): string {
+  const bytes = createHash("sha256").update(namespace).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function previewInitializationManifest(pool: PgPoolLike, config: RuntimeEnvironmentConfig, operationId: string, now: Date, evidenceBytes: Uint8Array): Promise<PreviewInitializationManifest> {
+  const active = await pool.query<{ id: string; kind: string; database_fingerprint: string; storage_store: string; storage_region: string; deployment_context: string }>(
+    "SELECT marker.id,marker.kind,marker.database_fingerprint,marker.storage_store,marker.storage_region,marker.deployment_context FROM active_hosting_environment active JOIN hosting_environment_markers marker ON marker.id=active.marker_id WHERE active.singleton=true");
+  const previous = active.rows[0] ?? null;
+  const same = previous && previous.kind === config.kind && previous.database_fingerprint === config.databaseFingerprint &&
+    previous.storage_store === config.storageStore && previous.storage_region === config.storageRegion && previous.deployment_context === config.deploymentContext;
+  const canRotate = previous && config.kind === "preview" && previous.database_fingerprint !== config.databaseFingerprint;
+  if (previous && !same && !canRotate) throw new Error("Stored hosting environment does not match this trusted runtime configuration.");
+  const markerId = same ? previous.id : null;
+  const users = await pool.query<{ id: string; login_name: string; role: string; active: boolean }>(
+    "SELECT id,login_name,role,active FROM app_users WHERE login_name=ANY($1::text[]) ORDER BY login_name", [previewAccounts.map((account) => account.loginName)]);
+  const initialization = markerId ? await pool.query<{ status: string; operation_id: string | null }>(
+    "SELECT status,operation_id FROM preview_environment_initialization WHERE environment_marker_id=$1", [markerId]) : null;
+  const sessions = await pool.query<{ count: number }>("SELECT count(*)::int AS count FROM user_sessions");
+  const drafts = previewAccounts.filter((account) => account.role === "taxpayer").map((account) => {
+    const caseId = operationUuid(`ftc-preview-init:${operationId}:${account.loginName}:case`);
+    const attachmentId = operationUuid(`ftc-preview-init:${operationId}:${account.loginName}:attachment`);
+    return { ownerLogin: account.loginName, caseId, attachmentId, storageKey: `cases/${caseId}/${attachmentId}` };
+  });
+  return { version: 1, operationId, target: { kind: "preview", markerId, databaseFingerprint: config.databaseFingerprint,
+    store: config.storageStore, region: config.storageRegion, deploymentContext: config.deploymentContext },
+    priorMarker: previous ? { id: previous.id, kind: previous.kind, databaseFingerprint: previous.database_fingerprint,
+      store: previous.storage_store, region: previous.storage_region, deploymentContext: previous.deployment_context } : null,
+    action: same && initialization?.rows[0]?.status === "ready" ? "verify-existing-initialization" : canRotate ? "rotate-preview-branch" : "initialize",
+    accounts: users.rows.map((row) => ({ id: row.id, loginName: row.login_name, role: row.role, active: row.active })),
+    initialization: { status: initialization?.rows[0]?.status ?? null, operationId: initialization?.rows[0]?.operation_id ?? null },
+    sessionsToInvalidate: sessions.rows[0]?.count ?? 0, drafts,
+    evidence: { sha256: createHash("sha256").update(evidenceBytes).digest("hex"), byteSize: evidenceBytes.byteLength, objectAction: "create-or-verify" },
+    plannedAt: now.toISOString() };
+}
 
 async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -415,7 +494,7 @@ async function withOperatorTransaction<T>(pool: PgPoolLike, work: (client: Await
 
 /** One-time preview initializer. Authentication stays closed until all private credentials, draft rows, and bytes verify. */
 export async function runPreviewInitializationCommand(args: string[], dependencies: OperatorDependencies = {}): Promise<PreviewInitializationResult> {
-  const options = parseOptions(args, new Set(["--target", "--operation-id"]));
+  const options = parseOptions(args, new Set(["--target", "--operation-id", "--dry-run", "--confirm"]));
   const env = dependencies.env ?? process.env;
   const { target, config } = validateTarget(options, env);
   if (target !== "preview") throw new Error("Preview initialization is allowed only for an explicitly selected preview environment.");
@@ -423,8 +502,26 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
   if (!operationId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)) {
     throw new Error("Preview initialization requires an explicit --operation-id UUIDv4; reuse it to recover an interrupted run.");
   }
+  const dryRun = options.has("--dry-run");
+  const confirming = options.has("--confirm");
+  if (dryRun === confirming || (dryRun && options.get("--dry-run") !== "true")) throw new Error("Choose exactly one of --dry-run true or --confirm <manifest-id>.");
   const pool = dependencies.pool ?? poolFromEnvironment(env);
-  const marker = await (await import("../runtime/environment.js")).ensureEnvironmentMarker(pool, config);
+  const now = (dependencies.now ?? (() => new Date()))();
+  const previewEvidenceBytes = await loadPreviewEvidenceBytes();
+  const manifest = await previewInitializationManifest(pool, config, operationId, now, previewEvidenceBytes);
+  const manifestId = digest({ ...manifest, plannedAt: undefined });
+  const output = dependencies.writeOutput ?? ((line: string) => process.stdout.write(`${line}\n`));
+  if (dryRun) {
+    await writeReviewManifest("preview-init", manifestId, manifest, dependencies, output);
+    return { status: "planned", manifestId, manifest };
+  }
+  if (options.get("--confirm") !== manifestId) throw new Error("Preview initialization scope changed; review the new dry-run manifest before confirming.");
+  if (manifest.accounts.length !== previewAccounts.length || previewAccounts.some((account) => {
+    const user = manifest.accounts.find((row) => row.loginName === account.loginName);
+    return !user || !user.active || user.role !== account.role;
+  })) throw new Error("Expected active fictional demo accounts are missing or mismatched; preview remains gated.");
+  if (manifest.initialization.operationId && manifest.initialization.operationId !== operationId) throw new Error("Preview initialization already belongs to another operation; the existing preview was preserved.");
+  const marker = await ensureEnvironmentMarker(pool, config);
   if (marker.kind !== "preview") throw new Error("Active environment marker is not a preview marker.");
   const blobs = operatorBlobIO(marker, env, dependencies.blobs);
   requireStrongBlobReads(blobs);
@@ -455,7 +552,8 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
         throw new Error("Preview evidence verification failed; the initialization gate remains closed.");
       }
     }
-    return { status: "replayed", credentialPath, markerId: marker.id };
+    output(`Preview initialization replay verified for operation ${operationId}; private credentials remain at ${credentialPath}.`);
+    return { status: "replayed", manifestId, manifest, credentialPath, markerId: marker.id };
   }
   if (recovery && (recovery.file.markerId !== marker.id || recovery.file.operationId !== operationId)) {
     throw new Error("The existing private file belongs to another preview initialization; no account changes were made.");
@@ -468,15 +566,11 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
       const user = users.rows.find((row) => row.login_name === account.loginName);
       return !user || !user.active || user.role !== account.role;
     })) throw new Error("Expected active fictional demo accounts are missing or mismatched; preview remains gated.");
-    const drafts = previewAccounts.filter((account) => account.role === "taxpayer").map((account) => ({
-      ownerLogin: account.loginName, caseId: randomUUID(), attachmentId: randomUUID(), storageKey: "",
-    }));
-    for (const draft of drafts) draft.storageKey = `cases/${draft.caseId}/${draft.attachmentId}`;
     const file: PreviewCredentialFile = { version: 1, target: "preview", markerId: marker.id, operationId,
-      createdAt: (dependencies.now ?? (() => new Date()))().toISOString(), officerUserId: users.rows.find((user) => user.login_name === "officer-demo")!.id,
+      createdAt: now.toISOString(), officerUserId: users.rows.find((user) => user.login_name === "officer-demo")!.id,
       credentials: await Promise.all(previewAccounts.map(async (account) => ({ loginName: account.loginName,
         password: `${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "").slice(0, 8)}` }))),
-      drafts };
+      drafts: manifest.drafts };
     try { await writePrivateFile(credentialPath, `${JSON.stringify(file, null, 2)}\n`); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
     recovery = await readPreviewFile(credentialPath);
@@ -524,7 +618,8 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
   }
   await pool.query(`UPDATE preview_environment_initialization SET status='ready',initialized_at=now(),updated_at=now()
     WHERE environment_marker_id=$1 AND operation_id=$2 AND credential_file_sha256=$3`, [marker.id, operationId, recovery.sha256]);
-  return { status: "initialized", credentialPath, markerId: marker.id };
+  output(`Preview initialization verified for operation ${operationId}; private credentials are at ${credentialPath}.`);
+  return { status: "initialized", manifestId, manifest, credentialPath, markerId: marker.id };
 }
 
 export interface BackupManifest {
@@ -674,7 +769,7 @@ export async function runBackupCommand(args: string[], dependencies: OperatorDep
   const manifest = capture.artifact.manifest;
   const output = dependencies.writeOutput ?? ((line: string) => process.stdout.write(`${line}\n`));
   if (!confirming) {
-    output(`Backup dry run ${capture.manifestId}: ${manifest.tables.reduce((sum, table) => sum + table.rows, 0)} rows, ${manifest.objects.length} object records.`);
+    await writeReviewManifest("backup", capture.manifestId, manifest, dependencies, output);
     return { status: "planned", manifestId: capture.manifestId, manifest };
   }
   if (options.get("--confirm") !== capture.manifestId) throw new Error("Backup inventory changed; review the new manifest before writing the private file.");
@@ -690,6 +785,24 @@ export interface RestoreResult { status: "planned" | "restored" | "replayed"; ma
 const restoreOrder = ["rule_sets", "app_users", "user_profiles", "ftc_cases", "foreign_income_sources", "remittances",
   "exchange_rate_references", "officer_case_assignments", "calculation_snapshots", "attachments", "audit_events", "api_mutation_requests"];
 const jsonColumns = new Set(["draft", "source_data", "fx_reference", "inputs", "result", "evidence", "policy", "metadata", "response", "sess", "source_urls", "assumptions"]);
+
+function verifyRestoredRelationalSnapshot(actual: Record<string, Record<string, unknown>[]>, artifact: BackupArtifact, marker: EnvironmentMarker): void {
+  const expected = structuredClone(Object.fromEntries(Object.entries(artifact.tables).filter(([name]) => !excludedBackupTables.has(name))));
+  for (const row of expected.ftc_cases ?? []) row.environment_marker_id = marker.id;
+  for (const row of expected.attachments ?? []) {
+    row.environment_marker_id = marker.id;
+    row.storage_environment = "local";
+    row.storage_store = marker.storageStore;
+    row.storage_region = marker.storageRegion;
+  }
+  const currentUsers = new Map((actual.app_users ?? []).map((row) => [String(row.id), row]));
+  expected.app_users = (expected.app_users ?? []).map((row) => {
+    const current = currentUsers.get(String(row.id));
+    if (!current || typeof current.password_hash !== "string") throw new Error("Restored account facts are missing from the target database.");
+    return { ...row, password_hash: current.password_hash };
+  });
+  if (digest(actual) !== digest(expected)) throw new Error("Restored relational snapshot differs from the source facts.");
+}
 
 /** Restore a coherent private export only into a blank, newly identified local DB/store. */
 export async function runRestoreRehearsalCommand(args: string[], dependencies: OperatorDependencies = {}): Promise<RestoreResult> {
@@ -739,7 +852,9 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
     tables: artifact.manifest.tables, objects: artifact.blobs.map(({ key, sha256 }) => ({ key, sha256 })) });
   const output = dependencies.writeOutput ?? ((line: string) => process.stdout.write(`${line}\n`));
   if (dryRun) {
-    output(`Restore dry run ${manifestId}: ${artifact.manifest.tables.reduce((sum, table) => sum + table.rows, 0)} row(s), ${artifact.blobs.length} object(s); target marker ${marker.id}, local store ${marker.storageStore}, region ${marker.storageRegion}.`);
+    await writeReviewManifest("restore", manifestId, { target: { kind: marker.kind, markerId: marker.id, store: marker.storageStore,
+      region: marker.storageRegion, databaseFingerprint: marker.databaseFingerprint }, source: artifact.manifest,
+      objects: artifact.blobs.map(({ key, sha256 }) => ({ key, sha256 })) }, dependencies, output);
     return { status: "planned", manifestId, markerId: marker.id };
   }
   if (options.get("--confirm") !== manifestId) throw new Error("Restore target or source inventory changed; review the exact restore dry-run manifest before confirming.");
@@ -764,6 +879,7 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
       }
       const keys = (await blobs.list(marker, "cases/")).map((item) => item.key).sort();
       if (canonical(keys) !== canonical(artifact.blobs.map((item) => item.key).sort())) throw new Error("Completed restore store has extra or missing objects.");
+      verifyRestoredRelationalSnapshot(await readSnapshotTables(pool), artifact, marker);
       return { status: "replayed", manifestId, markerId: marker.id, credentialPath };
     }
   } else {
@@ -821,12 +937,8 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
     const sessionCount = await client.query<{ count: string }>("SELECT count(*)::text count FROM user_sessions");
     if (Number(sessionCount.rows[0]?.count) !== 0) throw new Error("Restored session invalidation could not be verified.");
     const restoredTables = await readSnapshotTables({ query: client.query.bind(client), connect: async () => client } as unknown as PgPoolLike);
-    const expectedTables = Object.fromEntries(Object.entries(artifact.tables).filter(([name]) => !excludedBackupTables.has(name)));
-    for (const cases of expectedTables.ftc_cases ?? []) { cases.environment_marker_id = marker.id; }
-    for (const attachment of expectedTables.attachments ?? []) { attachment.environment_marker_id = marker.id; attachment.storage_environment = "local"; attachment.storage_store = marker.storageStore; attachment.storage_region = marker.storageRegion; }
-    // Password hashes are intentionally new. Reports/case facts remain byte-for-byte equivalent.
-    expectedTables.app_users = (expectedTables.app_users ?? []).map((row) => ({ ...row, password_hash: (restoredTables.app_users ?? []).find((restored) => restored.id === row.id)?.password_hash }));
-    if (digest(restoredTables) !== digest(expectedTables)) throw new Error("Restored relational snapshot differs from the source facts.");
+    // Password hashes and environment bindings are intentionally new. All other facts stay equivalent.
+    verifyRestoredRelationalSnapshot(restoredTables, artifact, marker);
     const confirmed = await client.query("UPDATE operator_environment_gates SET status='ready',updated_at=now() WHERE environment_marker_id=$1 AND operation_id=$2 AND credential_file_sha256=$3 AND backup_sha256=$4 AND status='closed' RETURNING environment_marker_id", [marker.id, operationId, credentialSha, backupSha]);
     if (!confirmed.rowCount) throw new Error("Restore operation gate changed unexpectedly.");
     await client.query("COMMIT");
@@ -839,9 +951,13 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
 export interface ResetManifest {
   version: 1;
   target: { kind: string; markerId: string; store: string; region: string };
-  accounts: { loginName: string; id: string }[];
-  cases: { id: string; status: string; submittedAt: string | null; attachments: number }[];
-  blobKeys: string[];
+  accounts: { loginName: string; id: string; role: string }[];
+  cases: { id: string; status: string; submittedAt: string | null;
+    attachments: { id: string; status: string; storageKey: string; sha256: string; byteSize: number }[];
+    snapshots: { id: string; kind: string; revision: number; createdAt: string; evidenceAttachmentIds: string[] }[];
+    auditEvents: { id: string; eventType: string; createdAt: string }[] }[];
+  objects: { key: string; sha256: string | null; byteSize: number | null; state: "present" | "missing"; scope: "attachment" | "untracked-case-object" }[];
+  retentionGuard: { configuredCutoff: string | null; submittedEligible: boolean | null };
   uploadBarrier: { settleMs: number; unresolvedAttachmentIds: string[] };
   plannedAt: string;
 }
@@ -851,27 +967,42 @@ interface ResetCredentialFile { version: 1; target: string; markerId: string; op
 const demoLogins = ["taxpayer-demo-a", "taxpayer-demo-b", "officer-demo"] as const;
 
 async function resetInventory(pool: PgPoolLike, blobs: OperatorBlobIO, marker: EnvironmentMarker, now: Date, settleMs: number): Promise<ResetManifest> {
-  const users = await pool.query<{ id: string; login_name: string }>("SELECT id,login_name FROM app_users WHERE login_name=ANY($1::text[]) ORDER BY login_name", [demoLogins]);
+  const users = await pool.query<{ id: string; login_name: string; role: string }>("SELECT id,login_name,role FROM app_users WHERE login_name=ANY($1::text[]) ORDER BY login_name", [demoLogins]);
   const cases = await pool.query<{ id: string; status: string; submitted_at: Date | string | null }>(
     `SELECT id,status,submitted_at FROM ftc_cases WHERE environment_marker_id=$1 AND owner_id=ANY($2::uuid[]) ORDER BY id`,
     [marker.id, users.rows.map((row) => row.id)]);
   const detail = await Promise.all(cases.rows.map(async (item) => {
-    const attachments = await pool.query<{ storage_key: string }>("SELECT storage_key FROM attachments WHERE case_id=$1 ORDER BY storage_key", [item.id]);
-    return { id: item.id, status: item.status, submittedAt: item.submitted_at ? new Date(item.submitted_at).toISOString() : null, attachments: attachments.rows.length };
+    const attachments = await pool.query<{ id: string; status: string; storage_key: string; sha256: string; byte_size: number }>(
+      "SELECT id,status,storage_key,sha256,byte_size FROM attachments WHERE case_id=$1 ORDER BY id", [item.id]);
+    const snapshots = await pool.query<{ id: string; kind: string; revision: number; created_at: Date | string; evidence: unknown }>(
+      "SELECT id,kind,revision,created_at,evidence FROM calculation_snapshots WHERE case_id=$1 ORDER BY created_at,id", [item.id]);
+    const auditEvents = await pool.query<{ id: string; event_type: string; occurred_at: Date | string }>(
+      "SELECT id,event_type,occurred_at FROM audit_events WHERE case_id=$1 ORDER BY occurred_at,id", [item.id]);
+    return { id: item.id, status: item.status, submittedAt: item.submitted_at ? new Date(item.submitted_at).toISOString() : null,
+      attachments: attachments.rows.map((attachment) => ({ id: attachment.id, status: attachment.status, storageKey: attachment.storage_key,
+        sha256: attachment.sha256, byteSize: Number(attachment.byte_size) })),
+      snapshots: snapshots.rows.map((snapshot) => ({ id: snapshot.id, kind: snapshot.kind, revision: snapshot.revision,
+        createdAt: new Date(snapshot.created_at).toISOString(), evidenceAttachmentIds: Array.isArray(snapshot.evidence)
+          ? snapshot.evidence.flatMap((entry) => entry && typeof entry === "object" && "id" in entry && typeof entry.id === "string" ? [entry.id] : []) : [] })),
+      auditEvents: auditEvents.rows.map((event) => ({ id: event.id, eventType: event.event_type, createdAt: new Date(event.occurred_at).toISOString() })) };
   }));
   const keys = await blobs.list(marker, "cases/");
-  const scopedKeys = new Set<string>();
-  for (const item of cases.rows) {
-    const attachments = await pool.query<{ storage_key: string }>("SELECT storage_key FROM attachments WHERE case_id=$1 ORDER BY storage_key", [item.id]);
-    for (const attachment of attachments.rows) scopedKeys.add(attachment.storage_key);
-  }
-  const blobKeys = keys.map((item) => item.key).filter((key) => scopedKeys.has(key)).sort();
+  const attachedKeys = new Set(detail.flatMap((item) => item.attachments.map((attachment) => attachment.storageKey)));
+  const casePrefixes = cases.rows.map((item) => `cases/${item.id}/`);
+  const caseKeys = keys.map((item) => item.key).filter((key) => casePrefixes.some((prefix) => key.startsWith(prefix))).sort();
+  const objects = await Promise.all(caseKeys.map(async (key) => {
+    const bytes = await blobs.get(marker, key);
+    return { key, sha256: bytes ? createHash("sha256").update(bytes).digest("hex") : null,
+      byteSize: bytes?.byteLength ?? null, state: bytes ? "present" as const : "missing" as const,
+      scope: attachedKeys.has(key) ? "attachment" as const : "untracked-case-object" as const };
+  }));
   const recentUploads = await pool.query<{ id: string }>(`SELECT a.id FROM attachments a JOIN ftc_cases c ON c.id=a.case_id
     WHERE c.environment_marker_id=$1 AND c.owner_id=ANY($2::uuid[])
       AND (a.status='pending' OR a.created_at > $3::timestamptz - ($4::text || ' milliseconds')::interval) ORDER BY a.id`,
   [marker.id, users.rows.map((row) => row.id), now, settleMs]);
   return { version: 1, target: { kind: marker.kind, markerId: marker.id, store: marker.storageStore, region: marker.storageRegion },
-    accounts: users.rows.map((row) => ({ id: row.id, loginName: row.login_name })), cases: detail, blobKeys,
+    accounts: users.rows.map((row) => ({ id: row.id, loginName: row.login_name, role: row.role })), cases: detail, objects,
+    retentionGuard: { configuredCutoff: null, submittedEligible: null },
     uploadBarrier: { settleMs, unresolvedAttachmentIds: recentUploads.rows.map((row) => row.id) }, plannedAt: now.toISOString() };
 }
 
@@ -987,11 +1118,19 @@ export async function runResetDemoCommand(args: string[], dependencies: Operator
       if (createHash("sha256").update(backupBytes).digest("hex") !== prior.rows[0].backup_sha256) throw new Error("The reset backup recovery file changed; Blob cleanup was not retried.");
     }
     const status = prior.rows[0].completed_at ? "replayed" : await recoverResetBlobs(pool, blobs, marker, operationId, output);
-    return { status, manifestId: prior.rows[0].manifest_sha256, manifest: { version: 1, target: { kind: marker.kind, markerId: marker.id, store: marker.storageStore, region: marker.storageRegion }, accounts: [], cases: [], blobKeys: [], uploadBarrier: { settleMs: 0, unresolvedAttachmentIds: [] }, plannedAt: new Date().toISOString() }, credentialPath };
+    return { status, manifestId: prior.rows[0].manifest_sha256, manifest: { version: 1,
+      target: { kind: marker.kind, markerId: marker.id, store: marker.storageStore, region: marker.storageRegion },
+      accounts: [], cases: [], objects: [], retentionGuard: { configuredCutoff: null, submittedEligible: null },
+      uploadBarrier: { settleMs: 0, unresolvedAttachmentIds: [] }, plannedAt: new Date().toISOString() }, credentialPath };
   }
   const settleMs = Number(env.FTC_UPLOAD_SETTLE_MS);
   if (!Number.isSafeInteger(settleMs) || settleMs < 0) throw new Error("FTC_UPLOAD_SETTLE_MS must be explicitly configured as a non-negative integer before demo reset.");
   const manifest = await resetInventory(pool, blobs, marker, (dependencies.now ?? (() => new Date()))(), settleMs);
+  const configuredCutoff = env.FTC_DEMO_RETENTION_CUTOFF ?? null;
+  const submittedCases = manifest.cases.filter((item) => item.status === "submitted");
+  const cutoffTime = configuredCutoff ? Date.parse(configuredCutoff) : Number.NaN;
+  manifest.retentionGuard = { configuredCutoff,
+    submittedEligible: submittedCases.length ? Number.isFinite(cutoffTime) && submittedCases.every((item) => Boolean(item.submittedAt && Date.parse(item.submittedAt) <= cutoffTime)) : null };
   if (manifest.accounts.length !== demoLogins.length || demoLogins.some((login) => !manifest.accounts.some((account) => account.loginName === login))) {
     throw new Error("Dedicated-demo reset requires all three expected fictional accounts to be present.");
   }
@@ -999,7 +1138,7 @@ export async function runResetDemoCommand(args: string[], dependencies: Operator
   const confirming = options.has("--confirm");
   if (confirming === options.has("--dry-run")) throw new Error("Choose exactly one of --dry-run or --confirm <manifest-id>.");
   if (!confirming) {
-    output(`Demo reset dry run ${manifestId}: ${manifest.accounts.length} demo account(s), ${manifest.cases.length} case(s), ${manifest.blobKeys.length} Blob key(s).`);
+    await writeReviewManifest("demo-reset", manifestId, manifest, dependencies, output);
     return { status: "planned", manifestId, manifest };
   }
   if (options.get("--confirm") !== manifestId) throw new Error("Demo reset scope changed; review a new dry-run manifest.");
@@ -1033,6 +1172,11 @@ export async function runResetDemoCommand(args: string[], dependencies: Operator
       await client.query("SELECT pg_advisory_xact_lock(hashtext('ftc-demo-reset'))");
       await client.query("LOCK TABLE app_users,user_sessions,ftc_cases,attachments,foreign_income_sources,remittances,exchange_rate_references,officer_case_assignments,audit_events,api_mutation_requests,calculation_snapshots IN SHARE ROW EXCLUSIVE MODE");
       const fresh = await resetInventory(pool, blobs, marker, (dependencies.now ?? (() => new Date()))(), settleMs);
+      const freshSubmitted = fresh.cases.filter((item) => item.status === "submitted");
+      const freshCutoff = env.FTC_DEMO_RETENTION_CUTOFF ?? null;
+      const freshCutoffTime = freshCutoff ? Date.parse(freshCutoff) : Number.NaN;
+      fresh.retentionGuard = { configuredCutoff: freshCutoff,
+        submittedEligible: freshSubmitted.length ? Number.isFinite(freshCutoffTime) && freshSubmitted.every((item) => Boolean(item.submittedAt && Date.parse(item.submittedAt) <= freshCutoffTime)) : null };
       if (digest({ ...fresh, plannedAt: undefined }) !== manifestId) throw new Error("Demo reset scope changed while awaiting the transaction barrier.");
       const caseIds = manifest.cases.map((item) => item.id);
       const blobRows = await client.query<{ storage_key: string }>("SELECT a.storage_key FROM attachments a WHERE a.case_id=ANY($1::uuid[]) ORDER BY a.storage_key", [caseIds]);

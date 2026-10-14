@@ -8,6 +8,7 @@ test-results/
 !.env.example
 demo-credentials*
 .private/
+.ftc-private/
 *.credentials.json
 .netlify/
 *.tsbuildinfo

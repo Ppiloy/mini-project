@@ -7,7 +7,7 @@ npm ci
 netlify dev
 ```
 
-The Functions-scoped local values are `FTC_DEPLOYMENT_CONTEXT=dev`, `SESSION_SECRET`, `FTC_ALLOWED_ORIGIN`, and `FTC_BLOB_REGION=us-east-2`. Netlify Dev supplies its local `NETLIFY_DB_URL` and sets `NETLIFY_DEV`. Apply committed migrations and create the fictional accounts from a second terminal using the same Netlify Dev context:
+For local Netlify Dev, set `FTC_DEPLOYMENT_CONTEXT=dev`, `SESSION_SECRET`, `FTC_ALLOWED_ORIGIN`, and `FTC_BLOB_REGION=us-east-2` in the local operator/Functions environment. Netlify Dev supplies its local `NETLIFY_DB_URL` and sets `NETLIFY_DEV`. Apply committed migrations and create the fictional accounts from a second terminal using the same Netlify Dev context:
 
 ```powershell
 $env:FTC_DEPLOYMENT_CONTEXT = "dev"
@@ -17,7 +17,7 @@ netlify dev:exec npm run demo:seed -- --target local
 
 Seed is an explicit operator action. It creates the two fictional taxpayer accounts and one officer only when absent. Repeat runs retain credentials and cases. Generated passwords are written only to an OS-protected private file under `.ftc-private`; stdout contains its path and the generated `FTC_OFFICER_USER_ID`, never passwords. Set that ID in the local Functions environment. Do not put credentials in `.env.example`, frontend variables, Git, or logs.
 
-For a hosted first preview, configure a stable trusted officer UUID as Functions-scoped `FTC_OFFICER_USER_ID` before the first deploy/seed. Seeding a missing officer uses this configured UUID. The server refuses a mismatch with an existing officer and never replaces that established identity. This prevents an initial preview seed from requiring a redeploy just to publish a randomly discovered officer ID.
+For hosted site variables, use Netlify's default site-variable scope and configure a stable trusted officer UUID as `FTC_OFFICER_USER_ID` before the first preview deploy/seed. Set `FTC_DEPLOYMENT_CONTEXT` for each deployment context. Keep production and preview `SESSION_SECRET`, allowed origin, and officer IDs separate where appropriate; never place secrets in Git or frontend variables. Seeding a missing officer uses this configured UUID. The server refuses a mismatch with an existing officer and never replaces that established identity. This prevents an initial preview seed from requiring a redeploy just to publish a randomly discovered officer ID.
 
 Rotate one account by specifying a stable UUID operation ID. Keep the same ID and private file to recover an ambiguous commit; choose a new ID only for a deliberate later rotation.
 

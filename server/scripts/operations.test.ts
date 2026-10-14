@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -181,9 +182,11 @@ async function cleanupFixture(includeOfficer = false) {
 describe("the cleanup operator command", () => {
   it("dry-runs without mutation, then retries only a submitted-case tombstone while preserving frozen ready evidence", async () => {
     const fixture = await cleanupFixture();
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "ftc-cleanup-review-")); temporaryDirectories.push(reviewDirectory);
     const output: string[] = [];
     const now = () => new Date("2026-10-14T00:10:00.000Z");
-    const deps = { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, now, writeOutput: (line: string) => output.push(line) };
+    const deps = { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, now,
+      manifestPath: (command: string, id: string) => join(reviewDirectory, `${command}-${id}.json`), writeOutput: (line: string) => output.push(line) };
     const rowsBefore = await fixture.pool.query("SELECT id,status,cleanup_pending,storage_deleted_at FROM attachments ORDER BY id");
     const snapshotBefore = await fixture.pool.query("SELECT inputs,result,evidence,policy FROM calculation_snapshots WHERE id=$1", [fixture.snapshotId]);
     const deletedBefore = await fixture.blobs.get(fixture.marker, fixture.deletedKey);
@@ -195,6 +198,22 @@ describe("the cleanup operator command", () => {
     expect(plan.manifest.candidates.map((candidate) => candidate.attachmentId)).toContain(fixture.deletedId);
     expect(plan.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.deletedId)?.action).toBe("delete-and-verify");
     expect(plan.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.readyId)?.action).toBe("blocked-ready-evidence");
+    const reviewPath = output.find((line) => line.includes("Review manifest:"))?.split("Review manifest: ")[1]?.split("; sha256:")[0];
+    expect(reviewPath).toBeTruthy();
+    const review = JSON.parse(await readFile(reviewPath!, "utf8")) as { manifest: { candidates: { attachmentId: string; status: string; requestedAgeMs: number; attemptCount: number; protection: string; snapshotReferences: { kind: string }[] }[]; target: { markerId: string; store: string; region: string } } };
+    expect(review.manifest.target).toMatchObject({ markerId: fixture.marker.id, store: fixture.marker.storageStore, region: "us-east-2" });
+    expect(review.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.deletedId)).toMatchObject({
+      status: "deleted", requestedAgeMs: expect.any(Number), attemptCount: expect.any(Number), protection: "none",
+      snapshotReferences: [{ kind: "preview" }],
+    });
+    expect(review.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.readyId)?.protection).toBe("ready_evidence");
+    expect(output.join(" ")).not.toMatch(/gross_income|salary|fixture-password|local-secret/);
+    if (process.platform === "win32") {
+      const acl = execFileSync("icacls", [reviewPath!], { encoding: "utf8" });
+      const principal = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : process.env.USERNAME;
+      expect(acl).toContain(`${principal}:(F)`);
+      expect(acl).not.toMatch(/BUILTIN\\Users:/i);
+    } else expect((await stat(reviewPath!)).mode & 0o077).toBe(0);
     expect(await fixture.pool.query("SELECT id,status,cleanup_pending,storage_deleted_at FROM attachments ORDER BY id")).toEqual(rowsBefore);
     expect(await fixture.blobs.get(fixture.marker, fixture.deletedKey)).toEqual(deletedBefore);
     expect(fixture.blobs.deleteCalls).toEqual([]);
@@ -267,7 +286,8 @@ describe("one-time preview initialization", () => {
     [copiedAttachmentId, copiedCaseId, `cases/${copiedCaseId}/${copiedAttachmentId}`, copiedBytes.length, copiedEvidence.sha256, copiedMarkerId]);
     await pool.query("UPDATE ftc_cases SET status='submitted',submitted_snapshot_id=$2,submitted_at=$3 WHERE id=$1", [copiedCaseId, copiedSnapshot.id, copiedSnapshot.createdAt]);
     await pool.query("INSERT INTO user_sessions(sid,sess,expire) VALUES ('copied-preview-session','{}'::json,NOW()+interval '1 hour')");
-    const app = createApp({ pool, sessionSecret: "preview-test-session-secret-at-least-32", allowedOrigin: "http://localhost:5173", trustedHttps: false, officerUserId: accountRows[2][0],
+    const blobs = new TestBlobs();
+    const app = createApp({ pool, blobIO: blobs, sessionSecret: "preview-test-session-secret-at-least-32", allowedOrigin: "http://localhost:5173", trustedHttps: false, officerUserId: accountRows[2][0],
       environment: resolveRuntimeEnvironmentConfig(env) });
     const blocked = await request(app).post("/api/auth/login").set("Origin", "http://localhost:5173").send({ loginName: "taxpayer-demo-a", password: "copied-preview-password" });
     expect(blocked.status).toBe(503);
@@ -275,25 +295,56 @@ describe("one-time preview initialization", () => {
 
     const dir = await mkdtemp(join(tmpdir(), "ftc-preview-init-")); temporaryDirectories.push(dir);
     const credentialsPath = join(dir, "preview-credentials.json");
-    const blobs = new TestBlobs();
     const operationId = "61000000-0000-4000-8000-000000000001";
-    const result = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId], { pool, env, blobs, credentialsPath });
+    const output: string[] = [];
+    const deps = { pool, env, blobs, credentialsPath, manifestPath: (command: string, name: string) => join(dir, `review-${command}-${name}.json`),
+      writeOutput: (line: string) => output.push(line) };
+    const passwordHashesBefore = await pool.query("SELECT login_name,password_hash FROM app_users ORDER BY login_name");
+    const sessionCountBefore = await pool.query("SELECT count(*)::int AS count FROM user_sessions");
+    const caseCountBefore = await pool.query("SELECT count(*)::int AS count FROM ftc_cases");
+    const blobKeysBefore = await blobs.list(marker, "cases/");
+    const plan = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId, "--dry-run"], deps);
+    const planManifest = plan.manifest!;
+    expect(plan.status).toBe("planned");
+    expect(planManifest.target).toMatchObject({ kind: "preview", markerId: marker.id, store: marker.storageStore, region: "us-east-2" });
+    expect(planManifest.drafts).toHaveLength(2);
+    const previewPdf = await readFile(join(process.cwd(), "server", "fixtures", "fictional-preview-evidence.pdf"));
+    expect(previewPdf.subarray(0, 8).toString("ascii")).toBe("%PDF-1.3");
+    expect(previewPdf.toString("ascii")).toMatch(/startxref\n\d+\n%%EOF\s*$/);
+    expect(planManifest.evidence).toMatchObject({ sha256: createHash("sha256").update(previewPdf).digest("hex"), byteSize: previewPdf.byteLength });
+    expect(await readFile(join(dir, `review-preview-init-${plan.manifestId}.json`), "utf8")).toContain("cases/");
+    expect(await pool.query("SELECT login_name,password_hash FROM app_users ORDER BY login_name")).toEqual(passwordHashesBefore);
+    expect(await pool.query("SELECT count(*)::int AS count FROM user_sessions")).toEqual(sessionCountBefore);
+    expect(await pool.query("SELECT count(*)::int AS count FROM ftc_cases")).toEqual(caseCountBefore);
+    expect(await blobs.list(marker, "cases/")).toEqual(blobKeysBefore);
+    expect(output.join(" ")).not.toMatch(/copied-preview-password|password_hash|gross_income/);
+    await expect(runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId, "--confirm", "bad"], deps))
+      .rejects.toThrow(/review the new dry-run manifest/);
+    expect(await pool.query("SELECT login_name,password_hash FROM app_users ORDER BY login_name")).toEqual(passwordHashesBefore);
+    const result = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId, "--confirm", plan.manifestId!], deps);
     expect(result.status).toBe("initialized");
     const credentials = JSON.parse(await readFile(credentialsPath, "utf8")) as { credentials: { loginName: string; password: string }[] };
     const oldPassword = await request(app).post("/api/auth/login").set("Origin", "http://localhost:5173").send({ loginName: "taxpayer-demo-a", password: "copied-preview-password" });
     expect(oldPassword.status).toBe(401);
-    const login = await request(app).post("/api/auth/login").set("Origin", "http://localhost:5173").send({
+    const taxpayerAgent = request.agent(app);
+    const login = await taxpayerAgent.post("/api/auth/login").set("Origin", "http://localhost:5173").send({
       loginName: "taxpayer-demo-a", password: credentials.credentials.find((item) => item.loginName === "taxpayer-demo-a")!.password,
     });
     expect(login.status).toBe(200);
+    const downloadable = await taxpayerAgent.get(`/api/attachments/${planManifest.drafts[0]!.attachmentId}`).set("Origin", "http://localhost:5173");
+    expect(downloadable.status).toBe(200);
+    expect(downloadable.headers["content-type"]).toMatch(/application\/pdf/);
+    expect(downloadable.body).toEqual(previewPdf);
     expect(await pool.query("SELECT sid FROM user_sessions")).toHaveProperty("rows.length", 1);
     expect((await pool.query("SELECT owner_id,status,environment_marker_id FROM ftc_cases WHERE environment_marker_id=$1 ORDER BY owner_id", [marker.id])).rows).toHaveLength(2);
     expect((await pool.query("SELECT id,status FROM attachments WHERE environment_marker_id=$1", [marker.id])).rows).toHaveLength(2);
-    const replay = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId], { pool, env, blobs, credentialsPath });
+    const replayPlan = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId, "--dry-run"], deps);
+    const replay = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", operationId, "--confirm", replayPlan.manifestId!], deps);
     expect(replay.status).toBe("replayed");
     expect((await pool.query("SELECT sid FROM user_sessions")).rows).toHaveLength(1);
     expect((await pool.query("SELECT id FROM ftc_cases WHERE environment_marker_id=$1", [marker.id])).rows).toHaveLength(2);
-    await expect(runPreviewInitializationCommand(["--target", "preview", "--operation-id", "62000000-0000-4000-8000-000000000001"], { pool, env, blobs, credentialsPath }))
+    const supersessionPlan = await runPreviewInitializationCommand(["--target", "preview", "--operation-id", "62000000-0000-4000-8000-000000000001", "--dry-run"], deps);
+    await expect(runPreviewInitializationCommand(["--target", "preview", "--operation-id", "62000000-0000-4000-8000-000000000001", "--confirm", supersessionPlan.manifestId!], deps))
       .rejects.toThrow(/already belongs to another operation/);
 
     const backupPath = join(dir, "preview-backup.json");
@@ -349,11 +400,16 @@ describe("coordinated backup command", () => {
     const outputPath = join(dir, "backup.json");
     const output: string[] = [];
     const deps = { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, credentialsPath: outputPath,
+      manifestPath: (command: string, id: string) => join(dir, `review-${command}-${id}.json`),
       writeOutput: (line: string) => output.push(line), now: () => new Date("2026-10-14T00:10:00.000Z") };
     const plan = await runBackupCommand(["--target", "local", "--dry-run"], deps);
     expect(plan.status).toBe("planned");
     expect(plan.manifest.target).toMatchObject({ markerId: fixture.marker.id, store: fixture.marker.storageStore, region: fixture.marker.storageRegion });
     expect(plan.manifest.objects.map((item) => item.key)).toContain(fixture.readyKey);
+    const manifestPath = output.find((line) => line.includes("Review manifest:"))?.split("Review manifest: ")[1]?.split("; sha256:")[0];
+    const review = JSON.parse(await readFile(manifestPath!, "utf8")) as { manifest: typeof plan.manifest };
+    expect(review.manifest.objects.find((item) => item.key === fixture.readyKey)?.sha256).toBe(createHash("sha256").update(fixture.readyBytes).digest("hex"));
+    expect(output.join(" ")).not.toMatch(/gross_income_amount|123\.450000|bytesBase64/);
     expect(await readFile(outputPath).catch(() => null)).toBeNull();
     const written = await runBackupCommand(["--target", "local", "--confirm", plan.manifestId, "--operation-id", "81000000-0000-4000-8000-000000000001"], deps);
     expect(written.status).toBe("written");
@@ -369,9 +425,10 @@ describe("fresh local restore rehearsal", () => {
     const source = await cleanupFixture(true);
     const dir = await mkdtemp(join(tmpdir(), "ftc-restore-")); temporaryDirectories.push(dir);
     const backupPath = join(dir, "source-backup.json");
-    const backupPlan = await runBackupCommand(["--target", "local", "--dry-run"], { pool: source.pool, env: source.env, blobs: source.blobs });
+    const manifestPath = (command: string, id: string) => join(dir, `review-${command}-${id}.json`);
+    const backupPlan = await runBackupCommand(["--target", "local", "--dry-run"], { pool: source.pool, env: source.env, blobs: source.blobs, manifestPath });
     const backup = await runBackupCommand(["--target", "local", "--confirm", backupPlan.manifestId, "--operation-id", "82000000-0000-4000-8000-000000000001"],
-      { pool: source.pool, env: source.env, blobs: source.blobs, artifactPath: () => backupPath });
+      { pool: source.pool, env: source.env, blobs: source.blobs, artifactPath: () => backupPath, manifestPath });
     expect(backup.status).toBe("written");
 
     const database = new PGlite(); activeDatabases.push(database);
@@ -424,6 +481,10 @@ describe("fresh local restore rehearsal", () => {
     const restoredOfficerSession = await officerAgent.get("/api/auth/session").set("Origin", "http://localhost:5173");
     expect(restoredOfficerSession.status).toBe(200);
     expect(restoredOfficerSession.body.data.user).toMatchObject({ loginName: "officer-demo", role: "officer" });
+    const originalDisplayName = (await source.pool.query<{ display_name: string }>("SELECT display_name FROM app_users WHERE login_name=$1", [loginName])).rows[0]!.display_name;
+    await pool.query("UPDATE app_users SET display_name='Changed after restore' WHERE login_name=$1", [loginName]);
+    await expect(runRestoreRehearsalCommand(args, deps)).rejects.toThrow(/relational snapshot differs/);
+    await pool.query("UPDATE app_users SET display_name=$2 WHERE login_name=$1", [loginName, originalDisplayName]);
     expect((await runRestoreRehearsalCommand(args, deps)).status).toBe("replayed");
     expect(output.join(" ")).not.toContain("fixture-password-01");
     await rm(credentialsPath, { force: true });
@@ -445,16 +506,31 @@ describe("dedicated demo reset command", () => {
     fixture.env.FTC_DEMO_RESET_MARKER_ID = fixture.marker.id;
     fixture.env.FTC_DEMO_RETENTION_CUTOFF = "2026-10-14T00:05:00.000Z";
     fixture.env.FTC_UPLOAD_SETTLE_MS = "0";
+    await fixture.pool.query("INSERT INTO audit_events(actor_id,case_id,snapshot_id,event_type) VALUES ($1,$2,$3,'operator-review-fixture')",
+      ["90000000-0000-4000-8000-000000000003", fixture.caseId, fixture.snapshotId]);
     const dir = await mkdtemp(join(tmpdir(), "ftc-reset-")); temporaryDirectories.push(dir);
     const backupPath = join(dir, "backup.json"); const resetCredentialPath = join(dir, "reset-credentials.json");
-    const backup = await runBackupCommand(["--target", "local", "--confirm", (await runBackupCommand(["--target", "local", "--dry-run"], { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs })).manifestId,
-      "--operation-id", "91000000-0000-4000-8000-000000000001"], { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, artifactPath: () => backupPath });
+    const manifestPath = (command: string, id: string) => join(dir, `review-${command}-${id}.json`);
+    const backupPlan = await runBackupCommand(["--target", "local", "--dry-run"], { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, manifestPath });
+    const backup = await runBackupCommand(["--target", "local", "--confirm", backupPlan.manifestId,
+      "--operation-id", "91000000-0000-4000-8000-000000000001"], { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, artifactPath: () => backupPath, manifestPath });
     expect(backup.status).toBe("written");
     const now = () => new Date();
-    const resetDeps = { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, artifactPath: (name: string) => name === "demo-reset" ? resetCredentialPath : backupPath, now };
+    const resetOutput: string[] = [];
+    const resetDeps = { pool: fixture.pool, env: fixture.env, blobs: fixture.blobs, manifestPath,
+      artifactPath: (name: string) => name === "demo-reset" ? resetCredentialPath : backupPath, now,
+      writeOutput: (line: string) => resetOutput.push(line) };
     const plan = await runResetDemoCommand(["--target", "local", "--dry-run", "--operation-id", "92000000-0000-4000-8000-000000000001"], resetDeps);
     expect(plan.status).toBe("planned");
     expect(plan.manifest.cases.map((item) => item.id)).toEqual([fixture.caseId]);
+    expect(plan.manifest.cases[0]?.attachments[0]).toMatchObject({ id: fixture.readyId, status: "ready", storageKey: fixture.readyKey, sha256: createHash("sha256").update(fixture.readyBytes).digest("hex") });
+    expect(plan.manifest.cases[0]?.snapshots.map((snapshot) => snapshot.kind)).toEqual(["preview", "submitted"]);
+    expect(plan.manifest.cases[0]?.auditEvents.length).toBeGreaterThan(0);
+    expect(plan.manifest.objects.find((item) => item.key === fixture.readyKey)).toMatchObject({ scope: "attachment", state: "present", sha256: createHash("sha256").update(fixture.readyBytes).digest("hex") });
+    expect(plan.manifest.retentionGuard).toMatchObject({ configuredCutoff: fixture.env.FTC_DEMO_RETENTION_CUTOFF, submittedEligible: true });
+    const resetReview = JSON.parse(await readFile(join(dir, `review-demo-reset-${plan.manifestId}.json`), "utf8")) as { manifest: typeof plan.manifest };
+    expect(resetReview.manifest).toEqual(plan.manifest);
+    expect(resetOutput.join(" ")).not.toMatch(/gross_income|123\.450000|fixture-password|bytesBase64/);
     await expect(runResetDemoCommand(["--target", "local", "--confirm", plan.manifestId, "--operation-id", "92000000-0000-4000-8000-000000000001", "--retention-cutoff", fixture.env.FTC_DEMO_RETENTION_CUTOFF], resetDeps))
       .rejects.toThrow(/requires the exact private backup path/);
     expect((await fixture.pool.query("SELECT id FROM ftc_cases WHERE id=$1", [fixture.caseId])).rows).toHaveLength(1);

@@ -4,7 +4,7 @@
 
 ## Site and runtime configuration
 
-The linked Netlify site is `ppiloy-mini-project`, site ID `3bc8fc1b-7af0-47c3-87cd-3080c8bfc3d3`. Hosted Function configuration uses Functions-scoped variables: `FTC_DEPLOYMENT_CONTEXT` (`production`, `deploy-preview`, or `branch-deploy`), `SESSION_SECRET` (at least 32 characters), exact `FTC_ALLOWED_ORIGIN`, `FTC_OFFICER_USER_ID`, and `FTC_BLOB_REGION=us-east-2`. Choose and configure the trusted officer UUID before first hosted seed/deploy: the Function reads its officer ID from the deployed environment, and a fresh preview DB has no officer to discover. Seed uses that ID only when creating a missing fictional officer and refuses to change an established officer identity. Netlify supplies `NETLIFY_DB_URL`; do not copy database URLs into config. `CONTEXT` is not guaranteed in Function runtime. Never put secret values in `netlify.toml`, Git, or any `VITE_` variable.
+The linked Netlify site is `ppiloy-mini-project`, site ID `3bc8fc1b-7af0-47c3-87cd-3080c8bfc3d3`. Use Netlify's default site-variable scope. Set `FTC_DEPLOYMENT_CONTEXT` explicitly for each deploy context (`production`, `deploy-preview`, or `branch-deploy`), and keep context-specific values separate where they differ, especially `SESSION_SECRET`, `FTC_ALLOWED_ORIGIN`, and `FTC_OFFICER_USER_ID`. Also configure `FTC_BLOB_REGION=us-east-2`. Choose the trusted officer UUID before first hosted seed/deploy: the Function reads its officer ID from the deployed environment, and a fresh preview DB has no officer to discover. Seed uses that ID only when creating a missing fictional officer and refuses to change an established officer identity. Netlify supplies `NETLIFY_DB_URL`; do not copy database URLs into config. `CONTEXT` is not guaranteed in Function runtime. Never put secret values in `netlify.toml`, Git, or any `VITE_` variable.
 
 Production Blob store identity is derived from the stable site namespace. Preview store identity is bound to the trusted preview database fingerprint. Local store identity is derived from the trusted local database identity; do not pass a caller-selected store name. Every operation requires explicit `--target` and rejects a mismatch against server/process configuration and the active database marker. All Blob operations preserve the explicit `us-east-2` region.
 
@@ -18,7 +18,14 @@ To rotate an account, provide a UUID `--operation-id` and repeat that same value
 
 ## Preview initialization
 
-The first request initializes the trusted marker and leaves preview login gated. Run `npm run ops:preview-init -- --target preview --operation-id <uuid>` from an authenticated Netlify CLI session scoped to that exact linked site and preview DB. The command rotates all three fictional demo accounts, invalidates copied sessions, creates two fresh taxpayer drafts with fictional evidence, strongly verifies each Blob, and only then opens that marker's auth gate. The private credential file is the sole password output. Same-marker reruns preserve cases/passwords; same-operation recovery verifies the retained file and objects. A new marker remains gated until initialized.
+The first request initializes the trusted marker and leaves preview login gated. Run a read-only plan and inspect its protected manifest, then confirm its exact manifest ID from an authenticated Netlify CLI session scoped to that exact linked site and preview DB. The command rotates all three fictional demo accounts, invalidates copied sessions, creates two fresh taxpayer drafts with usable fictional PDF evidence, strongly verifies each Blob, and only then opens that marker's auth gate. The private credential file is the sole password output. Same-marker reruns preserve cases/passwords; same-operation recovery verifies the retained file and objects. A new marker remains gated until initialized.
+
+```powershell
+$previewInitId = [guid]::NewGuid().Guid
+# Run from the approved operator shell with preview process environment scoped explicitly.
+npm run ops:preview-init -- --target preview --operation-id $previewInitId --dry-run
+npm run ops:preview-init -- --target preview --operation-id $previewInitId --confirm <exact-manifest-id>
+```
 
 Netlify documents fresh database branches for new preview pushes. Persistence is expected only while the same underlying DB branch/deploy lifecycle remains active; a newly created preview database requires explicit initialization. No live preview was used to verify branch persistence or this command in Functions.
 
