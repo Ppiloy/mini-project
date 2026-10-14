@@ -4,6 +4,8 @@ import serverless from "serverless-http";
 import type { Express } from "express";
 import { createApp, type CreateAppOptions } from "../../server/app.js";
 import { makeRuntimePool } from "../../server/app.js";
+import { resolveRuntimeEnvironmentConfig } from "../../server/runtime/environment.js";
+import { netlifyBlobIO } from "../../server/storage/blob-io.js";
 
 type NetlifyLambdaEvent = Record<string, unknown> & {
   path?: string;
@@ -39,7 +41,9 @@ function runtimeApp(trustedHttps: boolean): Express {
   if (!process.env.NETLIFY_DB_URL || !sessionSecret || sessionSecret.length < 32 || !allowedOrigin) {
     throw new Error("Hosted API environment is incomplete.");
   }
-  const options: CreateAppOptions = { pool: runtimePool, sessionSecret, allowedOrigin, trustedHttps };
+  const options: CreateAppOptions = { pool: runtimePool, sessionSecret, allowedOrigin, trustedHttps,
+    environment: resolveRuntimeEnvironmentConfig(process.env), blobIO: netlifyBlobIO,
+    officerUserId: process.env.FTC_OFFICER_USER_ID };
   const app = createApp(options);
   runtimeApps.set(trustedHttps, app);
   return app;

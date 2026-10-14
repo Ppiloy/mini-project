@@ -157,6 +157,7 @@ export const hostedApi = {
   uploadEvidence(caseId: string, file: File, metadata: { sourceId: string | null; kind: string; expectedRevision: number; requestId: string }, csrfToken: string): Promise<{ attachment: AttachmentMetadata; case: FtcCaseRecord }> {
     const form = new FormData();
     form.set("file", file, file.name);
+    form.set("displayName", file.name);
     form.set("sourceId", metadata.sourceId ?? "");
     form.set("kind", metadata.kind);
     form.set("expectedRevision", String(metadata.expectedRevision));
