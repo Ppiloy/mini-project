@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { ApiUser } from "../../shared/contracts.js";
 import type { AuthSession, LogoutConfirmationResult } from "../data/api.js";
@@ -81,6 +81,11 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   const [sessionLookupError, setSessionLookupError] = useState<unknown | null>(null);
   const [sessionLookupStatus, setSessionLookupStatus] = useState<HostedSessionLookupStatus>(null);
   const [checkingHostedSession, setCheckingHostedSession] = useState(false);
+  const sessionLookupGeneration = useRef(0);
+  const invalidateSessionLookup = () => {
+    sessionLookupGeneration.current += 1;
+    setCheckingHostedSession(false);
+  };
 
   useEffect(() => {
     const persona = sessionStorage.getItem("ftc.demo.persona") as DemoPersona | null;
@@ -141,6 +146,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     sessionLookupStatus,
     checkingHostedSession,
     setHosted: (session) => {
+      invalidateSessionLookup();
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
@@ -157,6 +163,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       if (!ready) {
         return { confirmed: false, errors: [new Error("กำลังตรวจสอบเซสชันออนไลน์ กรุณารอแล้วลองอีกครั้งก่อนเปิดโหมดสาธิต")] };
       }
+      let confirmedHostedLogout = false;
       if (user && csrfToken && !demo) {
         const intent = { accountId: user.id, expectedRole: user.role };
         persistLogoutIntent(intent);
@@ -167,11 +174,17 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
           setPendingLogoutErrors(result.errors);
           return result;
         }
+        confirmedHostedLogout = true;
       }
+      invalidateSessionLookup();
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
-      if (sessionLookupStatus) sessionStorage.setItem(unverifiedHostedSessionStorageKey, sessionLookupStatus);
+      if (confirmedHostedLogout) {
+        setSessionLookupError(null);
+        setSessionLookupStatus(null);
+        sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
+      } else if (sessionLookupStatus) sessionStorage.setItem(unverifiedHostedSessionStorageKey, sessionLookupStatus);
       else sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       clearPendingDrafts();
       sessionStorage.setItem("ftc.demo.persona", persona);
@@ -200,16 +213,21 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         return result;
       }
       if (!activeSession) {
+        invalidateSessionLookup();
         persistLogoutIntent(null);
         clearPendingDrafts();
         setPendingLogout(null);
         setPendingLogoutErrors([]);
+        setSessionLookupError(null);
+        setSessionLookupStatus(null);
+        sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
         setIsDemo(false);
         setUser(null);
         setCsrfToken(null);
         return { confirmed: true };
       }
       if (activeSession.user.id !== intent.accountId) {
+        invalidateSessionLookup();
         persistLogoutIntent(null);
         setPendingLogout(null);
         setPendingLogoutErrors([]);
@@ -220,6 +238,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         setCsrfToken(activeSession.csrfToken);
         return { confirmed: true };
       }
+      invalidateSessionLookup();
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts(activeSession.user.id);
       setIsDemo(false);
@@ -230,16 +249,21 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         setPendingLogoutErrors(result.errors);
         return result;
       }
+      invalidateSessionLookup();
       persistLogoutIntent(null);
       clearPendingDrafts();
       setPendingLogout(null);
       setPendingLogoutErrors([]);
+      setSessionLookupError(null);
+      setSessionLookupStatus(null);
+      sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       setIsDemo(false);
       setUser(null);
       setCsrfToken(null);
       return result;
     },
     clear: () => {
+      invalidateSessionLookup();
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
@@ -253,6 +277,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setCsrfToken(null);
     },
     clearDemo: () => {
+      invalidateSessionLookup();
       sessionStorage.removeItem("ftc.demo.persona");
       setIsDemo(false);
       setUser(null);
@@ -260,9 +285,11 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     },
     refreshHostedSession: async () => {
       if (checkingHostedSession) return;
+      const generation = ++sessionLookupGeneration.current;
       setCheckingHostedSession(true);
       try {
         const session = await hostedApi.session();
+        if (sessionLookupGeneration.current !== generation) return;
         setSessionLookupError(null);
         if (session) {
           setSessionLookupStatus("active");
@@ -272,11 +299,12 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
           sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
         }
       } catch (error) {
+        if (sessionLookupGeneration.current !== generation) return;
         setSessionLookupError(error);
         setSessionLookupStatus("unverified");
         sessionStorage.setItem(unverifiedHostedSessionStorageKey, "unverified");
       } finally {
-        setCheckingHostedSession(false);
+        if (sessionLookupGeneration.current === generation) setCheckingHostedSession(false);
       }
     },
   }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError, sessionLookupStatus, checkingHostedSession]);

@@ -463,6 +463,94 @@ test("offline fixture fallback discloses that an existing hosted session could n
   }
 });
 
+test("a delayed real session refresh cannot restore an obsolete warning after hosted login and confirmed logout", async ({ browser }) => {
+  const seed = await operatorSeed();
+  const taxpayerA = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  const taxpayerB = seed.credentials.find((item) => item.loginName === "taxpayer-demo-b")!;
+  const signedInContext = await browser.newContext();
+  let probeContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
+  let releaseOldSession!: () => void;
+  try {
+    const signedInPage = await signedInContext.newPage();
+    const a = await login(signedInPage, taxpayerA);
+    probeContext = await browser.newContext({ storageState: await signedInContext.storageState() });
+    const page = await probeContext.newPage();
+    await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"), { times: 1 });
+    await page.goto("/demo");
+    await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
+    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await expect(page).toHaveURL(/\/demo\/app$/);
+
+    let oldResponseFetched!: () => void;
+    const fetched = new Promise<void>((resolve) => { oldResponseFetched = resolve; });
+    const responseGate = new Promise<void>((resolve) => { releaseOldSession = resolve; });
+    await page.route("**/api/auth/session", async (route) => {
+      const actualResponse = await route.fetch();
+      oldResponseFetched();
+      await responseGate;
+      // The API body/status are forwarded unchanged. Prevent this deliberately
+      // delayed response from rolling the browser cookie back over B's newer login.
+      const headers = actualResponse.headers();
+      delete headers["set-cookie"];
+      await route.fulfill({ response: actualResponse, headers });
+    }, { times: 1 });
+    const oldRefreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/session") && response.request().method() === "GET");
+    await page.getByRole("button", { name: "ตรวจสอบสถานะออนไลน์" }).click();
+    await fetched;
+
+    // Keep the same React session provider alive while changing identity and mode.
+    await page.evaluate(() => {
+      const browser = globalThis as unknown as {
+        history: { pushState: (data: object, unused: string, url?: string) => void };
+        dispatchEvent: (event: object) => boolean;
+        PopStateEvent: new (type: string, init: { state: null }) => object;
+      };
+      browser.history.pushState({}, "", "/login");
+      browser.dispatchEvent(new browser.PopStateEvent("popstate", { state: null }));
+    });
+    await expect(page.getByRole("heading", { name: "เข้าสู่ระบบผู้เสียภาษี" })).toBeVisible();
+    const loginResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST");
+    await page.getByLabel("ชื่อผู้ใช้").fill(taxpayerB.loginName);
+    await page.getByLabel("รหัสผ่าน").fill(taxpayerB.password);
+    await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
+    const loginResponse = await loginResponsePromise;
+    expect(loginResponse.status()).toBe(200);
+    const b = await loginResponse.json() as { data?: { user?: { id?: string } } };
+    expect(b.data?.user?.id).toBeTruthy();
+    expect(b.data?.user?.id).not.toBe(a.userId);
+    await expect(page).toHaveURL(/\/app$/);
+    expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+
+    releaseOldSession();
+    expect((await oldRefreshResponse).status()).toBe(200);
+    await expect(page).toHaveURL(/\/app$/);
+    expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+    expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.session.unverified"))).toBeNull();
+
+    await page.evaluate(() => {
+      const browser = globalThis as unknown as {
+        history: { pushState: (data: object, unused: string, url?: string) => void };
+        dispatchEvent: (event: object) => boolean;
+        PopStateEvent: new (type: string, init: { state: null }) => object;
+      };
+      browser.history.pushState({}, "", "/demo");
+      browser.dispatchEvent(new browser.PopStateEvent("popstate", { state: null }));
+    });
+    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeVisible();
+    const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    expect((await logoutResponsePromise).status()).toBe(200);
+    await expect(page).toHaveURL(/\/demo\/app$/);
+    expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.session.unverified"))).toBeNull();
+  } finally {
+    releaseOldSession?.();
+    await probeContext?.close();
+    await signedInContext.close();
+  }
+});
+
 test("fixture mode switch keeps the hosted session visible after a real logout rejection and retries safely across reload", async ({ page }) => {
   const seed = await operatorSeed();
   const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
