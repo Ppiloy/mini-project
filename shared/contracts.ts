@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { draftSchema } from "./draft.js";
 
 /** Values crossing browser, API, PostgreSQL JSON and snapshot boundaries. */
 export type DecimalString = string;
@@ -259,6 +260,108 @@ export const apiErrorEnvelopeSchema: z.ZodType<ApiError> = z.object({
   }),
 });
 
+const dateTime = z.string().datetime({ offset: true });
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const decimal = z.string().regex(/^-?\d{1,18}(?:\.\d{1,12})?$/);
+const nullableDecimal = decimal.nullable();
+
+export const apiUserSchema: z.ZodType<ApiUser> = z.object({
+  id: z.string().min(1).max(100), loginName: z.string().min(1), displayName: z.string().min(1),
+  role: z.enum(["taxpayer", "officer"]), maskedReference: z.string().nullable(),
+}).strict();
+
+export const caseRecordSchema: z.ZodType<FtcCaseRecord> = z.object({
+  id: z.string().min(1).max(100), ownerId: z.string().min(1).max(100), status: z.enum(["draft", "submitted"]),
+  draft: draftSchema, assignedOfficerId: z.string().min(1).max(100).nullable(),
+  submittedSnapshotId: z.string().min(1).max(100).nullable(), submittedAt: dateTime.nullable(),
+  createdAt: dateTime, updatedAt: dateTime,
+}).strict();
+
+export const attachmentMetadataSchema: z.ZodType<AttachmentMetadata> = z.object({
+  id: z.string().min(1).max(100), caseId: z.string().min(1).max(100), sourceId: z.string().min(1).max(100).nullable(),
+  kind: z.enum(["foreign_income", "foreign_tax", "remittance", "thai_tax", "other"]),
+  displayName: z.string().min(1).max(180), mediaType: z.enum(["application/pdf", "image/png", "image/jpeg"]),
+  byteSize: z.number().int().nonnegative().max(3 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  status: z.enum(["pending", "ready", "failed", "deleted"]), createdAt: dateTime,
+}).strict();
+
+const frozenEvidenceSchema: z.ZodType<FrozenEvidenceReference> = z.object({
+  id: z.string().min(1).max(100), sourceId: z.string().min(1).max(100).nullable(),
+  kind: z.enum(["foreign_income", "foreign_tax", "remittance", "thai_tax", "other"]),
+  displayName: z.string().min(1).max(180), mediaType: z.enum(["application/pdf", "image/png", "image/jpeg"]),
+  byteSize: z.number().int().positive().max(3 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+const policyReferenceSchema: z.ZodType<PolicyReference> = z.object({
+  id: z.string().min(1), taxYear: z.number().int(), effectiveFrom: date.nullable(), effectiveTo: date.nullable(),
+  sourceUrls: z.array(z.string().url()), reviewedAt: date.nullable(), assumptions: z.array(z.string()), roundingPolicy: z.string(),
+}).strict();
+
+const calculationLineSchema: z.ZodType<CalculationLine> = z.object({
+  code: z.string().min(1), label: z.string(), countryCode: z.string().nullable(), sourceId: z.string().nullable(),
+  value: nullableDecimal, explanation: z.string(),
+}).strict();
+
+const countryResultSchema: z.ZodType<CountryCalculationResult> = z.object({
+  countryCode: z.string(), countryName: z.string(), remittedIncome: decimal, attributableForeignTax: decimal,
+  thaiTaxLimit: decimal, allowableCredit: decimal, displayedAllowableCredit: decimal,
+}).strict();
+
+export const calculationResultSchema: z.ZodType<CalculationResult> = z.object({
+  outcome: z.enum(["ready", "incomplete", "needs_review"]), allowableCredit: nullableDecimal,
+  unroundedCountryCreditTotal: nullableDecimal, displayRoundingReconciliation: nullableDecimal,
+  domesticAssessableIncome: nullableDecimal, totalRemittedIncome: nullableDecimal, totalAssessableIncome: nullableDecimal,
+  thaiTaxBeforeFtc: nullableDecimal, countries: z.array(countryResultSchema), lines: z.array(calculationLineSchema),
+  validationMessages: z.array(validationMessageSchema), assumptions: z.array(z.string()),
+  policyVersion: z.string().min(1), engineVersion: z.string().min(1), roundingPolicy: z.string(),
+}).strict();
+
+export const calculationSnapshotSchema: z.ZodType<CalculationSnapshot> = z.object({
+  id: z.string().min(1).max(100), caseId: z.string().min(1).max(100), revision: z.number().int().nonnegative(),
+  kind: z.enum(["preview", "submitted"]), inputs: draftSchema, result: calculationResultSchema,
+  evidence: z.array(frozenEvidenceSchema), policy: policyReferenceSchema, createdAt: dateTime,
+}).strict();
+
+const auditEventSchema: z.ZodType<AuditEventSummary> = z.object({
+  id: z.string().min(1), event: z.string().min(1), actor: z.string(), occurredAt: dateTime,
+}).strict();
+
+const snapshotSummarySchema: z.ZodType<SnapshotSummary> = z.object({
+  id: z.string().min(1), revision: z.number().int().nonnegative(), kind: z.enum(["preview", "submitted"]),
+  policyId: z.string().min(1), engineVersion: z.string().min(1), outcome: z.enum(["ready", "incomplete", "needs_review"]),
+  createdAt: dateTime,
+}).strict();
+
+export const caseWorkflowDetailSchema: z.ZodType<CaseWorkflowDetail> = z.object({
+  case: caseRecordSchema, attachments: z.array(attachmentMetadataSchema), currentPreview: calculationSnapshotSchema.nullable(),
+  snapshotSummaries: z.array(snapshotSummarySchema), auditEvents: z.array(auditEventSchema),
+}).strict();
+
+export interface OfficerCaseDetail {
+  case: FtcCaseRecord; attachments: AttachmentMetadata[]; snapshot: CalculationSnapshot; auditEvents: AuditEventSummary[];
+}
+
+export const officerCaseDetailSchema: z.ZodType<OfficerCaseDetail> = z.object({ case: caseRecordSchema, attachments: z.array(attachmentMetadataSchema), snapshot: calculationSnapshotSchema,
+  auditEvents: z.array(auditEventSchema) }).strict();
+
+export function apiSuccessSchema<T>(data: z.ZodType<T>): z.ZodType<ApiSuccess<T>> {
+  return z.object({ data, requestId: z.string().min(1).max(128) }).strict();
+}
+
+export const apiSuccessSchemas = {
+  health: apiSuccessSchema(z.object({ status: z.literal("ok") }).strict()),
+  session: apiSuccessSchema(z.object({ user: apiUserSchema, csrfToken: z.string() }).strict()),
+  logout: apiSuccessSchema(z.object({ loggedOut: z.literal(true) }).strict()),
+  cases: apiSuccessSchema(z.object({ cases: z.array(caseRecordSchema) }).strict()),
+  case: apiSuccessSchema(z.object({ case: caseRecordSchema }).strict()),
+  caseDetail: apiSuccessSchema(caseWorkflowDetailSchema),
+  snapshot: apiSuccessSchema(z.object({ snapshot: calculationSnapshotSchema }).strict()),
+  submission: apiSuccessSchema(z.object({ case: caseRecordSchema, snapshot: calculationSnapshotSchema }).strict()),
+  officerCaseDetail: apiSuccessSchema(officerCaseDetailSchema),
+  attachmentUpload: apiSuccessSchema(z.object({ attachment: attachmentMetadataSchema, case: caseRecordSchema, revision: z.number().int().nonnegative() }).strict()),
+  attachmentDelete: apiSuccessSchema(z.object({ deleted: z.literal(true), revision: z.number().int().nonnegative() }).strict()),
+} as const;
+
 /** JSON success responses carry an explicit request ID for support and retries. */
 export interface ApiSuccess<T> {
   data: T;
@@ -302,6 +405,12 @@ export interface CaseWorkflowDetail {
   currentPreview: CalculationSnapshot | null;
   snapshotSummaries: SnapshotSummary[];
   auditEvents: AuditEventSummary[];
+}
+
+export interface AttachmentUploadResult {
+  attachment: AttachmentMetadata;
+  case: FtcCaseRecord;
+  revision: number;
 }
 
 export interface RevisionMutationRequest<T> {

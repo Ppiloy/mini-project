@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { z } from "zod";
 import type { AuthSession } from "../../data/api.js";
-import { ApiClientError, hostedApi, logoutAndConfirm } from "../../data/api.js";
+import { apiFailureMessage, hostedApi, logoutAndConfirm } from "../../data/api.js";
 import type { LogoutIntent } from "../../app/App.js";
 import type { DemoPersona } from "../../data/demoRepository.js";
 
@@ -63,7 +63,7 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
       const allowedReturn = returnTo && returnTo.startsWith("/app/cases/") && returnTo.endsWith("/edit") && !returnTo.includes("//") ? returnTo : null;
       navigate(allowedReturn ?? (session.user.role === "officer" ? "/officer" : "/app"), { replace: true });
     } catch (error) {
-      setProblem(error instanceof ApiClientError ? error.message : "เข้าสู่ระบบไม่ได้ ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง");
+      setProblem(apiFailureMessage(error, "เข้าสู่ระบบไม่ได้ ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง"));
     } finally {
       setBusy(false);
     }
@@ -92,6 +92,7 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
       <section className="entry-card card">
         <a className="entry-brand" href="/login"><span className="brand-mark" aria-hidden="true">FTC</span><span>ระบบต้นแบบเครดิตภาษีต่างประเทศ</span></a>
         <p className="prototype-banner">ระบบต้นแบบเพื่อการศึกษา</p>
+        <p className="fine-print">รุ่นนโยบายอ้างอิง: rd-ftc-demo-2568-v1</p>
         <p className="eyebrow">{officer ? "REVIEWER ACCESS" : "TAXPAYER ACCESS"}</p>
         <h1>{officer ? "เข้าสู่ระบบเจ้าหน้าที่" : "เข้าสู่ระบบผู้เสียภาษี"}</h1>
         <p className="muted">ใช้บัญชีตัวอย่างที่ผู้ดูแลระบบจัดเตรียมให้ ระบบนี้จำลองการคำนวณเพื่อการศึกษาและไม่ใช่บริการยื่นภาษี</p>

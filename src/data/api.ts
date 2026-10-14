@@ -1,13 +1,15 @@
 import { z } from "zod";
-import { apiErrorEnvelopeSchema } from "../../shared/contracts.js";
+import { apiErrorEnvelopeSchema, apiSuccessSchemas } from "../../shared/contracts.js";
 import type {
   ApiError,
   ApiSuccess,
   ApiUser,
-  AttachmentMetadata,
+  AttachmentUploadResult,
+  CaseWorkflowDetail,
   CalculationSnapshot,
   FtcCaseDraft,
   FtcCaseRecord,
+  OfficerCaseDetail as SharedOfficerCaseDetail,
 } from "../../shared/contracts.js";
 
 export class ApiClientError extends Error {
@@ -40,40 +42,17 @@ export interface CaseDraftSave {
   };
 }
 
-export interface CaseDetail {
-  case: FtcCaseRecord;
-  attachments?: AttachmentMetadata[];
-  currentPreview?: CalculationSnapshot | null;
-  snapshotSummaries?: Array<{ id: string; revision: number; kind: "preview" | "submitted"; createdAt: string }>;
-  auditEvents?: Array<{ event: string; actor: string; occurredAt: string }>;
-}
+export type CaseDetail = CaseWorkflowDetail;
+export type OfficerCaseDetail = SharedOfficerCaseDetail;
 
-export interface OfficerCaseDetail {
-  case: FtcCaseRecord;
-  attachments: AttachmentMetadata[];
-  snapshot: CalculationSnapshot;
-  auditEvents: Array<{ event: string; actor: string; occurredAt: string }>;
-}
-
-const authSessionSchema: z.ZodType<AuthSession> = z.object({
-  user: z.object({
-    id: z.string(),
-    loginName: z.string(),
-    displayName: z.string(),
-    role: z.enum(["taxpayer", "officer"]),
-    maskedReference: z.string().nullable(),
-  }),
-  csrfToken: z.string(),
-});
-
-const authSessionEnvelopeSchema: z.ZodType<ApiSuccess<AuthSession>> = z.object({ data: authSessionSchema, requestId: z.string() });
-const logoutSuccessEnvelopeSchema: z.ZodType<ApiSuccess<{ loggedOut: true }>> = z.object({ data: z.object({ loggedOut: z.literal(true) }), requestId: z.string() });
+const authSessionEnvelopeSchema: z.ZodType<ApiSuccess<AuthSession>> = apiSuccessSchemas.session;
+const logoutSuccessEnvelopeSchema: z.ZodType<ApiSuccess<{ loggedOut: true }>> = apiSuccessSchemas.logout;
 
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  csrfToken?: string,
-  successSchema?: z.ZodType<ApiSuccess<T>>,
+  csrfToken: string | undefined,
+  successSchema: z.ZodType<ApiSuccess<T>>,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
@@ -88,17 +67,36 @@ async function request<T>(
       problem?.code ?? "service_unavailable",
       problem?.message ?? "ไม่สามารถเชื่อมต่อระบบได้ กรุณาลองอีกครั้ง",
       problem?.fields,
-      problem?.requestId,
+      problem?.requestId ?? errorRequestId(body),
       response.status === 401 && isJsonResponse(response) && problem?.code === "unauthenticated",
     );
   }
-  if (successSchema) {
-    const parsedSuccess = successSchema.safeParse(body);
-    if (!parsedSuccess.success) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ");
-    return parsedSuccess.data.data;
-  }
-  if (!body || typeof body !== "object" || !("data" in body)) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ");
-  return body.data as T;
+  const parsedSuccess = successSchema.safeParse(body);
+  if (!parsedSuccess.success) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ", [], responseRequestId(body));
+  return parsedSuccess.data.data;
+}
+
+function responseRequestId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("requestId" in value)) return undefined;
+  const candidate = value.requestId;
+  return typeof candidate === "string" && candidate.length > 0 && candidate.length <= 128 ? candidate : undefined;
+}
+
+function errorRequestId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || !("error" in value) || !value.error || typeof value.error !== "object") return undefined;
+  const candidate = "requestId" in value.error ? value.error.requestId : undefined;
+  return typeof candidate === "string" && candidate.length > 0 && candidate.length <= 128 ? candidate : undefined;
+}
+
+/** Include the server support reference wherever an API failure is shown. */
+export function apiFailureContext(error: unknown): string {
+  const requestId = error instanceof ApiClientError ? error.requestId : undefined;
+  return `${requestId ? ` (รหัสคำขอ: ${requestId})` : ""} · รุ่นนโยบาย: rd-ftc-demo-2568-v1`;
+}
+
+export function apiFailureMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  return `${message}${apiFailureContext(error)}`;
 }
 
 function isJsonResponse(response: Response): boolean {
@@ -122,39 +120,39 @@ export const hostedApi = {
     return request("/api/auth/logout", { method: "POST" }, csrfToken, logoutSuccessEnvelopeSchema);
   },
   listCases(): Promise<{ cases: FtcCaseRecord[] }> {
-    return request("/api/cases");
+    return request("/api/cases", {}, undefined, apiSuccessSchemas.cases);
   },
   getCase(id: string): Promise<CaseDetail> {
-    return request(`/api/cases/${encodeURIComponent(id)}`);
+    return request(`/api/cases/${encodeURIComponent(id)}`, {}, undefined, apiSuccessSchemas.caseDetail);
   },
   async createCase(csrfToken: string, requestId = crypto.randomUUID()): Promise<{ case: FtcCaseRecord }> {
-    return request("/api/cases", { method: "POST", body: JSON.stringify({ requestId }) }, csrfToken);
+    return request("/api/cases", { method: "POST", body: JSON.stringify({ requestId }) }, csrfToken, apiSuccessSchemas.case);
   },
   saveDraft(id: string, payload: CaseDraftSave, csrfToken: string): Promise<{ case: FtcCaseRecord }> {
-    return request(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify(payload) }, csrfToken);
+    return request(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify(payload) }, csrfToken, apiSuccessSchemas.case);
   },
   calculate(id: string, expectedRevision: number, csrfToken: string): Promise<{ snapshot: CalculationSnapshot }> {
     return request(`/api/cases/${encodeURIComponent(id)}/calculate`, {
       method: "POST",
       body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }),
-    }, csrfToken);
+    }, csrfToken, apiSuccessSchemas.snapshot);
   },
   submit(id: string, expectedRevision: number, previewSnapshotId: string, csrfToken: string, requestId: string = crypto.randomUUID()): Promise<{ case: FtcCaseRecord; snapshot: CalculationSnapshot }> {
     return request(`/api/cases/${encodeURIComponent(id)}/submit`, {
       method: "POST",
       body: JSON.stringify({ expectedRevision, previewSnapshotId, requestId }),
-    }, csrfToken);
+    }, csrfToken, apiSuccessSchemas.submission);
   },
   listOfficerCases(): Promise<{ cases: FtcCaseRecord[] }> {
-    return request("/api/officer/cases");
+    return request("/api/officer/cases", {}, undefined, apiSuccessSchemas.cases);
   },
   getOfficerCase(id: string): Promise<OfficerCaseDetail> {
-    return request(`/api/officer/cases/${encodeURIComponent(id)}`);
+    return request(`/api/officer/cases/${encodeURIComponent(id)}`, {}, undefined, apiSuccessSchemas.officerCaseDetail);
   },
   snapshot(id: string): Promise<{ snapshot: CalculationSnapshot }> {
-    return request(`/api/snapshots/${encodeURIComponent(id)}`);
+    return request(`/api/snapshots/${encodeURIComponent(id)}`, {}, undefined, apiSuccessSchemas.snapshot);
   },
-  uploadEvidence(caseId: string, file: File, metadata: { sourceId: string | null; kind: string; expectedRevision: number; requestId: string }, csrfToken: string): Promise<{ attachment: AttachmentMetadata; case: FtcCaseRecord }> {
+  uploadEvidence(caseId: string, file: File, metadata: { sourceId: string | null; kind: string; expectedRevision: number; requestId: string }, csrfToken: string): Promise<AttachmentUploadResult> {
     const form = new FormData();
     form.set("file", file, file.name);
     form.set("displayName", file.name);
@@ -162,16 +160,18 @@ export const hostedApi = {
     form.set("kind", metadata.kind);
     form.set("expectedRevision", String(metadata.expectedRevision));
     form.set("requestId", metadata.requestId);
-    return request(`/api/cases/${encodeURIComponent(caseId)}/attachments`, { method: "POST", body: form }, csrfToken);
+    return request(`/api/cases/${encodeURIComponent(caseId)}/attachments`, { method: "POST", body: form }, csrfToken, apiSuccessSchemas.attachmentUpload);
   },
   removeEvidence(id: string, expectedRevision: number, csrfToken: string): Promise<{ deleted: true; revision: number }> {
-    return request(`/api/attachments/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }) }, csrfToken);
+    return request(`/api/attachments/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }) }, csrfToken, apiSuccessSchemas.attachmentDelete);
   },
   async downloadEvidence(id: string): Promise<Blob> {
     const response = await fetch(`/api/attachments/${encodeURIComponent(id)}`, { credentials: "include", cache: "no-store" });
     if (!response.ok) {
-      const body = await response.json().catch(() => null) as ApiError | null;
-      throw new ApiClientError(response.status, body?.error.code ?? "service_unavailable", body?.error.message ?? "ดาวน์โหลดไฟล์ไม่สำเร็จ", body?.error.fields, body?.error.requestId);
+      const body = await response.json().catch(() => null);
+      const parsed = apiErrorEnvelopeSchema.safeParse(body);
+      const problem = parsed.success ? parsed.data.error : undefined;
+      throw new ApiClientError(response.status, problem?.code ?? "service_unavailable", problem?.message ?? "ดาวน์โหลดไฟล์ไม่สำเร็จ", problem?.fields, problem?.requestId);
     }
     return response.blob();
   },

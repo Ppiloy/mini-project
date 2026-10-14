@@ -38,7 +38,7 @@ function attachment(id: string, sha256: string) {
     displayName: "same.pdf",
     mediaType: "application/pdf",
     byteSize: 10,
-    sha256,
+    sha256: sha256 === "sha256-old-bytes" ? "a".repeat(64) : "b".repeat(64),
     status: "ready",
     createdAt: "2026-10-14T00:00:00.000Z",
   };
@@ -57,7 +57,7 @@ test("a failed same-name evidence upload stays failed and retries the same opera
   let committedUpload: ReturnType<typeof attachment> | null = null;
   const uploadBodies: string[] = [];
 
-  await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({ json: { data: { case: current, attachments: files }, requestId: "case" } }));
+  await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({ json: { data: { case: current, attachments: files, currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: "case" } }));
   await page.route(`**/api/cases/${caseId}/draft`, async (route) => {
     current = { ...current, draft: { ...current.draft, revision: current.draft.revision + 1 } };
     await route.fulfill({ json: { data: { case: current }, requestId: "save" } });
@@ -74,7 +74,7 @@ test("a failed same-name evidence upload stays failed and retries the same opera
       return;
     }
     const uploaded = committedUpload!;
-    await route.fulfill({ json: { data: { attachment: uploaded, case: current }, requestId: "upload-acknowledged" } });
+    await route.fulfill({ json: { data: { attachment: uploaded, case: current, revision: current.draft.revision }, requestId: "upload-acknowledged" } });
   });
 
   await page.goto(`/app/cases/${caseId}/edit`);
@@ -133,7 +133,7 @@ test("a submit conflict loads the newer draft and disables the stale preview", a
   await page.route(`**/api/cases/${caseId}`, (route) => {
     detailCalls += 1;
     const latest = record(detailCalls === 1 ? 1 : 2);
-    return route.fulfill({ json: { data: { case: latest, attachments: [] }, requestId: `case-${detailCalls}` } });
+    return route.fulfill({ json: { data: { case: latest, attachments: [], currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: `case-${detailCalls}` } });
   });
   await page.route("**/api/snapshots/snapshot-revision-1", (route) => route.fulfill({ json: { data: { snapshot }, requestId: "snapshot" } }));
   await page.route(`**/api/cases/${caseId}/submit`, async (route) => {

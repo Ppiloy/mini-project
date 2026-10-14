@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { CalculationSnapshot } from "../../../shared/contracts.js";
 import { formatDate, formatMoney } from "../../components/money.js";
-import { hostedApi } from "../../data/api.js";
+import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoCases } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 
 type Mode = "demo" | "hosted";
+
+function isHttpUrl(value: string): boolean {
+  try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; }
+}
 
 export function ReportPage({ mode }: { mode: Mode }) {
   const { snapshotId = "" } = useParams();
@@ -30,7 +34,7 @@ export function ReportPage({ mode }: { mode: Mode }) {
           const response = await hostedApi.snapshot(snapshotId);
           if (active) setSnapshot(response.snapshot);
         }
-      } catch (error) { if (active) setProblem(error instanceof Error ? error.message : "เปิดรายงานไม่สำเร็จ"); }
+      } catch (error) { if (active) setProblem(apiFailureMessage(error, "เปิดรายงานไม่สำเร็จ")); }
       finally { if (active) setLoading(false); }
     };
     void load();
@@ -55,7 +59,7 @@ export function ReportPage({ mode }: { mode: Mode }) {
         <div className="report-source-heading"><h3>{index + 1}. {source.countryName ?? "ไม่ระบุประเทศ"} · {source.incomeType ?? "ไม่ระบุประเภท"} {source.subtype ? `(${source.subtype})` : ""}</h3><span>{source.inputMode === "original_currency" ? "สกุลเงินต้นทาง" : "Worksheet THB"}</span></div>
         <div className="report-source-grid"><div><span>D · เงินได้ต้นทาง</span><strong>{formatMoney(source.grossIncomeAmount)} {source.currencyCode ?? ""}</strong></div><div><span>ภาษีที่จ่ายจริง</span><strong>{formatMoney(source.actualForeignTaxPaid)} {source.currencyCode ?? ""}</strong></div><div><span>E · ภาษีที่สมมติว่าเข้าเกณฑ์</span><strong>{formatMoney(source.eligibleForeignTax)} {source.currencyCode ?? ""}</strong></div><div><span>F · ส่วนเงินได้ที่นำเข้าไทย</span><strong>{formatMoney(source.remittedIncomeAmount)} {source.currencyCode ?? ""}</strong></div><div><span>วันพำนักในปีที่เกิดเงินได้</span><strong>{source.residenceDaysInEarnedYear ?? "—"} วัน</strong></div><div><span>วันที่เกิด / วันที่นำเข้า</span><strong>{formatDate(source.earnedDate)} / {formatDate(source.remittance?.remittanceDate)}</strong></div></div>
         <p>สมมติฐานและเหตุผลของ E: {source.eligibilityRationale ?? "ไม่ได้ระบุ"}</p>
-        <p>FX: {source.fxReference ? `${source.fxReference.thbRate ?? "—"} THB ต่อ ${source.fxReference.baseUnits ?? "—"} ${source.fxReference.currencyCode ?? ""} · ${source.fxReference.rateType ?? "—"} · ${source.fxReference.sourceLabel ?? "ไม่ได้ระบุแหล่ง"} · ${formatDate(source.fxReference.effectiveDate)}` : "จำนวนเงินต้นทางเป็น THB ตามตารางตัวอย่าง ไม่มีการแปลง FX เพิ่ม"}</p>
+        {source.fxReference ? <div className="report-provenance"><p>FX: {source.fxReference.thbRate ?? "—"} THB ต่อ {source.fxReference.baseUnits ?? "—"} {source.fxReference.currencyCode ?? ""} · {source.fxReference.rateType ?? "—"} · {source.fxReference.sourceLabel ?? "ไม่ได้ระบุแหล่ง"} · {formatDate(source.fxReference.effectiveDate)}</p><p>สมมติฐานอัตรา FX: {source.fxReference.educationalAssumption ?? "ไม่ได้ระบุ"}</p>{source.fxReference.sourceUrl && <p>URL แหล่งอัตรา FX: {isHttpUrl(source.fxReference.sourceUrl) ? <a href={source.fxReference.sourceUrl}>{source.fxReference.sourceUrl}</a> : source.fxReference.sourceUrl}</p>}</div> : <p>FX: จำนวนเงินต้นทางเป็น THB ตามตารางตัวอย่าง ไม่มีการแปลง FX เพิ่ม</p>}
         <div className="report-converted"><span>D/E/F หลังแปลงเป็น THB:</span><strong>{formatMoney(source.grossIncomeThb)} / {formatMoney(source.eligibleForeignTaxThb)} / {formatMoney(source.remittedIncomeThb)} บาท</strong></div>
       </article>)}</section>
       <section className="report-section"><h2>ขั้นคำนวณและสรุปตามประเทศ</h2><div className="report-table-wrap"><table className="report-table"><thead><tr><th>ประเทศ</th><th>N · เงินได้นำเข้า</th><th>O · ภาษีจัดสรร</th><th>P · เพดาน</th><th>Q · เครดิตที่ใช้ได้</th></tr></thead><tbody>{snapshot.result.countries.map((country) => <tr key={country.countryCode}><th>{country.countryName}</th><td>{formatMoney(country.remittedIncome)}</td><td>{formatMoney(country.attributableForeignTax)}</td><td>{formatMoney(country.thaiTaxLimit)}</td><td>{formatMoney(country.displayedAllowableCredit)}</td></tr>)}{snapshot.result.countries.length === 0 && <tr><td colSpan={5}>ยังไม่มีผลลัพธ์รายประเทศ</td></tr>}</tbody></table></div><div className="report-lines">{lines.map((line) => <div className="report-line" key={line.code}><span><strong>{line.label}</strong><small>{line.explanation}</small></span><b>{line.value === null ? "—" : formatMoney(line.value)}</b></div>)}</div><p>การปัดเศษ: {snapshot.result.roundingPolicy}</p>{snapshot.result.displayRoundingReconciliation && snapshot.result.displayRoundingReconciliation !== "0" && <p>ผลปรับการปัดเศษของตาราง: {formatMoney(snapshot.result.displayRoundingReconciliation)} บาท</p>}</section>

@@ -13,9 +13,11 @@ import {
   stripStaleConfirmations,
 } from "../shared/confirmations.js";
 import type { ApiUser, FtcCaseDraft, FtcCaseRecord, UserRole } from "../shared/contracts.js";
+import { apiSuccessSchemas } from "../shared/contracts.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { ApiFailure } from "./api-failure.js";
+import { sendApiSuccess } from "./api-success.js";
 import { ensureEnvironmentMarker, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "./runtime/environment.js";
 import { registerWorkflowRoutes } from "./workflow/routes.js";
 import type { BlobIO } from "./storage/blob-io.js";
@@ -607,7 +609,7 @@ export function createApp(options: CreateAppOptions): Express {
   });
 
   app.get("/api/health", (_request, response) => {
-    response.json({ data: { status: "ok" }, requestId: response.locals.requestId });
+    sendApiSuccess(response, apiSuccessSchemas.health, { status: "ok" }, response.locals.requestId);
   });
   app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
 
@@ -687,21 +689,21 @@ export function createApp(options: CreateAppOptions): Express {
       request.session.lastActiveAt = sessionTimestamp;
       request.session.cookie.maxAge = SESSION_IDLE_MS;
       await new Promise<void>((resolve, reject) => request.session.save((error) => error ? reject(error) : resolve()));
-      response.json({ data: { user: toApiUser(user), csrfToken: request.session.csrfToken }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.session, { user: toApiUser(user), csrfToken: request.session.csrfToken }, response.locals.requestId);
     } catch (error) {
       next(error);
     }
   });
 
   app.get("/api/auth/session", authenticated, (request, response) => {
-    response.json({ data: { user: response.locals.user as ApiUser, csrfToken: request.session.csrfToken }, requestId: response.locals.requestId });
+    sendApiSuccess(response, apiSuccessSchemas.session, { user: response.locals.user as ApiUser, csrfToken: request.session.csrfToken }, response.locals.requestId);
   });
 
   app.post("/api/auth/logout", authenticated, csrf, async (request, response, next) => {
     try {
       await new Promise<void>((resolve, reject) => request.session.destroy((error) => error ? reject(error) : resolve()));
       response.clearCookie(cookieName, { path: "/", httpOnly: true, secure: options.trustedHttps, sameSite: "lax" });
-      response.json({ data: { loggedOut: true }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.logout, { loggedOut: true }, response.locals.requestId);
     } catch (error) {
       next(error);
     }
@@ -714,7 +716,7 @@ export function createApp(options: CreateAppOptions): Express {
         [(response.locals.user as ApiUser).id, (response.locals.environmentMarker as EnvironmentMarker).id],
       );
       const cases = await Promise.all(result.rows.map((row) => loadCaseRecord(options.pool, row)));
-      response.json({ data: { cases }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.cases, { cases }, response.locals.requestId);
     } catch (error) {
       next(error);
     }
@@ -747,7 +749,7 @@ export function createApp(options: CreateAppOptions): Express {
         return { row: created.rows[0] as CaseRow, created: true };
       });
       const record = await loadCaseRecord(options.pool, result.row);
-      response.status(result.created ? 201 : 200).json({ data: { case: record }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.case, { case: record }, response.locals.requestId, result.created ? 201 : 200);
     } catch (error) {
       next(error);
     }
@@ -853,7 +855,7 @@ export function createApp(options: CreateAppOptions): Express {
         );
         return { record, replayed: false };
       });
-      response.json({ data: { case: result.record }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.case, { case: result.record }, response.locals.requestId);
     } catch (error) { next(error); }
   });
 

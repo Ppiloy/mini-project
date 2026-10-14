@@ -4,7 +4,7 @@ import type { AttachmentMetadata, CalculationSnapshot, FtcCaseRecord } from "../
 import { validateSubmission } from "../../../shared/calculator.js";
 import { formatDate, formatMoney } from "../../components/money.js";
 import { PageHeading } from "../../components/SiteFrame.js";
-import { ApiClientError, hostedApi } from "../../data/api.js";
+import { ApiClientError, apiFailureContext, apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview, saveDemoSnapshot, submitDemoCase } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 
@@ -49,7 +49,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
           if (active) { setRecord(loaded); setSnapshot(savedSnapshot); setAttachments(detail.attachments ?? []); }
         }
       } catch (error) {
-        if (active) setProblem(error instanceof Error ? error.message : "โหลดผลคำนวณไม่สำเร็จ");
+        if (active) setProblem(apiFailureMessage(error, "โหลดผลคำนวณไม่สำเร็จ"));
       } finally { if (active) setLoading(false); }
     };
     void load();
@@ -110,13 +110,13 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
             setRecord(latest);
             setAttachments(latestDetail.attachments ?? []);
             if (latest.draft.revision > snapshot.revision) {
-              setProblem(`ข้อมูลร่างเปลี่ยนเป็นรุ่น ${latest.draft.revision} แล้ว ผลคำนวณรุ่น ${snapshot.revision} เก่าอยู่ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง`);
+              setProblem(`ข้อมูลร่างเปลี่ยนเป็นรุ่น ${latest.draft.revision} แล้ว ผลคำนวณรุ่น ${snapshot.revision} เก่าอยู่ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง${apiFailureContext(error)}`);
             } else throw error;
           }
         }
       }
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "ส่งเข้าคิวไม่สำเร็จ ตรวจสอบสถานะกรณีก่อนลองซ้ำ");
+      setProblem(apiFailureMessage(error, "ส่งเข้าคิวไม่สำเร็จ ตรวจสอบสถานะกรณีก่อนลองซ้ำ"));
       if (error instanceof ApiClientError && error.fields?.length) {
         setSubmitFieldProblems(error.fields.map((item) => `${item.message}${item.path?.length ? ` · ${item.path.join(" › ")}` : ""}`));
       }

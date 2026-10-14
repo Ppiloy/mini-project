@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { FtcCaseRecord } from "../../../shared/contracts.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
-import { hostedApi } from "../../data/api.js";
+import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { createDemoCase, createDemoCaseFromDraft, listDemoCases } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 import { PageHeading } from "../../components/SiteFrame.js";
@@ -25,7 +25,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
       if (mode === "demo") setCases(listDemoCases("taxpayer"));
       else setCases((await hostedApi.listCases()).cases);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "โหลดกรณีไม่สำเร็จ");
+      setProblem(apiFailureMessage(error, "โหลดกรณีไม่สำเร็จ"));
     } finally {
       setBusy(false);
     }
@@ -47,7 +47,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
       }
       navigate(`${mode === "demo" ? "/demo" : ""}/cases/${encodeURIComponent(record.id)}/edit`);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "สร้างกรณีไม่สำเร็จ");
+      setProblem(apiFailureMessage(error, "สร้างกรณีไม่สำเร็จ"));
     } finally {
       setCreating(false);
     }
