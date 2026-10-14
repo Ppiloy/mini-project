@@ -20,6 +20,7 @@ interface AppSession {
   ready: boolean;
   pendingLogout: LogoutIntent | null;
   pendingLogoutErrors: unknown[];
+  sessionLookupError: unknown | null;
   setHosted: (session: AuthSession) => void;
   setDemo: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
   beginLogout: (accountId: string, expectedRole: ApiUser["role"], wrongRole?: boolean) => void;
@@ -30,6 +31,7 @@ interface AppSession {
 
 const SessionContext = createContext<AppSession | null>(null);
 const pendingLogoutStorageKey = "ftc.hosted.logout.pending";
+const unverifiedHostedSessionStorageKey = "ftc.hosted.session.unverified";
 export interface LogoutIntent { accountId: string; expectedRole: ApiUser["role"]; wrongRole?: boolean }
 
 function readLogoutIntent(): LogoutIntent | null {
@@ -72,10 +74,14 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [pendingLogout, setPendingLogout] = useState<LogoutIntent | null>(readLogoutIntent);
   const [pendingLogoutErrors, setPendingLogoutErrors] = useState<unknown[]>([]);
+  const [sessionLookupError, setSessionLookupError] = useState<unknown | null>(null);
 
   useEffect(() => {
     const persona = sessionStorage.getItem("ftc.demo.persona") as DemoPersona | null;
     if (persona === "taxpayer" || persona === "officer") {
+      if (sessionStorage.getItem(unverifiedHostedSessionStorageKey) === "1") {
+        setSessionLookupError(new Error("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว เซสชันออนไลน์เดิมอาจยังเปิดอยู่"));
+      }
       setUser(demoUser(persona));
       setIsDemo(true);
       setReady(true);
@@ -85,6 +91,10 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     const logoutIntent = readLogoutIntent();
     setPendingLogout(logoutIntent);
     hostedApi.session().then((session) => {
+      if (live) {
+        setSessionLookupError(null);
+        sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
+      }
       if (live && session) {
         if (logoutIntent && session.user.id !== logoutIntent.accountId) {
           persistLogoutIntent(null);
@@ -100,6 +110,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         setPendingLogoutErrors([]);
       }
     }).catch((error: unknown) => {
+      if (live) setSessionLookupError(error);
       if (live && logoutIntent) setPendingLogoutErrors([error]);
     }).finally(() => { if (live) setReady(true); });
     return () => { live = false; };
@@ -112,10 +123,13 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     ready,
     pendingLogout,
     pendingLogoutErrors,
+    sessionLookupError,
     setHosted: (session) => {
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
+      setSessionLookupError(null);
+      sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts(session.user.id);
       setIsDemo(false);
@@ -123,6 +137,9 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setCsrfToken(session.csrfToken);
     },
     setDemo: async (persona) => {
+      if (!ready) {
+        return { confirmed: false, errors: [new Error("กำลังตรวจสอบเซสชันออนไลน์ กรุณารอแล้วลองอีกครั้งก่อนเปิดโหมดสาธิต")] };
+      }
       if (user && csrfToken && !demo) {
         const intent = { accountId: user.id, expectedRole: user.role };
         persistLogoutIntent(intent);
@@ -137,6 +154,8 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
+      if (sessionLookupError) sessionStorage.setItem(unverifiedHostedSessionStorageKey, "1");
+      else sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       clearPendingDrafts();
       sessionStorage.setItem("ftc.demo.persona", persona);
       setIsDemo(true);
@@ -207,6 +226,8 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
+      setSessionLookupError(null);
+      sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts();
       setIsDemo(false);
@@ -219,7 +240,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setCsrfToken(null);
     },
-  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors]);
+  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
@@ -282,13 +303,12 @@ function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {
 }
 
 function AppRoutes() {
-  const { setDemo } = useAppSession();
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/officer/login" element={<LoginRoute officer />} />
-      <Route path="/demo" element={<DemoEntryPage onChoose={setDemo} />} />
+      <Route path="/demo" element={<DemoEntryRoute />} />
       <Route path="/demo/app" element={<RequireRole role="taxpayer" mode="demo"><DashboardPage mode="demo" /></RequireRole>} />
       <Route path="/app" element={<RequireRole role="taxpayer" mode="hosted"><DashboardPage mode="hosted" /></RequireRole>} />
       <Route path="/demo/cases/:id/edit" element={<RequireRole role="taxpayer" mode="demo"><CaseEditorPage mode="demo" /></RequireRole>} />
@@ -304,6 +324,12 @@ function AppRoutes() {
       <Route path="*" element={<main className="page-wrap"><section className="card"><h1>ไม่พบหน้านี้</h1><a href="/login">กลับหน้าเข้าสู่ระบบ</a></section></main>} />
     </Routes>
   );
+}
+
+function DemoEntryRoute() {
+  const { ready, setDemo, sessionLookupError } = useAppSession();
+  if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
+  return <DemoEntryPage onChoose={setDemo} sessionLookupError={sessionLookupError} />;
 }
 
 export function App() {

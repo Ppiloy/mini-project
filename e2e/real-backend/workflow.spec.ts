@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { apiSuccessSchemas } from "../../shared/contracts.js";
+import type { CalculationSnapshot } from "../../shared/contracts.js";
 import { advance, browserApi, createCase, login, operatorSeed } from "./fixtures.js";
 
 const proofBytes = (label: string) => Buffer.from(`%PDF-1.7\n% fictional acceptance evidence: ${label}\n%%EOF\n`, "ascii");
@@ -68,7 +69,9 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const persisted = await browserApi(page, `/api/cases/${caseId}`);
   expect(persisted.status).toBe(200);
   expect(apiSuccessSchemas.caseDetail.safeParse(persisted.json).success).toBe(true);
-  const caseDetail = (persisted.json as { data: { case: { draft: { sources: Array<{ id: string }> } }; attachments: Array<{ id: string; sourceId: string | null; kind: string; sha256: string }> } }).data;
+  const caseDetail = (persisted.json as { data: { case: { draft: { sources: Array<{ id: string }> } }; attachments: Array<{
+    id: string; sourceId: string | null; kind: string; displayName: string; mediaType: string; byteSize: number; sha256: string;
+  }> } }).data;
   expect(caseDetail.case.draft.sources[0]?.id).toBe(sourceId);
   const sourceFiles = caseDetail.attachments.filter((attachment) => attachment.sourceId === sourceId);
   expect(sourceFiles.map((attachment) => attachment.kind).sort()).toEqual(["foreign_income", "foreign_tax", "remittance"]);
@@ -99,9 +102,18 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const previewId = new URL(page.url()).searchParams.get("preview")!;
   const previewResponse = await browserApi(page, `/api/snapshots/${previewId}`);
   expect(previewResponse.status).toBe(200);
-  const preview = (previewResponse.json as { data: { snapshot: { id: string; result: { allowableCredit: string } } } }).data.snapshot;
+  const preview = (previewResponse.json as { data: { snapshot: CalculationSnapshot } }).data.snapshot;
   expect(preview.id).toBe(previewId);
   expect(preview.result.allowableCredit).toBe("2500.00");
+  const sourceLines = preview.result.lines.filter((line) => line.sourceId === sourceId);
+  expect(sourceLines.map((line) => line.code)).toEqual([
+    "source_D", "source_E_paid", "source_E_eligible", "source_F", "source_share", "source_G",
+  ]);
+  expect(sourceLines.map((line) => line.value)).toEqual(["50000", "5000", "5000", "25000", "0.5", "2500"]);
+  const uploadedEvidence = caseDetail.attachments.map(({ id, sourceId: attachedSourceId, kind, displayName, mediaType, byteSize, sha256 }) => ({
+    id, sourceId: attachedSourceId, kind, displayName, mediaType, byteSize, sha256,
+  })).sort((left, right) => left.id.localeCompare(right.id));
+  expect(preview.evidence.map((item) => ({ ...item })).sort((left, right) => left.id.localeCompare(right.id))).toEqual(uploadedEvidence);
   // Independent work: D=50,000, E=5,000, F=25,000 gives a 50% allocation (2,500).
   // N=25,000, K=J+N=125,000, so the L=20,000 cap is 4,000; min(O,P)=2,500.
   const allocatedFromReference = (25_000 / 50_000) * 5_000;
@@ -123,7 +135,18 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const submittedSnapshotId = new URL(reportUrl).pathname.split("/").at(-1)!;
   expect(submittedSnapshotId).toMatch(/^[0-9a-f-]{36}$/i);
   const ownerDetail = await browserApi(page, `/api/cases/${caseId}`);
-  expect((ownerDetail.json as { data: { case: { submittedSnapshotId: string } } }).data.case.submittedSnapshotId).toBe(submittedSnapshotId);
+  const submittedCase = (ownerDetail.json as { data: { case: { status: string; draft: { revision: number }; submittedSnapshotId: string } } }).data.case;
+  expect(submittedCase.status).toBe("submitted");
+  expect(submittedCase.submittedSnapshotId).toBe(submittedSnapshotId);
+  const submittedSnapshotResponse = await browserApi(page, `/api/snapshots/${submittedSnapshotId}`);
+  expect(apiSuccessSchemas.snapshot.safeParse(submittedSnapshotResponse.json).success).toBe(true);
+  const submittedSnapshot = (submittedSnapshotResponse.json as { data: { snapshot: CalculationSnapshot } }).data.snapshot;
+  expect(submittedSnapshot.kind).toBe("submitted");
+  expect(submittedSnapshot.revision).toBe(submittedCase.draft.revision);
+  const submittedSourceLines = submittedSnapshot.result.lines.filter((line) => line.sourceId === sourceId);
+  expect(submittedSourceLines.map((line) => line.code)).toEqual(sourceLines.map((line) => line.code));
+  expect(submittedSourceLines.map((line) => line.value)).toEqual(sourceLines.map((line) => line.value));
+  expect(submittedSnapshot.evidence.map((item) => ({ ...item })).sort((left, right) => left.id.localeCompare(right.id))).toEqual(uploadedEvidence);
 
   const taxpayerBContext = await browser.newContext();
   try {
@@ -181,9 +204,14 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
 
   const submittedEdit = await browserApi(page, `/api/cases/${caseId}/draft`, {
     method: "PUT", csrfToken: a.csrfToken,
-    body: { expectedRevision: 5, requestId: "submitted-read-only-proof", data: {} },
+    body: {
+      expectedRevision: submittedCase.draft.revision,
+      requestId: "submitted-read-only-proof",
+      data: submittedCase.draft,
+    },
   });
-  expect([409, 422]).toContain(submittedEdit.status);
+  expect(submittedEdit.status).toBe(409);
+  expect((submittedEdit.json as { error?: { message?: string } }).error?.message).toBe("รายการที่ส่งแล้วแก้ไขไม่ได้");
 });
 
 test("real API rejects incomplete and unsupported input without inventing an ordinary credit", async ({ page }) => {
@@ -344,4 +372,114 @@ test("real hosted and fixture identities cannot cross route modes; fixture choic
   await page.goto(`/demo/reports/${realSnapshotId}`);
   await expect(page).toHaveURL(/\/app$/);
   expect(snapshotReads).toBe(0);
+});
+
+test("fixture chooser waits for the real initial hosted session response before allowing a mode switch", async ({ browser }) => {
+  const seed = await operatorSeed();
+  const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  const signedInContext = await browser.newContext();
+  let fixtureContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
+  try {
+    const signedInPage = await signedInContext.newPage();
+    await login(signedInPage, credential);
+    const savedStorageState = await signedInContext.storageState();
+    fixtureContext = await browser.newContext({ storageState: savedStorageState });
+    const page = await fixtureContext.newPage();
+
+    let releaseSession!: () => void;
+    let sessionResponseReady!: () => void;
+    const responseGate = new Promise<void>((resolve) => { releaseSession = resolve; });
+    const realSessionReady = new Promise<void>((resolve) => { sessionResponseReady = resolve; });
+    await page.route("**/api/auth/session", async (route) => {
+      const actualResponse = await route.fetch();
+      sessionResponseReady();
+      await responseGate;
+      await route.fulfill({ response: actualResponse });
+    });
+
+    await page.goto("/demo");
+    await realSessionReady;
+    await expect(page.getByRole("status").filter({ hasText: "กำลังตรวจสอบเซสชัน" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toHaveCount(0);
+
+    releaseSession();
+    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeVisible();
+    const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    expect((await logoutResponsePromise).status()).toBe(200);
+    await expect(page).toHaveURL(/\/demo\/app$/);
+    expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
+  } finally {
+    await fixtureContext?.close();
+    await signedInContext.close();
+  }
+});
+
+test("offline fixture fallback discloses that an existing hosted session could not be checked", async ({ browser }) => {
+  const seed = await operatorSeed();
+  const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  const signedInContext = await browser.newContext();
+  let offlineContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
+  try {
+    const signedInPage = await signedInContext.newPage();
+    await login(signedInPage, credential);
+    offlineContext = await browser.newContext({ storageState: await signedInContext.storageState() });
+    const page = await offlineContext.newPage();
+    await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"));
+    await page.goto("/demo");
+    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeEnabled();
+    const sessionWarning = page.getByRole("alert");
+    await expect(sessionWarning).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
+    await expect(sessionWarning).toContainText("rd-ftc-demo-2568-v1");
+
+    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await expect(page).toHaveURL(/\/demo\/app$/);
+    await expect(page.locator(".mode-tag")).toBeVisible();
+    await page.reload();
+    await expect(page.locator(".mode-tag")).toBeVisible();
+    await page.goto("/demo");
+    await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
+    await page.unroute("**/api/auth/session");
+    expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+  } finally {
+    await offlineContext?.close();
+    await signedInContext.close();
+  }
+});
+
+test("fixture mode switch keeps the hosted session visible after a real logout rejection and retries safely across reload", async ({ page }) => {
+  const seed = await operatorSeed();
+  const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  await login(page, credential);
+  await page.goto("/demo");
+
+  await page.route("**/api/auth/logout", async (route) => {
+    const headers = { ...route.request().headers(), "x-csrf-token": "deliberately-invalid-test-token" };
+    await route.continue({ headers });
+  }, { times: 1 });
+
+  const failedLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  const failedLogout = await failedLogoutPromise;
+  expect(failedLogout.status()).toBe(403);
+  const failureEnvelope = await failedLogout.json() as { error?: { requestId?: string } };
+  const requestId = failureEnvelope.error?.requestId;
+  expect(requestId).toMatch(/^[0-9a-f-]{36}$/i);
+  const failureAlert = page.getByRole("alert");
+  await expect(failureAlert).toContainText(requestId!);
+  await expect(failureAlert).toContainText("rd-ftc-demo-2568-v1");
+  await expect(page).toHaveURL(/\/demo$/);
+  expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+
+  const retryLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  expect((await retryLogoutPromise).status()).toBe(200);
+  await expect(page).toHaveURL(/\/demo\/app$/);
+  await expect(page.locator(".mode-tag")).toBeVisible();
+  expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/demo\/app$/);
+  await expect(page.locator(".mode-tag")).toBeVisible();
+  expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
 });

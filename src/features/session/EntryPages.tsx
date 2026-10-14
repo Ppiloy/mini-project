@@ -123,7 +123,10 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
   );
 }
 
-export function DemoEntryPage({ onChoose }: { onChoose: (persona: DemoPersona) => Promise<LogoutConfirmationResult> }) {
+export function DemoEntryPage({ onChoose, sessionLookupError }: {
+  onChoose: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
+  sessionLookupError: unknown | null;
+}) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -151,6 +154,7 @@ export function DemoEntryPage({ onChoose }: { onChoose: (persona: DemoPersona) =
         <h1>สาธิตระบบต้นแบบ</h1>
         <p className="muted">เลือกบทบาทสำหรับข้อมูลสมมติ โหมดนี้ใช้เครื่องคำนวณเดียวกับแอปและจำลองการบันทึกกับเอกสารในอุปกรณ์นี้</p>
         <div className="alert alert-info"><strong>ข้อมูลในโหมดสาธิตแยกจากระบบออนไลน์</strong><span>ไม่มีการใช้รหัสผ่าน และไม่เชื่อมต่อกับบัญชีหรือคิวที่บันทึกไว้บนเซิร์ฟเวอร์</span></div>
+        {sessionLookupError && <div className="alert alert-error" role="alert">{apiFailureMessages([sessionLookupError], "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว โหมดสาธิตยังใช้ข้อมูลในอุปกรณ์นี้ได้ แต่เซสชันออนไลน์เดิมอาจยังเปิดอยู่ โปรดกลับมาเชื่อมต่อและตรวจสอบเซสชันก่อนใช้บัญชีออนไลน์")}</div>}
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         <div className="demo-role-list">
           <button className="role-card" onClick={() => void select("taxpayer")} disabled={busy}>
