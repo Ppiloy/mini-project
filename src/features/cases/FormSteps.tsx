@@ -9,6 +9,7 @@ interface StepProps {
   onDeleteAttachment: (id: string) => Promise<void>;
   onDownloadAttachment: (attachment: AttachmentMetadata) => Promise<void>;
   busy: boolean;
+  mode?: "demo" | "hosted";
 }
 
 const countries = [{ code: "VN", name: "เวียดนาม (Vietnam)" }, { code: "CN", name: "จีน (China)" }, { code: "XX", name: "ประเทศอื่น — ยังไม่รองรับ" }];
@@ -139,12 +140,14 @@ export function StepFour({ draft, onChange }: StepProps) {
   </section>;
 }
 
-export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttachment, onDownloadAttachment, busy }: StepProps) {
+export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttachment, onDownloadAttachment, busy, mode = "demo" }: StepProps) {
   const allItems = [{ sourceId: null, sourceIndex: undefined as number | undefined, label: "ภาษีไทย · ที่มาของ L" }, ...draft.sources.map((source, index) => ({ sourceId: source.id, sourceIndex: index, label: `แหล่งเงินได้ ${index + 1} · ${source.countryName ?? "ยังไม่เลือกประเทศ"}` }))];
   return <section className="step-panel" aria-labelledby="step-title">
     <h2 id="step-title">หลักฐานและตรวจทาน</h2>
     <p className="muted">แนบตัวอย่างเอกสารเพื่อจำลองรายการตรวจสอบก่อนส่ง แต่ละไฟล์ไม่เกิน 3 MiB, PDF/JPEG/PNG เท่านั้น</p>
-    <div className="alert alert-info"><strong>ข้อมูลจำลองเท่านั้น</strong><span>ในโหมดสาธิตจะแสดงชื่อและชนิดไฟล์ โดยไม่ส่งไฟล์ขึ้นเซิร์ฟเวอร์หรือใช้เป็นหลักฐานจริง</span></div>
+    {mode === "demo"
+      ? <div className="alert alert-info"><strong>ข้อมูลจำลองเท่านั้น</strong><span>ในโหมดสาธิตจะแสดงชื่อและชนิดไฟล์ โดยไม่ส่งไฟล์ขึ้นเซิร์ฟเวอร์หรือใช้เป็นหลักฐานจริง</span></div>
+      : <div className="alert alert-warning"><strong>โหมดระบบที่เชื่อมต่อเซิร์ฟเวอร์</strong><span>ไฟล์ที่แนบจะออกจากอุปกรณ์และถูกจัดเก็บในพื้นที่หลักฐานฝั่งเซิร์ฟเวอร์ของโครงการ โปรดใช้เฉพาะเอกสารสมมติสำหรับการสาธิต</span></div>}
     <div className="evidence-list">
       {allItems.map(({ sourceId, sourceIndex, label }, itemIndex) => {
         const source = sourceIndex === undefined ? null : draft.sources[sourceIndex] ?? null;
