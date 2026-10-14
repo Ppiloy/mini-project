@@ -21,3 +21,7 @@ Target: linked Netlify project `ppiloy-mini-project`, site ID `3bc8fc1b-7af0-47c
 ## Gates still required
 
 After the reviewed workflow/operations candidate is ready: real Database migration/read/write checks, HTTPS Secure session round trip, authorized Blob binary upload/download and 3 MiB overhead boundary, cross-account/officer access, actual PostgreSQL races and response-loss retry, same-snapshot print, preview/production namespace isolation, redeploy/cold-start persistence, coordinated disposable recovery, and observed usage. Local PGlite, mocked browser responses and a successful draft upload do not replace these gates.
+
+## Git publication readiness
+
+On 14 October 2026, a fresh read-only remote branch listing still exposed only `codex/ftc-integration` at `a155b89154331e65b36c246d27e0d80e121ed84f`; `main` was absent. The official Git credential-helper interface and GitHub repository REST endpoint confirmed authenticated admin/push access to `Ppiloy/mini-project`, whose current default branch is `codex/ftc-integration`. Credentials stayed in process memory; only repository identity, permission booleans and HTTP status were printed. No branch push, pull request, GitHub settings change or production publication was performed by this check. Native preview/base sequencing remains to be confirmed against the linked Netlify configuration before publication.
