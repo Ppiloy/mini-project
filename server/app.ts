@@ -15,6 +15,10 @@ import {
 import type { ApiUser, FtcCaseDraft, FtcCaseRecord, UserRole } from "../shared/contracts.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
+import { ApiFailure } from "./api-failure.js";
+import { ensureEnvironmentMarker, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "./runtime/environment.js";
+import { registerWorkflowRoutes } from "./workflow/routes.js";
+import type { BlobIO } from "./storage/blob-io.js";
 
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 const SESSION_ABSOLUTE_MS = 8 * 60 * 60 * 1000;
@@ -43,7 +47,7 @@ interface AppUserRow {
   password_hash?: string;
 }
 
-interface CaseRow {
+export interface CaseRow {
   id: string;
   owner_id: string;
   status: "draft" | "submitted";
@@ -70,6 +74,9 @@ export interface CreateAppOptions {
   trustedHttps: boolean;
   sessionCookieName?: string;
   clock?: () => number;
+  environment?: RuntimeEnvironmentConfig;
+  blobIO?: BlobIO;
+  officerUserId?: string;
 }
 
 export function makeRuntimePool(): PgPoolLike {
@@ -93,12 +100,6 @@ export function makeRuntimePool(): PgPoolLike {
       return getPool().connect();
     },
   };
-}
-
-class ApiFailure extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly fields?: unknown) {
-    super(message);
-  }
 }
 
 function apiError(response: Response, status: number, code: string, message: string, fields?: unknown): void {
@@ -190,7 +191,7 @@ function canonicalNumeric(value: string | null): string | null {
   return value.replace(/0+$/, "").replace(/\.$/, "");
 }
 
-async function loadCaseRecord(queryable: Pick<PgQueryable, "query">, row: CaseRow): Promise<FtcCaseRecord> {
+export async function loadCaseRecord(queryable: Pick<PgQueryable, "query">, row: CaseRow): Promise<FtcCaseRecord> {
   const draft = asDraft(row.draft);
   const sourceRows = await queryable.query<StoredSourceRow>(
     `SELECT s.id, s.position, s.source_data, s.country_code, s.country_name, s.income_type, s.subtype, s.earned_tax_year,
@@ -307,11 +308,11 @@ function secureEquals(left: string | undefined, right: string | undefined): bool
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-function digest(value: unknown): string {
+export function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-async function inTransaction<T>(pool: PgPoolLike, work: (client: PgQueryable) => Promise<T>): Promise<T> {
+export async function inTransaction<T>(pool: PgPoolLike, work: (client: PgQueryable) => Promise<T>): Promise<T> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -552,6 +553,13 @@ export function createApp(options: CreateAppOptions): Express {
 
   const app = express();
   const now = options.clock ?? Date.now;
+  const environment: RuntimeEnvironmentConfig = options.environment ?? {
+    kind: "local",
+    databaseFingerprint: createHash("sha256").update(`local:${options.allowedOrigin}`).digest("hex"),
+    storageStore: "ftc-evidence-local",
+    storageRegion: "us-east-2",
+    deploymentContext: "dev",
+  };
   const cookieName = options.sessionCookieName ?? "ftc.sid";
   app.disable("x-powered-by");
   app.set("trust proxy", false);
@@ -565,6 +573,15 @@ export function createApp(options: CreateAppOptions): Express {
     next();
   });
   app.use(express.json({ limit: "1mb", strict: true }));
+  app.use(async (request, response, next) => {
+    if (!/^\/api\/(auth|cases|attachments|officer|snapshots)(\/|$)/.test(request.path)) { next(); return; }
+    try {
+      response.locals.environmentMarker = await ensureEnvironmentMarker(options.pool, environment);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
   // HTTPS is asserted by the Netlify adapter configuration, never inferred from
   // forwarding headers that an incoming client could supply.
   app.use((request, _response, next) => {
@@ -592,7 +609,7 @@ export function createApp(options: CreateAppOptions): Express {
   app.get("/api/health", (_request, response) => {
     response.json({ data: { status: "ok" }, requestId: response.locals.requestId });
   });
-  app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft"], sessionMiddleware);
+  app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
 
   const authenticated = async (request: Request, response: Response, next: (error?: unknown) => void) => {
     const sessionData = request.session;
@@ -685,8 +702,8 @@ export function createApp(options: CreateAppOptions): Express {
   app.get("/api/cases", authenticated, async (_request, response, next) => {
     try {
       const result = await options.pool.query<CaseRow>(
-        "SELECT * FROM ftc_cases WHERE owner_id=$1 ORDER BY updated_at DESC, id",
-        [(response.locals.user as ApiUser).id],
+        "SELECT * FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2 ORDER BY updated_at DESC, id",
+        [(response.locals.user as ApiUser).id, (response.locals.environmentMarker as EnvironmentMarker).id],
       );
       const cases = await Promise.all(result.rows.map((row) => loadCaseRecord(options.pool, row)));
       response.json({ data: { cases }, requestId: response.locals.requestId });
@@ -700,11 +717,12 @@ export function createApp(options: CreateAppOptions): Express {
       const body = requireExactFields(request.body, ["requestId"]);
       const requestId = requireString(body.requestId, "requestId", 128);
       const user = response.locals.user as ApiUser;
+      const marker = response.locals.environmentMarker as EnvironmentMarker;
       const result = await inTransaction(options.pool, async (client) => {
         await client.query("SELECT id FROM app_users WHERE id=$1 FOR UPDATE", [user.id]);
-        const existing = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE owner_id=$1 AND create_request_id=$2", [user.id, requestId]);
+        const existing = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2 AND create_request_id=$3", [user.id, marker.id, requestId]);
         if (existing.rows[0]) return { row: existing.rows[0], created: false };
-        const count = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM ftc_cases WHERE owner_id=$1", [user.id]);
+        const count = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2", [user.id, marker.id]);
         if ((count.rows[0]?.count ?? 0) >= 10) throw new ApiFailure(429, "rate_limited", "บัญชีนี้มีแบบร่างครบ 10 รายการแล้ว");
         const id = randomUUID();
         const timestamp = new Date().toISOString();
@@ -714,9 +732,9 @@ export function createApp(options: CreateAppOptions): Express {
         draft.createdAt = timestamp;
         draft.updatedAt = timestamp;
         const created = await client.query<CaseRow>(
-          `INSERT INTO ftc_cases(id, owner_id, draft, create_request_id)
-           VALUES ($1::uuid, $2::uuid, $3::jsonb, $4) RETURNING *`,
-          [id, user.id, JSON.stringify(draft), requestId],
+          `INSERT INTO ftc_cases(id, owner_id, draft, create_request_id, environment_marker_id)
+           VALUES ($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid) RETURNING *`,
+          [id, user.id, JSON.stringify(draft), requestId, marker.id],
         );
         return { row: created.rows[0] as CaseRow, created: true };
       });
@@ -725,16 +743,6 @@ export function createApp(options: CreateAppOptions): Express {
     } catch (error) {
       next(error);
     }
-  });
-
-  app.get("/api/cases/:id", authenticated, async (request, response, next) => {
-    try {
-      const id = routeCaseId(request.params.id);
-      if (!id) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
-      const result = await options.pool.query<CaseRow>("SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2", [id, (response.locals.user as ApiUser).id]);
-      if (!result.rows[0]) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
-      response.json({ data: { case: await loadCaseRecord(options.pool, result.rows[0]) }, requestId: response.locals.requestId });
-    } catch (error) { next(error); }
   });
 
   app.put("/api/cases/:id/draft", authenticated, csrf, async (request, response, next) => {
@@ -782,10 +790,11 @@ export function createApp(options: CreateAppOptions): Express {
         throw new ApiFailure(400, "invalid_input", "รายการแหล่งเงินได้ที่เลือกยืนยันไม่ถูกต้อง");
       }
       const user = response.locals.user as ApiUser;
+      const marker = response.locals.environmentMarker as EnvironmentMarker;
       const normalizedConfirmations = { thaiTax: confirmations.thaiTax as boolean, eligibleSourceIds: confirmedIds, eligibleSourceIndexes: confirmedIndexes };
       const payloadDigest = digest({ expectedRevision: body.expectedRevision, data: canonicalDraft, confirmations: normalizedConfirmations });
       const result = await inTransaction(options.pool, async (client) => {
-        const locked = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 FOR UPDATE", [id, user.id]);
+        const locked = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 AND environment_marker_id=$3 FOR UPDATE", [id, user.id, marker.id]);
         const row = locked.rows[0];
         if (!row) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
         const prior = await client.query<{ request_digest: string; response: { case: FtcCaseRecord } }>(
@@ -840,6 +849,16 @@ export function createApp(options: CreateAppOptions): Express {
     } catch (error) { next(error); }
   });
 
+  registerWorkflowRoutes(app, {
+    pool: options.pool,
+    authenticated,
+    csrf,
+    blobIO: options.blobIO,
+    officerUserId: options.officerUserId,
+    environmentMarker: (response) => response.locals.environmentMarker as EnvironmentMarker,
+    apiError,
+  });
+
   app.use("/api", (_request, response) => apiError(response, 404, "not_found", "ไม่พบเส้นทาง API"));
   app.use((_request, response) => response.status(404).send("Not found"));
 
@@ -860,6 +879,12 @@ export function createApp(options: CreateAppOptions): Express {
     }
     if (parserError.status === 413) {
       apiError(response, 413, "payload_too_large", "ข้อมูลมีขนาดใหญ่เกินกำหนด");
+      return;
+    }
+    const multipartError = error as { name?: string; code?: string };
+    if (multipartError.name === "MulterError") {
+      if (multipartError.code === "LIMIT_FILE_SIZE") apiError(response,413,"payload_too_large","ไฟล์มีขนาดใหญ่เกินกำหนด");
+      else apiError(response,400,"invalid_input","ข้อมูลไฟล์แนบไม่ถูกต้อง");
       return;
     }
     apiError(response, 503, "service_unavailable", "บริการไม่พร้อมใช้งาน");

@@ -246,9 +246,41 @@ export interface ApiSuccess<T> {
 
 /** Upload requests carry one file per request; object keys are server generated. */
 export interface AttachmentUploadMetadata {
+  expectedRevision: number;
+  requestId: RequestId;
   sourceId: SourceId | null;
   kind: EvidenceKind;
   displayName: string;
+}
+
+export interface DeleteAttachmentRequest {
+  expectedRevision: number;
+  requestId: RequestId;
+}
+
+export interface AuditEventSummary {
+  id: string;
+  event: string;
+  actor: string;
+  occurredAt: IsoDateTime;
+}
+
+export interface SnapshotSummary {
+  id: SnapshotId;
+  revision: number;
+  kind: SnapshotKind;
+  policyId: string;
+  engineVersion: string;
+  outcome: CalculationResult["outcome"];
+  createdAt: IsoDateTime;
+}
+
+export interface CaseWorkflowDetail {
+  case: FtcCaseRecord;
+  attachments: AttachmentMetadata[];
+  currentPreview: CalculationSnapshot | null;
+  snapshotSummaries: SnapshotSummary[];
+  auditEvents: AuditEventSummary[];
 }
 
 export interface RevisionMutationRequest<T> {
