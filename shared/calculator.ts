@@ -72,15 +72,20 @@ function assessSource(
   const requiredFields: Array<[string, unknown]> = [
     ["countryCode", source.countryCode], ["incomeType", source.incomeType], ["earnedTaxYear", source.earnedTaxYear],
     ["earnedDate", source.earnedDate], ["residenceDaysInEarnedYear", source.residenceDaysInEarnedYear], ["inputMode", source.inputMode],
-    ["grossIncomeAmount", source.grossIncomeAmount], ["actualForeignTaxPaid", source.actualForeignTaxPaid], ["eligibleForeignTax", source.eligibleForeignTax],
+    ["grossIncomeAmount", source.grossIncomeAmount], ["currencyCode", source.currencyCode], ["actualForeignTaxPaid", source.actualForeignTaxPaid], ["eligibleForeignTax", source.eligibleForeignTax],
     ["remittedIncomeAmount", source.remittedIncomeAmount], ["remittance", source.remittance],
   ];
   for (const [field, fieldValue] of requiredFields) if (fieldValue === null) addIncomplete(required(path(field)));
-  if (source.countryCode !== null && !(source.countryCode in policy.supportedCountries)) {
+  const supportedCountry = source.countryCode !== null && Object.prototype.hasOwnProperty.call(policy.supportedCountries, source.countryCode)
+    ? policy.supportedCountries[source.countryCode]
+    : undefined;
+  if (source.countryCode !== null && supportedCountry === undefined) {
     addReview(msg("source.unsupported_country", "ประเทศนี้ยังไม่อยู่ในขอบเขตตัวอย่างที่รองรับ", path("countryCode")));
   }
   if (source.incomeType !== null) {
-    const allowedSubtypes = policy.supportedIncomeTypes[source.incomeType];
+    const allowedSubtypes = Object.prototype.hasOwnProperty.call(policy.supportedIncomeTypes, source.incomeType)
+      ? policy.supportedIncomeTypes[source.incomeType]
+      : undefined;
     const subtypeSupported = allowedSubtypes !== undefined
       && (source.incomeType === "salary_40_1" ? source.subtype === null || allowedSubtypes.includes(source.subtype) : source.subtype !== null && allowedSubtypes.includes(source.subtype));
     if (!subtypeSupported) addReview(msg("source.unsupported_type", "ประเภทเงินได้หรือประเภทย่อยยังไม่รองรับในตัวอย่างนี้", path("incomeType")));
@@ -88,7 +93,7 @@ function assessSource(
   if (source.unsupportedClassification !== null) {
     addReview(msg("source.unsupported_classification", source.unsupportedExplanation ?? "ข้อเท็จจริงของแหล่งเงินได้นี้ยังไม่รองรับ ต้องตรวจสอบเพิ่มเติม", path("unsupportedClassification")));
   }
-  if (source.countryCode !== null && source.countryName !== null && policy.supportedCountries[source.countryCode] !== source.countryName) {
+  if (supportedCountry !== undefined && source.countryName !== null && supportedCountry !== source.countryName) {
     addReview(msg("source.country_name_mismatch", "ชื่อประเทศไม่ตรงกับรหัสประเทศที่เลือก", path("countryName")));
   }
   if (source.earnedTaxYear !== null && taxYear !== null && source.earnedTaxYear !== taxYear) {
@@ -137,6 +142,10 @@ function assessSource(
   }
   if (remittance.classification === null) addIncomplete(required([...path("remittance"), "classification"]));
   else if (remittance.classification !== "income_only") addReview(msg("source.unsupported_remittance_classification", remittance.classificationNote ?? "การโอนรวมเงินต้นหรือรายการกำกวมต้องตรวจสอบเพิ่มเติม", [...path("remittance"), "classification"]));
+  else if (remittance.transferTotalAmount !== null && source.remittedIncomeAmount !== null
+    && new CalcDecimal(remittance.transferTotalAmount).cmp(source.remittedIncomeAmount) !== 0) {
+    addReview(msg("source.transfer_total_mismatch", "ยอดโอนรวมไม่ตรงกับเงินได้ที่ระบุว่าเป็นรายได้ล้วน จึงอาจมีเงินต้นหรือรายการอื่นปะปน", [...path("remittance"), "transferTotalAmount"]));
+  }
 }
 
 function assessFx(
@@ -353,7 +362,8 @@ export function calculateFTC(draft: FtcCaseDraft, policy: DemoPolicy = DEMO_POLI
 export interface SubmissionValidationContext {
   currentRevision: number;
   previewRevision: number | null;
-  readyEvidence: readonly AttachmentMetadata[];
+  /** Full case attachment list, including pending/failed uploads to block unresolved submissions. */
+  attachments: readonly AttachmentMetadata[];
 }
 
 /** Submission adds confirmations, a current preview, positive remittance and ready evidence. */
@@ -373,17 +383,26 @@ export function validateSubmission(
   if (context.previewRevision === null || context.previewRevision !== context.currentRevision) {
     messages.push(msg("submit.preview_stale", "กรุณาคำนวณตัวอย่างใหม่หลังบันทึกการแก้ไขล่าสุด", []));
   }
-  if (!context.readyEvidence.some((evidence) => evidence.status === "ready" && evidence.kind === "thai_tax" && evidence.sourceId === null)) {
-    messages.push(msg("submit.thai_tax_evidence_missing", "กรุณาแนบหลักฐานภาษีไทยที่พร้อมใช้งาน", ["evidence"]));
-  }
+  context.attachments.forEach((evidence, index) => {
+    if (evidence.status === "pending" || evidence.status === "failed") {
+      messages.push(msg("submit.evidence_unresolved", "กรุณารอการอัปโหลดให้เสร็จหรือแก้ไขไฟล์ที่อัปโหลดไม่สำเร็จก่อนส่งตรวจ", ["evidence", index]));
+    }
+  });
   draft.sources.forEach((source, index) => {
+    const hasPositiveF = source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(0);
+    if (!hasPositiveF) return;
+    const requiredKinds: Array<"foreign_income" | "foreign_tax" | "remittance"> = ["foreign_income", "remittance"];
+    if (source.eligibleForeignTax !== null && new CalcDecimal(source.eligibleForeignTax).gt(0)) requiredKinds.push("foreign_tax");
+    if (requiredKinds.some((kind) => !source.evidenceChecklist.includes(kind))) {
+      messages.push(msg("submit.source_checklist_missing", "กรุณายืนยันว่าหลักฐานของแหล่งเงินได้นี้ครอบคลุมรายการที่จำเป็น", ["sources", index, "evidenceChecklist"]));
+    }
     if (source.id === null) {
       messages.push(msg("submit.source_id_missing", "บันทึกแหล่งเงินได้ก่อนแนบหลักฐาน", ["sources", index, "id"]));
       return;
     }
-    for (const kind of ["foreign_income", "foreign_tax", "remittance"] as const) {
-      const attached = context.readyEvidence.some((evidence) => evidence.status === "ready" && evidence.sourceId === source.id && evidence.kind === kind);
-      if (!attached) messages.push(msg("submit.source_evidence_missing", "หลักฐานของแหล่งเงินได้นี้ยังไม่ครบหรือยังประมวลผลไม่เสร็จ", ["sources", index, "evidenceChecklist"]));
+    const attached = context.attachments.some((evidence) => evidence.status === "ready" && evidence.sourceId === source.id);
+    if (!attached) {
+      messages.push(msg("submit.source_evidence_missing", "แนบหลักฐานพร้อมใช้งานอย่างน้อยหนึ่งไฟล์สำหรับแหล่งเงินได้ที่นำเข้าไทย", ["sources", index, "evidenceChecklist"]));
     }
   });
   return messages;
