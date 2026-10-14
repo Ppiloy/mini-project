@@ -18,4 +18,4 @@ Specification: [spec](spec.md), [plan](../../FTC-PROTOTYPE-PLAN.md).
 
 Record reviewer, commit, findings, fixes and rerun evidence per ticket. Resolve only verified completed work; external hosting gates remain open until tested.
 
-- 01 Foundation — adversarial review PASS at `ef8345d57c291623fb2c54e339634e7a8d4f05b8`; fixes and integration typecheck/test/build evidence are recorded in [ticket 01](issues/01-foundation.md). Development-only test-tooling audit advisories remain pending; no hosted integration is claimed.
+- 01 Foundation — adversarial review PASS at `ef8345d57c291623fb2c54e339634e7a8d4f05b8`; dependency repair and test-discovery exclusions PASS at `89f4459ca2895a13ba2cfef42a1c1e0df950eb19`. Both audit commands report zero vulnerabilities; integration typecheck, 5-test suite, and build pass. Evidence: [ticket 01](issues/01-foundation.md) and [foundation review](reviews/01-foundation.md). No hosted integration is claimed.
