@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
+import type { AttachmentMetadata, FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
 import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, sourceEligibilityFingerprint, taxInputFingerprint } from "./confirmations.js";
 import { calculateFTC, validateSubmission, withCanonicalThbAmounts } from "./calculator.js";
+import { DEMO_POLICY } from "./policy.js";
 import {
   countryLimitAboveFixture,
   countryLimitBelowFixture,
@@ -167,7 +168,11 @@ describe("FTC calculator", () => {
 
     const zeroF = reconfirm({
       ...partialRemittanceFixture.draft,
-      sources: [{ ...partialRemittanceFixture.draft.sources[0]!, remittedIncomeAmount: "0.00" }],
+      sources: [{
+        ...partialRemittanceFixture.draft.sources[0]!,
+        remittedIncomeAmount: "0.00",
+        remittance: { ...partialRemittanceFixture.draft.sources[0]!.remittance!, transferTotalAmount: "0.00" },
+      }],
     });
     const zeroFResult = calculateFTC(zeroF);
     expect(zeroFResult.outcome).toBe("ready");
@@ -260,13 +265,38 @@ describe("FTC calculator", () => {
     expect(calculateFTC(missingSource).validationMessages.map(({ code }) => code)).toContain("fx.manual_provenance_missing");
   });
 
-  it("uses assessable F rather than assuming the bank transfer total is F", () => {
+  it("blocks contradictory transfer-total facts instead of trusting a free-text note", () => {
     const draft = withSource(partialRemittanceFixture.draft, 0, {
-      remittance: { ...partialRemittanceFixture.draft.sources[0]!.remittance!, transferTotalAmount: "30000.00", classificationNote: "Transfer total includes a separate principal portion; F remains identified income only." },
+      remittance: { ...partialRemittanceFixture.draft.sources[0]!.remittance!, transferTotalAmount: "30000.00", classificationNote: "F is income only." },
     });
     const result = calculateFTC(draft);
-    expect(result.lines.find(({ code }) => code === "source_F")?.value).toBe("25000");
-    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(result.outcome).toBe("needs_review");
+    expect(result.allowableCredit).toBeNull();
+    expect(result.validationMessages.map(({ code }) => code)).toContain("source.transfer_total_mismatch");
+
+    const internallyConsistent = calculateFTC(partialRemittanceFixture.draft);
+    expect(internallyConsistent.lines.find(({ code }) => code === "source_F")?.value).toBe("25000");
+    expect(internallyConsistent.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+  });
+
+  it("rejects inherited country keys from a custom policy", () => {
+    const usDraft = withSource(partialRemittanceFixture.draft, 0, { countryCode: "US", countryName: "United States" });
+    const inheritedCountries = Object.assign(Object.create({ US: "United States" }), DEMO_POLICY.supportedCountries) as Record<string, string>;
+    const policy = { ...DEMO_POLICY, supportedCountries: inheritedCountries };
+    const result = calculateFTC(usDraft, policy);
+    expect(result.outcome).toBe("needs_review");
+    expect(result.allowableCredit).toBeNull();
+    expect(result.validationMessages.map(({ code }) => code)).toContain("source.unsupported_country");
+  });
+
+  it("requires THB explicitly for a ready worksheet source and canonical totals", () => {
+    const draft = withSource(partialRemittanceFixture.draft, 0, { currencyCode: null });
+    const result = calculateFTC(draft);
+    expect(result.outcome).toBe("incomplete");
+    expect(result.validationMessages.some(({ code, path }) => code === "input.required" && path?.join(".") === "sources.0.currencyCode")).toBe(true);
+    const canonical = withCanonicalThbAmounts(draft).sources[0]!;
+    expect(canonical.grossIncomeThb).toBeNull();
+    expect(canonical.remittedIncomeThb).toBeNull();
   });
 
   it("requires all sources to be supported and the Thai tax confirmation to match current inputs", () => {
@@ -280,11 +310,67 @@ describe("FTC calculator", () => {
   it("separates calculation readiness from submission confirmation, evidence and preview checks", () => {
     const draft = partialRemittanceFixture.draft;
     const result = calculateFTC(draft);
-    const messages = validateSubmission(draft, result, { currentRevision: 2, previewRevision: 1, readyEvidence: [] });
+    const messages = validateSubmission(draft, result, { currentRevision: 2, previewRevision: 1, attachments: [] });
     expect(messages.map(({ code }) => code)).toContain("submit.preview_stale");
-    expect(messages.map(({ code }) => code)).toContain("submit.thai_tax_evidence_missing");
     expect(messages.map(({ code }) => code)).toContain("submit.source_evidence_missing");
     const noRemittance = withSource(draft, 0, { remittedIncomeAmount: "0.00" });
-    expect(validateSubmission(noRemittance, calculateFTC(noRemittance), { currentRevision: 2, previewRevision: 2, readyEvidence: [] }).map(({ code }) => code)).toContain("submit.no_positive_remittance");
+    expect(validateSubmission(noRemittance, calculateFTC(noRemittance), { currentRevision: 2, previewRevision: 2, attachments: [] }).map(({ code }) => code)).toContain("submit.no_positive_remittance");
+  });
+
+  it("applies evidence requirements conditionally and accepts one combined file", () => {
+    const base = partialRemittanceFixture.draft;
+    const positiveNoTax = withSource(base, 0, {
+      eligibleForeignTax: "0.00",
+      evidenceChecklist: ["foreign_income", "remittance"],
+    });
+    const zeroFSource = {
+      ...positiveNoTax.sources[0]!,
+      id: "zero-f-source",
+      remittedIncomeAmount: "0.00",
+      remittance: { ...positiveNoTax.sources[0]!.remittance!, transferTotalAmount: "0.00" },
+      evidenceChecklist: [],
+      eligibilityConfirmedAt: "2026-10-14T00:00:00.000Z",
+      eligibilityConfirmedInputFingerprint: null,
+    };
+    const draft = reconfirm({ ...positiveNoTax, sources: [...positiveNoTax.sources, zeroFSource] });
+    const result = calculateFTC(draft);
+    const combinedReadyFile: AttachmentMetadata = {
+      id: "combined-evidence", caseId: draft.id!, sourceId: draft.sources[0]!.id!, kind: "other",
+      displayName: "Combined income and remittance evidence", mediaType: "application/pdf", byteSize: 100,
+      sha256: "a".repeat(64), status: "ready", createdAt: "2026-10-14T00:00:00.000Z",
+    };
+    const messages = validateSubmission(draft, result, {
+      currentRevision: draft.revision,
+      previewRevision: draft.revision,
+      attachments: [combinedReadyFile],
+    });
+    expect(messages).toEqual([]);
+
+    const eligibleTaxMissingChecklist = withSource(base, 0, { evidenceChecklist: ["foreign_income", "remittance"] });
+    const eligibleTaxMessages = validateSubmission(eligibleTaxMissingChecklist, calculateFTC(eligibleTaxMissingChecklist), {
+      currentRevision: eligibleTaxMissingChecklist.revision,
+      previewRevision: eligibleTaxMissingChecklist.revision,
+      attachments: [combinedReadyFile],
+    });
+    expect(eligibleTaxMessages.map(({ code }) => code)).toContain("submit.source_checklist_missing");
+  });
+
+  it("blocks submission while an upload is pending or failed", () => {
+    const draft = partialRemittanceFixture.draft;
+    const result = calculateFTC(draft);
+    const pending: AttachmentMetadata = {
+      id: "pending", caseId: draft.id!, sourceId: draft.sources[0]!.id!, kind: "other",
+      displayName: "Uploading evidence", mediaType: "application/pdf", byteSize: 100,
+      sha256: "b".repeat(64), status: "pending", createdAt: "2026-10-14T00:00:00.000Z",
+    };
+    const failed = { ...pending, id: "failed", status: "failed" as const };
+    for (const evidence of [pending, failed]) {
+      const messages = validateSubmission(draft, result, {
+        currentRevision: draft.revision,
+        previewRevision: draft.revision,
+        attachments: [evidence],
+      });
+      expect(messages.map(({ code }) => code)).toContain("submit.evidence_unresolved");
+    }
   });
 });

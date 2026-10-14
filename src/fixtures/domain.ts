@@ -1,62 +1,12 @@
 import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "../../shared/contracts.js";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../../shared/confirmations.js";
 import type { ExchangeRateReference, IncomeType } from "../../shared/contracts.js";
+import { createEmptyDraft, createEmptySource, emptyDraft, emptySource } from "../../shared/draft.js";
 import { SYNTHETIC_USD_PER_100_FX_REFERENCE } from "../../shared/policy.js";
 
+export { createEmptyDraft, createEmptySource, emptyDraft, emptySource };
+
 const FIXTURE_CONFIRMATION_TIME = "2026-10-14T00:00:00.000Z";
-
-export const emptySource: ForeignIncomeSourceDraft = {
-  id: null,
-  countryCode: null,
-  countryName: null,
-  incomeType: null,
-  subtype: null,
-  earnedTaxYear: null,
-  earnedDate: null,
-  residenceDaysInEarnedYear: null,
-  inputMode: null,
-  grossIncomeAmount: null,
-  currencyCode: null,
-  grossIncomeThb: null,
-  actualForeignTaxPaid: null,
-  actualForeignTaxPaidThb: null,
-  eligibleForeignTax: null,
-  eligibleForeignTaxThb: null,
-  eligibilityRationale: null,
-  eligibilityConfirmedAt: null,
-  eligibilityConfirmedInputFingerprint: null,
-  remittance: null,
-  remittedIncomeAmount: null,
-  remittedIncomeThb: null,
-  fxReference: null,
-  unsupportedClassification: null,
-  unsupportedExplanation: null,
-  evidenceChecklist: [],
-};
-
-export const emptyDraft: FtcCaseDraft = {
-  id: null,
-  taxYear: null,
-  domesticAssessableIncome: null,
-  thaiTax: {
-    amountBeforeFtc: null,
-    provenance: null,
-    confirmedAt: null,
-    confirmedInputFingerprint: null,
-  },
-  sources: [],
-  revision: 0,
-  createdAt: null,
-  updatedAt: null,
-};
-
-export function createEmptyDraft(): FtcCaseDraft {
-  return { ...emptyDraft, thaiTax: { ...emptyDraft.thaiTax }, sources: [] };
-}
-
-export function createEmptySource(): ForeignIncomeSourceDraft {
-  return { ...emptySource, evidenceChecklist: [] };
-}
 
 interface SourceFixtureInput {
   id: string;

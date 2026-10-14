@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FtcCaseDraft } from "./contracts.js";
-import { parseDraft } from "./draft.js";
+import { createEmptyDraft, createEmptySource, draftSchema, parseDraft } from "./draft.js";
 
 const emptyDraft: FtcCaseDraft = {
   id: null,
@@ -19,6 +19,12 @@ const emptyDraft: FtcCaseDraft = {
 };
 
 describe("FTC draft parsing", () => {
+  it("exports canonical empty draft and source constructors from shared domain", () => {
+    expect(createEmptyDraft()).toEqual(emptyDraft);
+    expect(createEmptySource().evidenceChecklist).toEqual([]);
+    expect(createEmptySource().grossIncomeAmount).toBeNull();
+  });
+
   it("preserves an empty draft with missing amounts as null rather than zero", () => {
     expect(parseDraft(emptyDraft)).toEqual(emptyDraft);
   });
@@ -84,5 +90,12 @@ describe("FTC draft parsing", () => {
     expect(() => parseDraft({ ...emptyDraft, sources: [{ ...source, fxReference: { ...source.fxReference, thbRate: "0" } }] })).toThrow();
     expect(() => parseDraft({ ...emptyDraft, sources: [{ ...source, fxReference: { ...source.fxReference, thbRate: "1.000000001" } }] })).toThrow();
     expect(() => parseDraft({ ...emptyDraft, sources: [{ ...source, fxReference: { ...source.fxReference, baseUnits: 10 } }] })).toThrow();
+  });
+
+  it("rejects NUL characters in text at the shared PostgreSQL transport boundary", () => {
+    const invalid = { ...emptyDraft, thaiTax: { ...emptyDraft.thaiTax, provenance: "prepared\u0000source" } };
+    const result = draftSchema.safeParse(invalid);
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues.some((issue) => issue.message.includes("NUL"))).toBe(true);
   });
 });

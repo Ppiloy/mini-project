@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
 import { z } from "zod";
-import type { FtcCaseDraft } from "./contracts.js";
+import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
 
 const decimalInputPattern = /^\d{1,9}(?:\.\d{1,2})?$/;
 const decimalDerivedPattern = /^\d{1,18}(?:\.\d{1,12})?$/;
@@ -21,8 +21,33 @@ const moneyInput = decimalString(decimalInputPattern, "999999999.99");
 const moneyDerived = decimalString(decimalDerivedPattern, "999999999999999999.999999999999");
 const rate = decimalString(decimalRatePattern, "1000000", true);
 const nullable = <T extends z.ZodType>(schema: T) => schema.nullable();
-const shortText = (maximum = 500) => z.string().max(maximum);
+const safeText = z.string().refine((value) => !value.includes("\u0000"), "NUL characters are not supported");
+const shortText = (maximum = 500) => safeText.max(maximum);
 const nullableText = (maximum = 500) => nullable(shortText(maximum));
+
+export const emptySource: ForeignIncomeSourceDraft = {
+  id: null, countryCode: null, countryName: null, incomeType: null, subtype: null,
+  earnedTaxYear: null, earnedDate: null, residenceDaysInEarnedYear: null, inputMode: null,
+  grossIncomeAmount: null, currencyCode: null, grossIncomeThb: null,
+  actualForeignTaxPaid: null, actualForeignTaxPaidThb: null, eligibleForeignTax: null, eligibleForeignTaxThb: null,
+  eligibilityRationale: null, eligibilityConfirmedAt: null, eligibilityConfirmedInputFingerprint: null,
+  remittance: null, remittedIncomeAmount: null, remittedIncomeThb: null, fxReference: null,
+  unsupportedClassification: null, unsupportedExplanation: null, evidenceChecklist: [],
+};
+
+export const emptyDraft: FtcCaseDraft = {
+  id: null, taxYear: null, domesticAssessableIncome: null,
+  thaiTax: { amountBeforeFtc: null, provenance: null, confirmedAt: null, confirmedInputFingerprint: null },
+  sources: [], revision: 0, createdAt: null, updatedAt: null,
+};
+
+export function createEmptyDraft(): FtcCaseDraft {
+  return { ...emptyDraft, thaiTax: { ...emptyDraft.thaiTax }, sources: [] };
+}
+
+export function createEmptySource(): ForeignIncomeSourceDraft {
+  return { ...emptySource, evidenceChecklist: [] };
+}
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
   const [year, month, day] = value.split("-").map(Number);
@@ -53,7 +78,7 @@ export const remittanceDraftSchema = z.object({
 }).strict();
 
 const foreignIncomeSourceBaseSchema = z.object({
-  id: nullable(z.string().min(1).max(100)),
+  id: nullable(safeText.min(1).max(100)),
   countryCode: nullable(z.string().regex(/^[A-Z]{2}$/)),
   countryName: nullableText(100),
   incomeType: z.enum(["salary_40_1", "dividend_40_4", "other"]).nullable(),
@@ -71,7 +96,7 @@ const foreignIncomeSourceBaseSchema = z.object({
   eligibleForeignTaxThb: nullable(moneyDerived),
   eligibilityRationale: nullableText(1000),
   eligibilityConfirmedAt: nullable(isoDateTime),
-  eligibilityConfirmedInputFingerprint: nullableText(100000),
+  eligibilityConfirmedInputFingerprint: nullable(safeText.max(100000)),
   remittance: nullable(remittanceDraftSchema),
   remittedIncomeAmount: nullable(moneyInput),
   remittedIncomeThb: nullable(moneyDerived),
@@ -98,11 +123,11 @@ export const thaiTaxConfirmationSchema = z.object({
   amountBeforeFtc: nullable(moneyInput),
   provenance: nullableText(1000),
   confirmedAt: nullable(isoDateTime),
-  confirmedInputFingerprint: nullableText(2000000),
+  confirmedInputFingerprint: nullable(safeText.max(2000000)),
 }).strict();
 
 export const draftSchema = z.object({
-  id: nullable(z.string().min(1).max(100)),
+  id: nullable(safeText.min(1).max(100)),
   taxYear: nullable(z.number().int().min(1900).max(2200)),
   domesticAssessableIncome: nullable(moneyInput),
   thaiTax: thaiTaxConfirmationSchema,
