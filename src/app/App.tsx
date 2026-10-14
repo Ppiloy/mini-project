@@ -102,16 +102,43 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
 function RequireRole({ role, children }: { role: ApiUser["role"]; children: React.ReactNode }) {
   const { user, demo, csrfToken, clear, ready } = useAppSession();
   const navigate = useNavigate();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
   if (!user || user.role !== role) return <Navigate to={demo ? "/demo" : role === "officer" ? "/officer/login" : "/login"} replace />;
   const signOut = async () => {
-    if (!demo && csrfToken) {
-      try { await hostedApi.logout(csrfToken); } catch { /* Clear local identity after network failures too. */ }
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError(null);
+    try {
+      if (!demo) {
+        if (!csrfToken) {
+          setSignOutError("ไม่พบโทเค็นสำหรับออกจากระบบ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองโหลดหน้าใหม่หรือเข้าสู่ระบบอีกครั้ง");
+          return;
+        }
+        try {
+          await hostedApi.logout(csrfToken);
+        } catch {
+          // A lost response can follow a committed logout. Only an anonymous session check confirms it.
+          try {
+            const activeSession = await hostedApi.session();
+            if (activeSession === null) {
+              clear();
+              navigate("/login", { replace: true });
+              return;
+            }
+          } catch { /* Keep the identity visible when server state cannot be confirmed. */ }
+          setSignOutError("เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ");
+          return;
+        }
+      }
+      clear();
+      navigate("/login", { replace: true });
+    } finally {
+      setSigningOut(false);
     }
-    clear();
-    navigate("/login", { replace: true });
   };
-  return <SiteFrame user={user} demo={demo} onSignOut={signOut}>{children}</SiteFrame>;
+  return <SiteFrame user={user} demo={demo} onSignOut={signOut} signOutError={signOutError} signingOut={signingOut}>{children}</SiteFrame>;
 }
 
 function LoginRoute({ officer = false }: { officer?: boolean }) {

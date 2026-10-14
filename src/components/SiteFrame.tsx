@@ -1,10 +1,12 @@
 import type { ApiUser } from "../../shared/contracts.js";
 
-export function SiteFrame({ children, user, demo, onSignOut }: {
+export function SiteFrame({ children, user, demo, onSignOut, signOutError, signingOut }: {
   children: React.ReactNode;
   user: ApiUser;
   demo: boolean;
   onSignOut?: () => void;
+  signOutError?: string | null;
+  signingOut?: boolean;
 }) {
   return (
     <div className="app-frame">
@@ -17,10 +19,13 @@ export function SiteFrame({ children, user, demo, onSignOut }: {
         <div className="topbar-actions">
           {demo && <span className="mode-tag">โหมดสาธิตข้อมูลจำลอง</span>}
           <span className="user-name">{user.displayName}</span>
-          {onSignOut && <button className="button button-quiet button-small" onClick={onSignOut}>ออกจากระบบ</button>}
+          {onSignOut && <button className="button button-quiet button-small" disabled={signingOut} onClick={() => void onSignOut()}>{signingOut ? "กำลังออกจากระบบ…" : signOutError ? "ลองออกจากระบบอีกครั้ง" : "ออกจากระบบ"}</button>}
         </div>
       </header>
-      <main id="main-content" className="page-wrap">{children}</main>
+      <main id="main-content" className="page-wrap">
+        {signOutError && <div className="alert alert-error" role="alert"><strong>ออกจากระบบยังไม่สำเร็จ</strong><span>{signOutError}</span></div>}
+        {children}
+      </main>
       <footer className="site-footer"><span>ระบบต้นแบบเพื่อการศึกษา</span><span>ข้อมูลตัวอย่างสำหรับปีภาษี 2568</span></footer>
     </div>
   );
