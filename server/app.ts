@@ -579,6 +579,26 @@ export function createApp(options: CreateAppOptions): Express {
     if (!/^\/api\/(auth|cases|attachments|officer|snapshots)(\/|$)/.test(request.path)) { next(); return; }
     try {
       response.locals.environmentMarker = await ensureEnvironmentMarker(options.pool, environment);
+      if (environment.kind === "local") {
+        const gate = await options.pool.query<{ closed: boolean }>(
+          "SELECT EXISTS(SELECT 1 FROM operator_environment_gates WHERE environment_marker_id=$1 AND status='closed') AS closed",
+          [(response.locals.environmentMarker as EnvironmentMarker).id],
+        );
+        if (gate.rows[0]?.closed) {
+          apiError(response, 503, "environment_restore_incomplete", "การกู้คืนสภาพแวดล้อมยังไม่เสร็จสมบูรณ์");
+          return;
+        }
+      }
+      if (environment.kind === "preview") {
+        const initialized = await options.pool.query<{ ready: boolean }>(
+          "SELECT EXISTS(SELECT 1 FROM preview_environment_initialization WHERE environment_marker_id=$1 AND status='ready') AS ready",
+          [(response.locals.environmentMarker as EnvironmentMarker).id],
+        );
+        if (!initialized.rows[0]?.ready) {
+          apiError(response, 503, "preview_initialization_required", "สภาพแวดล้อมตัวอย่างยังไม่พร้อมเข้าสู่ระบบ");
+          return;
+        }
+      }
       next();
     } catch (error) {
       next(error);

@@ -2,12 +2,12 @@
 
 Use Node.js 24 and the committed `package-lock.json`:
 
-```sh
+```powershell
 npm ci
 netlify dev
 ```
 
-In another terminal, apply the committed migrations and create the fictional accounts inside the same Netlify Dev environment. Set `FTC_DEPLOYMENT_CONTEXT=dev` in that terminal before running the operator command; the operator checks this trusted process value against `--target local`.
+For local Netlify Dev, set `FTC_DEPLOYMENT_CONTEXT=dev`, `SESSION_SECRET`, `FTC_ALLOWED_ORIGIN`, and `FTC_BLOB_REGION=us-east-2` in the local operator/Functions environment. Netlify Dev supplies its local `NETLIFY_DB_URL` and sets `NETLIFY_DEV`. Apply committed migrations and create the fictional accounts from a second terminal using the same Netlify Dev context:
 
 ```powershell
 $env:FTC_DEPLOYMENT_CONTEXT = "dev"
@@ -15,26 +15,26 @@ netlify database migrations apply
 netlify dev:exec npm run demo:seed -- --target local
 ```
 
-The seed command requires the explicit target to match the trusted runtime environment marker. It creates two fictional taxpayers and one reviewing officer only when those accounts are absent. Repeat runs retain passwords and cases. New credentials are written to a private file under the operator's home directory; the command prints only its path and the officer identifier. Keep that file private and pass credentials to the presenter through an approved private channel.
+Seed is an explicit operator action. It creates the two fictional taxpayer accounts and one officer only when absent. Repeat runs retain credentials and cases. Generated passwords are written only to an OS-protected private file under `.ftc-private`; stdout contains its path and the generated `FTC_OFFICER_USER_ID`, never passwords. Set that ID in the local Functions environment. Do not put credentials in `.env.example`, frontend variables, Git, or logs.
 
-Set the server-only officer identifier from the seed summary as `FTC_OFFICER_USER_ID`. Rotate any of the three seeded demo accounts (including the officer) explicitly in the same target environment. The UUID operation ID is mandatory; keep it so the same command can recover an ambiguous commit:
+For hosted site variables, use Netlify's default site-variable scope and configure a stable trusted officer UUID as `FTC_OFFICER_USER_ID` before the first preview deploy/seed. Set `FTC_DEPLOYMENT_CONTEXT` for each deployment context. Keep production and preview `SESSION_SECRET`, allowed origin, and officer IDs separate where appropriate; never place secrets in Git or frontend variables. Seeding a missing officer uses this configured UUID. The server refuses a mismatch with an existing officer and never replaces that established identity. This prevents an initial preview seed from requiring a redeploy just to publish a randomly discovered officer ID.
+
+Rotate one account by specifying a stable UUID operation ID. Keep the same ID and private file to recover an ambiguous commit; choose a new ID only for a deliberate later rotation.
 
 ```powershell
 $rotationId = [guid]::NewGuid().Guid
 netlify dev:exec npm run demo:rotate -- --target local --login taxpayer-demo-a --operation-id $rotationId
 ```
 
-Rotation requires a UUID operation ID. Reusing the same ID returns the same still-current credential file without another password change or session invalidation. If the database commits but the command loses its acknowledgement, keep the reported private recovery file and retry with that operation ID. Use a new ID only when you intend a new rotation. A later rotation makes earlier operation credentials stale, which the command detects. Rotation does not run during build or deployment.
+For hosted operator commands, install and authenticate the Netlify CLI, then link the operator's project directory to the exact site configured for the Functions. The command checks `netlify status --json` against trusted `SITE_ID`/`NETLIFY_SITE_ID` before any hosted Blob access. Keep the same authenticated linked-site context for backup, preview initialization, and restore rehearsal. Do not pass tokens on command lines or copy CLI credentials into files.
 
-The application reads these server-side environment variable names; do not add values to this document or to `VITE_` variables:
+Local evidence uses the Netlify Dev Blob sandbox. Its store name is derived from the trusted database identity, not a command-line option. A fresh database gets an isolated store. A mismatch with an existing marker fails closed. The connection identity contains a port; persistence across Netlify Dev restarts has not yet been verified and must not be assumed for an already initialized local marker.
 
-- `NETLIFY_DB_URL` — supplied by Netlify Database / Netlify Dev.
-- `SESSION_SECRET` — private session signing secret.
-- `FTC_ALLOWED_ORIGIN` — exact application origin allowed by the API.
-- `FTC_OFFICER_USER_ID` — identifier of the configured active officer.
-- `FTC_DEPLOYMENT_CONTEXT` — exact runtime context: `dev`, `production`, `deploy-preview`, or `branch-deploy`. Set this variable with Functions scope in Netlify because `CONTEXT` is not guaranteed in Function runtimes.
-- `FTC_BLOB_REGION` — server-side evidence storage region; this prototype uses `us-east-2`.
+Run a dry-run before cleanup or reset. Cleanup never deletes ready evidence or unreferenced objects; reset is limited to the configured dedicated-demo marker and requires an exact manifest confirmation plus a fresh verified complete backup for every reset. If submitted demo cases exist, also pass the owner-configured retention cutoff exactly; draft-only resets do not require a cutoff.
 
-Run `npm run verify:release` for TypeScript, calculation/API tests, blank-database migration and checksum verification, and the production build. Netlify publication and CI run the same gates after a locked `npm ci` install.
+```powershell
+netlify dev:exec npm run ops:cleanup -- --target local --dry-run
+netlify dev:exec npm run demo:reset -- --target local --dry-run --operation-id $([guid]::NewGuid().Guid)
+```
 
-The Netlify Function reads `FTC_DEPLOYMENT_CONTEXT` from Functions-scoped site configuration; `CONTEXT` is not guaranteed at Function runtime. The operator reads the same name from its process environment and rejects missing or mismatched target values before touching account data.
+Use `npm run verify:release` for TypeScript, API/calculation tests, ordered migration/checksum verification, and production build. Netlify publication and CI run the same locked-install gates.

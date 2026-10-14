@@ -42,14 +42,17 @@ describe("the ordered migration release gate", () => {
   it("accepts exact committed bytes from a fresh checkout on Windows or Unix", async () => {
     const root = await freshCheckoutFixture();
 
-    await expect(verifyMigrations(root)).resolves.toBe(4);
-  });
+    await expect(verifyMigrations(root)).resolves.toBe(7);
+  }, 20_000);
 
   it.each([
     "20261014000100_hosted_foundation.sql",
     "20261014000200_login_attempt_reservations.sql",
     "20261014000300_workflow_environment.sql",
     "20261014000400_operator_credential_rotations.sql",
+    "20261014000500_operator_operations.sql",
+    "20261014000600_demo_reset_authorization.sql",
+    "20261014000700_restore_initialization_gate.sql",
   ])("rejects CRLF conversion of the committed %s bytes", async (name) => {
     const root = await freshCheckoutFixture();
     const path = join(root, "netlify/database/migrations", name);
@@ -57,5 +60,5 @@ describe("the ordered migration release gate", () => {
     await writeFile(path, canonical.replace(/\r?\n/g, "\r\n"));
 
     await expect(verifyMigrations(root)).rejects.toThrow(`Migration checksum changed: ${name}`);
-  });
+  }, 20_000);
 });
