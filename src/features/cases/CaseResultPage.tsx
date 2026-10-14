@@ -99,13 +99,20 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
           setConfirmedSubmitted(true);
         } catch (error) {
           // A lost response may follow a committed submission. Read the case before offering a retry.
-          const latest = (await hostedApi.getCase(record.id)).case;
+          const latestDetail = await hostedApi.getCase(record.id);
+          const latest = latestDetail.case;
           if (latest.status === "submitted" && latest.submittedSnapshotId) {
             const original = (await hostedApi.snapshot(latest.submittedSnapshotId)).snapshot;
             setRecord(latest);
             setSnapshot(original);
             setConfirmedSubmitted(true);
-          } else throw error;
+          } else {
+            setRecord(latest);
+            setAttachments(latestDetail.attachments ?? []);
+            if (latest.draft.revision > snapshot.revision) {
+              setProblem(`ข้อมูลร่างเปลี่ยนเป็นรุ่น ${latest.draft.revision} แล้ว ผลคำนวณรุ่น ${snapshot.revision} เก่าอยู่ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง`);
+            } else throw error;
+          }
         }
       }
     } catch (error) {
@@ -132,7 +139,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     </PageHeading>
     {confirmedSubmitted && <div className="alert alert-success" role="status"><strong>ส่งเข้าคิวจำลองแล้ว</strong><span>ระบบต้นแบบบันทึกผลสำเร็จและไม่สร้างรายการซ้ำเมื่อยืนยันสถานะ</span></div>}
     {problem && <div className="alert alert-error" role="alert">{problem}{mode === "hosted" && problem.includes("เซสชันหมดอายุ") && <a href="/login">เข้าสู่ระบบอีกครั้ง</a>}</div>}
-    {stale && <div className="alert alert-warning"><strong>ผลนี้เป็นข้อมูลของรุ่นก่อนหน้า</strong><span>มีการแก้ไขร่างภายหลัง บันทึกและคำนวณใหม่ก่อนส่งเข้าคิว</span></div>}
+    {stale && <div className="alert alert-warning" role="status"><strong>ผลนี้เป็นข้อมูลของรุ่นก่อนหน้า</strong><span>ร่างปัจจุบันเป็นรุ่น {record.draft.revision} แต่ผลคำนวณเป็นรุ่น {snapshot.revision} กรุณาบันทึกและคำนวณใหม่ก่อนส่งเข้าคิว</span></div>}
     {snapshot.result.outcome !== "ready" && <div className={`alert ${snapshot.result.outcome === "needs_review" ? "alert-warning" : "alert-info"}`} role="status"><strong>{outcomeText}</strong><ul>{snapshot.result.validationMessages.map((message, index) => <li key={`${message.code}-${index}`}>{message.message}</li>)}</ul></div>}
     {snapshot.result.outcome === "ready" && <div className="result-total card"><div><p className="eyebrow">ALLOWABLE FOREIGN TAX CREDIT</p><h2>เครดิตที่ใช้ได้ตามสมมติฐาน</h2><p>ผลรวมเครดิตรายประเทศหลังปัดเศษตามนโยบาย {snapshot.result.roundingPolicy}</p></div><strong className="total-amount">{formatMoney(snapshot.result.allowableCredit)} <small>บาท</small></strong></div>}
     <div className="result-facts">
