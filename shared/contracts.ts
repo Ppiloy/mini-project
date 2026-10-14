@@ -257,6 +257,23 @@ export interface RevisionMutationRequest<T> {
   data: T;
 }
 
+/** Explicit confirmation intent; the server always replaces time/fingerprint metadata. */
+export interface DraftSaveConfirmations {
+  thaiTax: boolean;
+  /** Use IDs after the server has assigned stable source IDs. */
+  eligibleSourceIds?: SourceId[];
+  /** First-save selections before server-generated source IDs are available. */
+  eligibleSourceIndexes?: number[];
+}
+
+export interface DraftSaveRequest extends RevisionMutationRequest<FtcCaseDraft> {
+  confirmations?: DraftSaveConfirmations;
+}
+
+export interface CreateCaseRequest {
+  requestId: RequestId;
+}
+
 export interface SubmitCaseRequest {
   expectedRevision: number;
   previewSnapshotId: SnapshotId;
