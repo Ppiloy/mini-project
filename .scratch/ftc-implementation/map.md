@@ -12,8 +12,9 @@ Specification: [spec](spec.md), [plan](../../FTC-PROTOTYPE-PLAN.md).
 | [04 Thai application](issues/04-ui.md) | 01, 02 contract | resolved |
 | [07 Snapshots/evidence/submission](issues/07-snapshots-evidence.md) | 02, 03 | claimed |
 | [08 Bootstrap/release checks](issues/08-bootstrap-checks.md) | 03 | claimed |
+| [09 Logout recovery](issues/09-logout-recovery.md) | 04 | claimed |
 | [05 Operations](issues/05-operations.md) | 07, 08 | open |
-| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07 | open |
+| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07, 08, 09 | open |
 
 ## Review log
 
