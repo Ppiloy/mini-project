@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "name": "20261014000100_hosted_foundation.sql",
+      "sha256": "9494628ac0a8a4fac6b171ec5337607835409544a3a75d388c792556c06af32b"
+    },
+    {
+      "name": "20261014000200_login_attempt_reservations.sql",
+      "sha256": "dad0f67fb737ce54a34a812af48d099d1931e9cdb1244aa38a8c4eb0802fc789"
+    }
+  ]
+}
