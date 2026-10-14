@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { ApiUser } from "../../shared/contracts.js";
 import type { AuthSession } from "../data/api.js";
-import { ApiClientError, hostedApi } from "../data/api.js";
+import { ApiClientError, hostedApi, logoutAndConfirm } from "../data/api.js";
 import type { DemoPersona } from "../data/demoRepository.js";
 import { demoUser } from "../data/demoRepository.js";
 import { DashboardPage } from "../features/cases/DashboardPage.js";
@@ -116,18 +116,7 @@ function RequireRole({ role, children }: { role: ApiUser["role"]; children: Reac
           setSignOutError("ไม่พบโทเค็นสำหรับออกจากระบบ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองโหลดหน้าใหม่หรือเข้าสู่ระบบอีกครั้ง");
           return;
         }
-        try {
-          await hostedApi.logout(csrfToken);
-        } catch {
-          // A lost response can follow a committed logout. Only an anonymous session check confirms it.
-          try {
-            const activeSession = await hostedApi.session();
-            if (activeSession === null) {
-              clear();
-              navigate("/login", { replace: true });
-              return;
-            }
-          } catch { /* Keep the identity visible when server state cannot be confirmed. */ }
+        if (!await logoutAndConfirm(csrfToken)) {
           setSignOutError("เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ");
           return;
         }
@@ -142,8 +131,10 @@ function RequireRole({ role, children }: { role: ApiUser["role"]; children: Reac
 }
 
 function LoginRoute({ officer = false }: { officer?: boolean }) {
-  const { setHosted } = useAppSession();
-  return <LoginPage officer={officer} onLogin={setHosted} />;
+  const { setHosted, clear, user, csrfToken, demo, ready } = useAppSession();
+  if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
+  const activeSession = user && csrfToken && !demo ? { user, csrfToken } : null;
+  return <LoginPage officer={officer} onLogin={setHosted} onClearSession={clear} activeSession={activeSession} />;
 }
 
 function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {

@@ -141,3 +141,17 @@ export const hostedApi = {
     return response.blob();
   },
 };
+
+/** Returns true only when logout succeeded or the session endpoint confirms anonymity. */
+export async function logoutAndConfirm(csrfToken: string): Promise<boolean> {
+  try {
+    await hostedApi.logout(csrfToken);
+    return true;
+  } catch {
+    try {
+      return (await hostedApi.session()) === null;
+    } catch {
+      return false;
+    }
+  }
+}

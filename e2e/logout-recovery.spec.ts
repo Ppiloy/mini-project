@@ -113,3 +113,60 @@ test("fixture sign-out clears the local demo identity without a hosted logout ca
   expect(logoutCalls).toBe(0);
   expect(await page.evaluate("sessionStorage.getItem('ftc.demo.persona')")).toBe(null);
 });
+
+test("wrong-role login replaces the old account, clears its cache, and keeps cleanup retry available", async ({ page }) => {
+  const wrongRoleCsrf = "wrong-role-csrf";
+  const taxpayer = { id: "owner-a", loginName: "user-a", displayName: "ผู้เสียภาษี A", role: "taxpayer", maskedReference: null };
+  const officer = { id: "officer-a", loginName: "officer-a", displayName: "เจ้าหน้าที่ A", role: "officer", maskedReference: null };
+  let activeUser: typeof taxpayer | typeof officer | null = taxpayer;
+  let logoutCalls = 0;
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("ftc.test.wrong-role-seeded")) return;
+    sessionStorage.setItem("ftc.test.wrong-role-seeded", "1");
+    sessionStorage.setItem("ftc.hosted.pending.owner-a.case-1", JSON.stringify({ ownerId: "owner-a", caseId: "case-1", draft: { id: "case-1", secret: "typed draft" } }));
+    sessionStorage.setItem("ftc.submit.pending.owner-a.case-1.snapshot-1", "request-id");
+  });
+  await page.route("**/api/auth/session", (route) => activeUser
+    ? route.fulfill({ json: { data: { user: activeUser, csrfToken: wrongRoleCsrf }, requestId: "session" } })
+    : route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "anonymous" } } }));
+  await page.route("**/api/auth/login", async (route) => {
+    activeUser = officer;
+    await route.fulfill({ json: { data: { user: officer, csrfToken: wrongRoleCsrf }, requestId: "login-officer" } });
+  });
+  await page.route("**/api/auth/logout", async (route) => {
+    logoutCalls += 1;
+    if (logoutCalls === 1) {
+      await route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Cleanup unavailable", requestId: "cleanup-503" } } });
+    } else {
+      activeUser = null;
+      await route.fulfill({ json: { data: { loggedOut: true }, requestId: "cleanup-retried" } });
+    }
+  });
+  await page.route("**/api/cases", (route) => activeUser?.role === "taxpayer"
+    ? route.fulfill({ json: { data: { cases: [] }, requestId: "cases-taxpayer" } })
+    : route.fulfill({ status: 403, json: { error: { code: "forbidden", message: "Taxpayer role required", requestId: "cases-forbidden" } } }));
+
+  await page.goto("/app");
+  await expect(page.getByRole("banner").getByText("ผู้เสียภาษี A")).toBeVisible();
+  await page.goto("/login");
+  await page.getByLabel("ชื่อผู้ใช้").fill("officer-a");
+  await page.getByLabel("รหัสผ่าน").fill("password");
+  await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "ยังออกจากระบบไม่สำเร็จ" })).toBeVisible();
+  expect(await page.evaluate("Object.keys(sessionStorage).filter((key) => key.includes('owner-a')).length")).toBe(0);
+
+  await page.evaluate("{ history.pushState({}, '', '/app'); window.dispatchEvent(new PopStateEvent('popstate')); }");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByText("ผู้เสียภาษี A")).toHaveCount(0);
+  await page.goto("/app");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("alert").filter({ hasText: "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ลองปิดเซสชันอีกครั้ง" })).toBeVisible();
+  expect(await page.evaluate("Object.keys(sessionStorage).filter((key) => key.includes('owner-a')).length")).toBe(0);
+
+  await page.getByRole("button", { name: "ลองปิดเซสชันอีกครั้ง" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  expect(logoutCalls).toBe(2);
+  expect(activeUser).toBe(null);
+});
