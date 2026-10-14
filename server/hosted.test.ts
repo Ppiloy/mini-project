@@ -1,8 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
+import { createEmptySource } from "../shared/draft.js";
 import type { ForeignIncomeSourceDraft } from "../shared/contracts.js";
 import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
@@ -38,8 +39,12 @@ afterEach(async () => {
 async function setup(trustedHttps = false, clock?: () => number) {
   const database = new PGlite();
   afterEachCallbacks.push(() => database.close());
-  const migration = await readFile("netlify/database/migrations/20261014000100_hosted_foundation.sql", "utf8");
-  await database.exec(migration);
+  const migrations = (await readdir("netlify/database/migrations"))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const migrationName of migrations) {
+    await database.exec(await readFile(`netlify/database/migrations/${migrationName}`, "utf8"));
+  }
   const pool = new PGlitePool(database);
   const passwordHash = await hashPasswordForTest("demo-password-1");
   await pool.query(
@@ -191,6 +196,21 @@ describe("hosted authentication and durable draft API", () => {
     expect(response.body.error.fields).toEqual(expect.arrayContaining([expect.objectContaining({ path: ["thaiTax", "provenance"] })]));
   });
 
+  it("rejects NUL characters in login names and persisted request identifiers as client errors", async () => {
+    const { app } = await setup();
+    const badLogin = await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer\u0000-a", password: "demo-password-1" });
+    expect(badLogin.status).toBe(400);
+    expect(badLogin.body.error.code).toBe("invalid_input");
+
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const badRequestId = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ requestId: "case\u0000id" });
+    expect(badRequestId.status).toBe(400);
+    expect(badRequestId.body.error.code).toBe("invalid_input");
+    expect(badRequestId.headers["cache-control"]).toContain("no-store");
+  });
+
   it("keeps cases owner-scoped, makes create retries idempotent, and rejects stale draft revisions", async () => {
     const { app } = await setup();
     const taxpayerA = await login(app, "taxpayer-a");
@@ -323,6 +343,80 @@ describe("hosted authentication and durable draft API", () => {
     expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBeNull();
   });
 
+  it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "duplicate-source-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const unsupported = createEmptySource();
+    unsupported.id = "a1111111-1111-4111-8111-111111111111";
+    unsupported.unsupportedClassification = "other";
+    const otherwiseSupported = createEmptySource();
+    otherwiseSupported.id = "a1111111-1111-4111-8111-111111111111".toUpperCase();
+    draft.sources = [unsupported, otherwiseSupported];
+
+    const duplicateSave = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "duplicate-source-save", data: draft });
+    expect(duplicateSave.status).toBe(400);
+    expect(duplicateSave.body.error.code).toBe("invalid_input");
+    const afterDuplicate = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(afterDuplicate.body.data.case.draft.sources).toEqual([]);
+    expect(afterDuplicate.body.data.case.draft.revision).toBe(0);
+
+    draft.sources = [otherwiseSupported];
+    const unownedId = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "caller-source-id", data: draft });
+    expect(unownedId.status).toBe(409);
+    expect((await agent.get(`/api/cases/${caseId}`).set("Origin", origin)).body.data.case.draft.sources).toEqual([]);
+  });
+
+  it("returns a conflict before clearing or removing remittances referenced by evidence", async () => {
+    const { app, pool } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "remittance-evidence-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const source = createEmptySource();
+    source.remittance = {
+      remittanceDate: "2025-02-01", transferTotalAmount: "100", transferCurrencyCode: "USD", transferTotalThb: null,
+      classification: "income_only", classificationNote: null,
+    };
+    draft.sources = [source];
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "remittance-evidence-save", data: draft });
+    expect(saved.status).toBe(200);
+    const persistedSource = saved.body.data.case.draft.sources[0] as ForeignIncomeSourceDraft;
+    const remittance = await pool.query<{ id: string }>("SELECT id FROM remittances WHERE source_id=$1", [persistedSource.id]);
+    expect(remittance.rows).toHaveLength(1);
+    await pool.query(
+      `INSERT INTO attachments(case_id, source_id, remittance_id, storage_environment, storage_store, storage_region,
+         storage_key, display_name, media_type, byte_size, sha256, kind, status)
+       VALUES ($1, NULL, $2, 'production', 'test-store', 'us-east-2', 'test/remittance-evidence', 'proof.pdf',
+         'application/pdf', 1, 'test-digest', 'remittance', 'ready')`,
+      [caseId, remittance.rows[0]!.id],
+    );
+
+    const cleared = structuredClone(saved.body.data.case.draft);
+    cleared.sources[0].remittance = null;
+    const clearResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "clear-linked-remittance", data: cleared });
+    expect(clearResponse.status).toBe(409);
+    expect(clearResponse.body.error.code).toBe("conflict");
+    expect(clearResponse.body.error.message).toContain("หลักฐาน");
+
+    const removed = structuredClone(saved.body.data.case.draft);
+    removed.sources = [];
+    const removeResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "remove-linked-remittance", data: removed });
+    expect(removeResponse.status).toBe(409);
+    expect(removeResponse.body.error.code).toBe("conflict");
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.revision).toBe(1);
+    expect(reloaded.body.data.case.draft.sources[0].id).toBe(persistedSource.id);
+    expect(reloaded.body.data.case.draft.sources[0].remittance).not.toBeNull();
+  });
+
   it("blocks repeated bad passwords using persistent account-level limits", async () => {
     const { app } = await setup();
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -331,5 +425,16 @@ describe("hosted authentication and durable draft API", () => {
     }
     const limited = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1" });
     expect(limited.status).toBe(429);
+  });
+
+  it("reserves login attempt capacity before password work under a concurrent wrong-password burst", async () => {
+    const { app } = await setup();
+    const attempts = await Promise.all(Array.from({ length: 20 }, () => request(app)
+      .post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "wrong" })));
+    expect(attempts.filter((attempt) => attempt.status === 401)).toHaveLength(10);
+    expect(attempts.filter((attempt) => attempt.status === 429)).toHaveLength(10);
+    expect(attempts.every((attempt) => [401, 429].includes(attempt.status))).toBe(true);
+    expect((await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer-a", password: "demo-password-1" })).status).toBe(429);
   });
 });

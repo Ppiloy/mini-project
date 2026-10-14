@@ -20,6 +20,7 @@ const SESSION_IDLE_MS = 30 * 60 * 1000;
 const SESSION_ABSOLUTE_MS = 8 * 60 * 60 * 1000;
 const LOGIN_LIMIT = 10;
 const LOGIN_WINDOW_MS = 60 * 60 * 1000;
+const LOGIN_RESERVATION_MS = 2 * 60 * 1000;
 const PG_SESSION = connectPgSimple(session);
 const dummyPasswordHash = hashPassword("fixed-non-account-password");
 
@@ -289,7 +290,7 @@ function requireExactFields(value: unknown, keys: string[]): Record<string, unkn
 }
 
 function requireString(value: unknown, field: string, maxLength = 160): string {
-  if (typeof value !== "string" || value.length < 1 || value.length > maxLength) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maxLength || value.includes("\u0000")) {
     throw new ApiFailure(400, "invalid_input", `ข้อมูล ${field} ไม่ถูกต้อง`);
   }
   return value;
@@ -325,9 +326,74 @@ async function inTransaction<T>(pool: PgPoolLike, work: (client: PgQueryable) =>
   }
 }
 
+async function reserveLoginAttempt(pool: PgPoolLike, loginName: string): Promise<string | null> {
+  return inTransaction(pool, async (client) => {
+    await client.query(
+      `INSERT INTO login_attempt_limits(login_name, attempt_count, window_started_at, blocked_until, updated_at)
+       VALUES ($1, 0, now(), NULL, now()) ON CONFLICT (login_name) DO NOTHING`,
+      [loginName],
+    );
+    const selected = await client.query<{ attempt_count: number; window_started_at: Date | string; blocked_until: Date | string | null }>(
+      "SELECT attempt_count, window_started_at, blocked_until FROM login_attempt_limits WHERE login_name=$1 FOR UPDATE",
+      [loginName],
+    );
+    const limit = selected.rows[0]!;
+    const timestamp = Date.now();
+    let attemptCount = limit.attempt_count;
+    if (new Date(limit.window_started_at).getTime() + LOGIN_WINDOW_MS <= timestamp) {
+      attemptCount = 0;
+      await client.query(
+        "UPDATE login_attempt_limits SET attempt_count=0, window_started_at=now(), blocked_until=NULL, updated_at=now() WHERE login_name=$1",
+        [loginName],
+      );
+    } else if (limit.blocked_until && new Date(limit.blocked_until).getTime() > timestamp) {
+      return null;
+    }
+    await client.query("DELETE FROM login_attempt_reservations WHERE login_name=$1 AND expires_at<=now()", [loginName]);
+    const reservations = await client.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM login_attempt_reservations WHERE login_name=$1",
+      [loginName],
+    );
+    if (attemptCount + (reservations.rows[0]?.count ?? 0) >= LOGIN_LIMIT) return null;
+    const reservationId = randomUUID();
+    await client.query(
+      "INSERT INTO login_attempt_reservations(reservation_id, login_name, expires_at) VALUES ($1, $2, now() + ($3 * interval '1 millisecond'))",
+      [reservationId, loginName, LOGIN_RESERVATION_MS],
+    );
+    return reservationId;
+  });
+}
+
+async function finishLoginAttempt(pool: PgPoolLike, loginName: string, reservationId: string, succeeded: boolean): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    await client.query("SELECT login_name FROM login_attempt_limits WHERE login_name=$1 FOR UPDATE", [loginName]);
+    await client.query("DELETE FROM login_attempt_reservations WHERE reservation_id=$1 AND login_name=$2", [reservationId, loginName]);
+    if (succeeded) {
+      await client.query(
+        "UPDATE login_attempt_limits SET attempt_count=0, window_started_at=now(), blocked_until=NULL, updated_at=now() WHERE login_name=$1",
+        [loginName],
+      );
+      return;
+    }
+    await client.query(
+      `UPDATE login_attempt_limits SET
+         attempt_count=CASE WHEN window_started_at < now() - interval '1 hour' THEN 1 ELSE attempt_count + 1 END,
+         window_started_at=CASE WHEN window_started_at < now() - interval '1 hour' THEN now() ELSE window_started_at END,
+         blocked_until=CASE WHEN (CASE WHEN window_started_at < now() - interval '1 hour' THEN 1 ELSE attempt_count + 1 END) >= ${LOGIN_LIMIT}
+           THEN now() + interval '1 hour' ELSE NULL END,
+         updated_at=now() WHERE login_name=$1`,
+      [loginName],
+    );
+  });
+}
+
 function normalizeSourceIds(draft: FtcCaseDraft): FtcCaseDraft {
   const result = structuredClone(draft);
-  for (const source of result.sources) source.id ??= randomUUID();
+  const suppliedIds = result.sources.flatMap((source) => source.id === null ? [] : [source.id.toLowerCase()]);
+  if (new Set(suppliedIds).size !== suppliedIds.length) {
+    throw new ApiFailure(400, "invalid_input", "รหัสแหล่งเงินได้ซ้ำกัน");
+  }
+  for (const source of result.sources) source.id = source.id?.toLowerCase() ?? randomUUID();
   return result;
 }
 
@@ -379,11 +445,25 @@ function addExplicitConfirmations(
 
 async function persistSourceRows(client: PgQueryable, caseId: string, draft: FtcCaseDraft): Promise<void> {
   const retained = draft.sources.map((source) => source.id as string);
+  const clearedRemittanceIds = draft.sources.flatMap((source) => source.id && !source.remittance ? [source.id] : []);
   const referencedEvidence = retained.length
-    ? await client.query<{ id: string }>("SELECT id FROM attachments WHERE case_id=$1 AND source_id IS NOT NULL AND NOT (source_id=ANY($2::uuid[])) LIMIT 1", [caseId, retained])
-    : await client.query<{ id: string }>("SELECT id FROM attachments WHERE case_id=$1 AND source_id IS NOT NULL LIMIT 1", [caseId]);
+    ? await client.query<{ id: string }>(
+      `SELECT a.id FROM attachments a
+       LEFT JOIN remittances r ON r.case_id=a.case_id AND r.id=a.remittance_id
+       WHERE a.case_id=$1 AND (
+         (a.source_id IS NOT NULL AND NOT (a.source_id=ANY($2::uuid[]))) OR
+         (r.id IS NOT NULL AND (NOT (r.source_id=ANY($2::uuid[])) OR r.source_id=ANY($3::uuid[])))
+       ) LIMIT 1`,
+      [caseId, retained, clearedRemittanceIds],
+    )
+    : await client.query<{ id: string }>(
+      `SELECT a.id FROM attachments a
+       LEFT JOIN remittances r ON r.case_id=a.case_id AND r.id=a.remittance_id
+       WHERE a.case_id=$1 AND (a.source_id IS NOT NULL OR r.id IS NOT NULL) LIMIT 1`,
+      [caseId],
+    );
   if (referencedEvidence.rows.length) {
-    throw new ApiFailure(409, "conflict", "กรุณาจัดการหลักฐานของแหล่งเงินได้ก่อนนำแหล่งเงินได้นี้ออก");
+    throw new ApiFailure(409, "conflict", "กรุณาจัดการหลักฐานที่เชื่อมกับแหล่งเงินได้หรือรายการโอนก่อนลบหรือแก้ไขรายการนั้น");
   }
   if (retained.length) {
     await client.query("DELETE FROM exchange_rate_references WHERE case_id=$1 AND NOT (source_id = ANY($2::uuid[]))", [caseId, retained]);
@@ -556,14 +636,8 @@ export function createApp(options: CreateAppOptions): Express {
       const body = requireExactFields(request.body, ["loginName", "password"]);
       const loginName = requireString(body.loginName, "ชื่อผู้ใช้", 80).trim().toLowerCase();
       const password = requireString(body.password, "รหัสผ่าน", 1024);
-      const limits = await options.pool.query<{ attempt_count: number; window_started_at: Date | string; blocked_until: Date | string | null }>(
-        "SELECT attempt_count, window_started_at, blocked_until FROM login_attempt_limits WHERE login_name=$1",
-        [loginName],
-      );
-      const limit = limits.rows[0];
-      const timestamp = now();
-      if (limit && ((limit.blocked_until && new Date(limit.blocked_until).getTime() > timestamp) ||
-        (new Date(limit.window_started_at).getTime() + LOGIN_WINDOW_MS > timestamp && limit.attempt_count >= LOGIN_LIMIT))) {
+      const reservationId = await reserveLoginAttempt(options.pool, loginName);
+      if (!reservationId) {
         apiError(response, 429, "rate_limited", "พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอสักครู่");
         return;
       }
@@ -574,20 +648,9 @@ export function createApp(options: CreateAppOptions): Express {
       );
       const user = result.rows[0];
       const passwordValid = await verifyPassword(password, user?.password_hash ?? await dummyPasswordHash);
+      const succeeded = Boolean(user && user.active && passwordValid);
+      await finishLoginAttempt(options.pool, loginName, reservationId, succeeded);
       if (!user || !user.active || !passwordValid) {
-        await options.pool.query(
-          `INSERT INTO login_attempt_limits(login_name, attempt_count, window_started_at, blocked_until, updated_at)
-           VALUES ($1, 1, now(), NULL, now())
-           ON CONFLICT (login_name) DO UPDATE SET
-             attempt_count=CASE WHEN login_attempt_limits.window_started_at < now() - interval '1 hour'
-               THEN 1 ELSE login_attempt_limits.attempt_count + 1 END,
-             window_started_at=CASE WHEN login_attempt_limits.window_started_at < now() - interval '1 hour'
-               THEN now() ELSE login_attempt_limits.window_started_at END,
-             blocked_until=CASE WHEN (CASE WHEN login_attempt_limits.window_started_at < now() - interval '1 hour'
-               THEN 1 ELSE login_attempt_limits.attempt_count + 1 END) >= ${LOGIN_LIMIT}
-               THEN now() + interval '1 hour' ELSE NULL END, updated_at=now()`,
-          [loginName],
-        );
         apiError(response, 401, "unauthenticated", "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง");
         return;
       }
@@ -700,7 +763,14 @@ export function createApp(options: CreateAppOptions): Express {
       if (canonicalDraft.sources.some((source) => source.id !== null && !isUuid(source.id))) {
         throw new ApiFailure(400, "invalid_input", "รหัสแหล่งเงินได้ไม่ถูกต้อง");
       }
-      const confirmedIds = (confirmations.eligibleSourceIds ?? []) as string[];
+      for (const source of canonicalDraft.sources) {
+        if (source.id !== null) source.id = source.id.toLowerCase();
+      }
+      const suppliedSourceIds = canonicalDraft.sources.flatMap((source) => source.id === null ? [] : [source.id]);
+      if (new Set(suppliedSourceIds).size !== suppliedSourceIds.length) {
+        throw new ApiFailure(400, "invalid_input", "รหัสแหล่งเงินได้ซ้ำกัน");
+      }
+      const confirmedIds = ((confirmations.eligibleSourceIds ?? []) as string[]).map((id) => id.toLowerCase());
       const confirmedIndexes = (confirmations.eligibleSourceIndexes ?? []) as number[];
       if (new Set(confirmedIds).size !== confirmedIds.length || new Set(confirmedIndexes).size !== confirmedIndexes.length ||
         confirmedIndexes.some((index) => index >= canonicalDraft.sources.length) ||
@@ -728,17 +798,21 @@ export function createApp(options: CreateAppOptions): Express {
         }
         if (row.status !== "draft") throw new ApiFailure(409, "conflict", "รายการที่ส่งแล้วแก้ไขไม่ได้");
         if (row.revision !== body.expectedRevision) throw new ApiFailure(409, "conflict", "ข้อมูลเปลี่ยนไปแล้ว กรุณาโหลดแบบร่างล่าสุด");
+        if (suppliedSourceIds.length) {
+          const ownedSourceRows = await client.query<{ id: string }>(
+            "SELECT id FROM foreign_income_sources WHERE id=ANY($1::uuid[]) AND case_id=$2",
+            [suppliedSourceIds, row.id],
+          );
+          if (ownedSourceRows.rows.length !== suppliedSourceIds.length) {
+            throw new ApiFailure(409, "conflict", "รหัสแหล่งเงินได้ต้องเป็นรหัสที่ระบบสร้างไว้ในรายการนี้");
+          }
+        }
         const incoming = normalizeSourceIds(canonicalDraft);
         incoming.id = row.id;
         incoming.revision = row.revision + 1;
         incoming.createdAt = new Date(row.created_at).toISOString();
         incoming.updatedAt = new Date().toISOString();
         const current = asDraft(row.draft);
-        const conflictingIds = await client.query<{ id: string }>(
-          "SELECT id FROM foreign_income_sources WHERE id = ANY($1::uuid[]) AND case_id <> $2",
-          [incoming.sources.map((source) => source.id), row.id],
-        );
-        if (conflictingIds.rows.length) throw new ApiFailure(409, "conflict", "แหล่งเงินได้ที่ระบุเป็นของรายการอื่น");
         const updated = addExplicitConfirmations(incoming, current, normalizedConfirmations);
         updated.revision = row.revision + 1;
         updated.id = row.id;
