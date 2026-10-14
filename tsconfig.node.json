@@ -17,5 +17,6 @@
     "composite": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "server", "netlify", "e2e"]
+  "include": ["vite.config.ts", "playwright.config.ts", "server", "netlify", "e2e", "shared"],
+  "exclude": ["shared/**/*.test.ts"]
 }
