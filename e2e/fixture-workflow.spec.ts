@@ -42,8 +42,33 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
   await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  const previewUrl = new URL(page.url());
+  const caseId = previewUrl.pathname.split("/")[3]!;
+  const previewId = previewUrl.searchParams.get("preview")!;
+  const dashboardCard = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(dashboardCard).toContainText("2,500.00");
+  await expect(dashboardCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
+  await page.reload();
+  await expect(dashboardCard).toContainText("2,500.00");
+  await dashboardCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(page).toHaveURL(new RegExp(`/demo/reports/${previewId}$`));
+  await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await page.goto(`/demo/cases/${caseId}/result?preview=${previewId}`);
+  await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
   await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(dashboardCard).toContainText("ส่งแล้ว · คิวจำลอง");
+  await expect(dashboardCard).toContainText("2,500.00");
+  await dashboardCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(page).toHaveURL(new RegExp(`/demo/reports/[^/]+$`));
+  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
@@ -57,6 +82,44 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.emulateMedia({ media: "print" });
   await expect(page.getByRole("button", { name: "พิมพ์ / บันทึกเป็น PDF" })).toBeHidden();
   await expect(page.locator(".print-report")).toBeVisible();
+});
+
+test("taxpayer dashboard never presents a stale draft preview or a ready amount for an incomplete calculation", async ({ page }) => {
+  await enterTaxpayerDemo(page);
+  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await advanceToReview(page);
+  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  const previewUrl = new URL(page.url());
+  const caseId = previewUrl.pathname.split("/")[3]!;
+  const card = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
+
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(card).toContainText("2,500.00");
+  await card.getByRole("link", { name: "ทำร่างต่อ" }).click();
+  await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
+  await page.getByRole("button", { name: "บันทึกร่าง" }).click();
+  await expect(page.getByRole("status").filter({ hasText: /บันทึกแล้ว/ })).toBeVisible();
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(card).toContainText("ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน");
+  await expect(card).not.toContainText("2,500.00");
+  await expect(card.getByRole("link", { name: "เปิดรายงาน" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
+  const incompleteCaseId = new URL(page.url()).pathname.split("/")[3]!;
+  for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await expect(page).toHaveURL(new RegExp(`/demo/cases/${incompleteCaseId}/result\\?preview=`));
+  await expect(page.getByRole("status").getByText("ข้อมูลยังไม่ครบสำหรับคำนวณ")).toBeVisible();
+  const incompleteCard = page.locator(".case-card").filter({ hasText: incompleteCaseId.slice(-8).toUpperCase() });
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(incompleteCard).toContainText("ข้อมูลยังไม่ครบ");
+  await expect(incompleteCard).not.toContainText(/\d+,\d{3}\.\d{2}/);
+  await expect(incompleteCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
+  await incompleteCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(page).toHaveURL(/\/demo\/reports\/demo-snapshot-/);
+  await expect(page.getByText("สถานะ: ข้อมูลยังไม่ครบ")).toBeVisible();
 });
 
 test("editing Thai tax invalidates its confirmation and prevents a ready preview", async ({ page }) => {
