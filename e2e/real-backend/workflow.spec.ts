@@ -105,6 +105,22 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const preview = (previewResponse.json as { data: { snapshot: CalculationSnapshot } }).data.snapshot;
   expect(preview.id).toBe(previewId);
   expect(preview.result.allowableCredit).toBe("2500.00");
+  const taxpayerCard = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
+  await page.route(`**/api/cases/${caseId}`, (route) => route.abort(), { times: 1 });
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(taxpayerCard.getByRole("alert")).toContainText("รุ่นนโยบาย");
+  await expect(taxpayerCard).not.toContainText("2,500.00");
+  await taxpayerCard.getByRole("button", { name: "ลองโหลดผลคำนวณอีกครั้ง" }).click();
+  await expect(taxpayerCard).toContainText("2,500.00");
+  await expect(taxpayerCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
+  await page.reload();
+  await expect(taxpayerCard).toContainText("2,500.00");
+  await taxpayerCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(page).toHaveURL(new RegExp(`/reports/${previewId}$`));
+  await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await page.goto(`/app/cases/${caseId}/result?preview=${previewId}`);
+  await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
   const sourceLines = preview.result.lines.filter((line) => line.sourceId === sourceId);
   expect(sourceLines.map((line) => line.code)).toEqual([
     "source_D", "source_E_paid", "source_E_eligible", "source_F", "source_share", "source_G",
@@ -147,6 +163,17 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(submittedSourceLines.map((line) => line.code)).toEqual(sourceLines.map((line) => line.code));
   expect(submittedSourceLines.map((line) => line.value)).toEqual(sourceLines.map((line) => line.value));
   expect(submittedSnapshot.evidence.map((item) => ({ ...item })).sort((left, right) => left.id.localeCompare(right.id))).toEqual(uploadedEvidence);
+
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(taxpayerCard).toContainText("ส่งแล้ว · คิวตรวจสอบ");
+  await expect(taxpayerCard).toContainText("2,500.00");
+  await taxpayerCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(page).toHaveURL(new RegExp(`/reports/${submittedSnapshotId}$`));
+  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
+  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
 
   const taxpayerBContext = await browser.newContext();
   try {

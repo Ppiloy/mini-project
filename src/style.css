@@ -123,6 +123,9 @@ p { line-height: 1.65; }
 .loading-card { padding: 22px; border: 1px dashed #c7d7e6; border-radius: 12px; color: var(--muted); background: #fff; text-align: center; font-size: 12px; }
 .case-list { display: grid; gap: 12px; }
 .case-card { padding: 17px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.case-card-action { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
+.case-calculation-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+.case-calculation-note strong { color: #1849a9; font-size: 13px; font-weight: 650; }
 .case-title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
 .case-title-row h3 { margin: 0; font-size: 15px; }
 .case-ref { margin: 5px 0 3px; color: #425b76; font-size: 11px; }
@@ -304,6 +307,7 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .summary-strip > div:last-child { grid-column: 1 / -1; }
   .content-section { padding: 16px; }
   .case-card { align-items: stretch; flex-direction: column; gap: 13px; }
+  .case-card-action { align-items: stretch; }
   .case-card-action .button { width: 100%; }
   .stepper { width: calc(100vw - 28px); margin-left: -0px; padding: 10px; justify-content: start; }
   .stepper-item { min-width: 104px; font-size: 9px; }

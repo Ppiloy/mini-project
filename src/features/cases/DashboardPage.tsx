@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
-import type { FtcCaseRecord } from "../../../shared/contracts.js";
+import type { CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
-import { createDemoCase, createDemoCaseFromDraft, listDemoCases } from "../../data/demoRepository.js";
+import { createDemoCase, createDemoCaseFromDraft, findDemoCase, findDemoSnapshot, latestDemoPreview, listDemoCases } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 import { PageHeading } from "../../components/SiteFrame.js";
+import { formatMoney } from "../../components/money.js";
 
 type Mode = "demo" | "hosted";
 
@@ -91,14 +92,89 @@ export function DashboardPage({ mode }: { mode: Mode }) {
   );
 }
 
+type CaseCardLoad =
+  | { key: string; state: "loading"; record: FtcCaseRecord }
+  | { key: string; state: "none"; record: FtcCaseRecord }
+  | { key: string; state: "snapshot"; record: FtcCaseRecord; snapshot: CalculationSnapshot }
+  | { key: string; state: "failed"; record: FtcCaseRecord; error: string };
+
 function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
+  const { user } = useAppSession();
+  const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState<CaseCardLoad | null>(null);
+  const key = `${mode}:${user?.id ?? ""}:${record.id}:${record.status}:${record.draft.revision}:${record.submittedSnapshotId ?? ""}:${attempt}`;
+  const current = loaded?.key === key ? loaded : { key, state: "loading" as const, record };
+
+  useEffect(() => {
+    let active = true;
+    setLoaded({ key, state: "loading", record });
+    const load = async () => {
+      let currentRecord = record;
+      try {
+        if (!user || record.ownerId !== user.id) throw new Error("ไม่สามารถยืนยันเจ้าของกรณีนี้ได้");
+
+        let snapshot: CalculationSnapshot | null = null;
+        if (mode === "demo") {
+          const saved = findDemoCase(record.id, "taxpayer");
+          if (!saved || saved.ownerId !== user.id) throw new Error("ไม่พบกรณีนี้ในข้อมูลสาธิตของบัญชีปัจจุบัน");
+          currentRecord = saved;
+          if (saved.status === "submitted") {
+            if (!saved.submittedSnapshotId) throw new Error("ไม่พบรหัสผลคำนวณที่ส่งแล้ว");
+            const submitted = findDemoSnapshot(saved.submittedSnapshotId);
+            if (!submitted) throw new Error("ไม่พบผลคำนวณฉบับที่ส่งแล้วในข้อมูลสาธิต");
+            snapshot = submitted;
+          } else snapshot = latestDemoPreview(saved.id, saved.draft.revision) ?? null;
+        } else {
+          const detail = await hostedApi.getCase(record.id);
+          if (detail.case.id !== record.id || detail.case.ownerId !== user.id) throw new Error("ไม่สามารถยืนยันเจ้าของกรณีนี้ได้");
+          currentRecord = detail.case;
+          if (detail.case.status === "submitted") {
+            if (!detail.case.submittedSnapshotId) throw new Error("ไม่พบรหัสผลคำนวณที่ส่งแล้ว");
+            snapshot = (await hostedApi.snapshot(detail.case.submittedSnapshotId)).snapshot;
+          } else snapshot = detail.currentPreview;
+        }
+
+        if (snapshot) {
+          const matchesCurrentRecord = snapshot.caseId === currentRecord.id && snapshot.revision === currentRecord.draft.revision;
+          const matchesStatus = currentRecord.status === "submitted"
+            ? snapshot.id === currentRecord.submittedSnapshotId && snapshot.kind === "submitted"
+            : snapshot.kind === "preview";
+          if (!matchesCurrentRecord || !matchesStatus) {
+            if (currentRecord.status === "submitted") throw new Error("ผลคำนวณที่ส่งแล้วไม่ตรงกับกรณีนี้ จึงยังเปิดยอดที่บันทึกไม่ได้");
+            snapshot = null;
+          }
+        }
+        if (active) setLoaded(snapshot
+          ? { key, state: "snapshot", record: currentRecord, snapshot }
+          : { key, state: "none", record: currentRecord });
+      } catch (error) {
+        if (active) setLoaded({ key, state: "failed", record: currentRecord, error: apiFailureMessage(error, "โหลดผลคำนวณที่บันทึกไว้ไม่สำเร็จ") });
+      }
+    };
+    void load();
+    return () => { active = false; };
+  }, [key, mode, record, user]);
+
+  const currentRecord = current.record;
   const hrefRoot = mode === "demo" ? "/demo" : "/app";
-  const destination = record.status === "submitted" ? `${hrefRoot}/cases/${record.id}/result` : `${hrefRoot}/cases/${record.id}/edit`;
-  const updated = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(record.updatedAt));
+  const destination = currentRecord.status === "submitted" ? `${hrefRoot}/cases/${currentRecord.id}/result` : `${hrefRoot}/cases/${currentRecord.id}/edit`;
+  const updated = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(currentRecord.updatedAt));
+  const snapshot = current.state === "snapshot" ? current.snapshot : null;
+  const reportHref = snapshot ? `${mode === "demo" ? "/demo" : ""}/reports/${encodeURIComponent(snapshot.id)}` : null;
+  const resultStatus = snapshot?.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ"
+    : snapshot?.result.outcome === "needs_review" ? "มีข้อเท็จจริงที่ต้องตรวจสอบ / อยู่นอกขอบเขตตัวอย่าง"
+      : snapshot?.result.outcome === "ready" ? "ผลคำนวณพร้อมแล้ว แต่ไม่มียอดเครดิตที่แสดงได้" : "";
   return (
     <article className="case-card card">
-      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {record.draft.taxYear ? record.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${record.status === "submitted" ? "status-submitted" : "status-draft"}`}>{record.status === "submitted" ? "ส่งแล้ว · คิวจำลอง" : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {record.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p></div>
-      <div className="case-card-action"><Link className="button button-secondary" to={destination}>{record.status === "submitted" ? "ดูผลและรายงาน" : "ทำร่างต่อ"}</Link></div>
+      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {currentRecord.draft.taxYear ? currentRecord.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${currentRecord.status === "submitted" ? "status-submitted" : "status-draft"}`}>{currentRecord.status === "submitted" ? (mode === "demo" ? "ส่งแล้ว · คิวจำลอง" : "ส่งแล้ว · คิวตรวจสอบ") : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {currentRecord.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p>
+        {current.state === "loading" && <p className="case-calculation-note" role="status">กำลังตรวจผลคำนวณที่บันทึกไว้…</p>}
+        {current.state === "none" && <p className="case-calculation-note">ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน</p>}
+        {current.state === "failed" && <div className="case-calculation-note" role="alert"><span>{current.error}</span><button className="button button-quiet button-small" onClick={() => setAttempt((value) => value + 1)}>ลองโหลดผลคำนวณอีกครั้ง</button></div>}
+        {snapshot && <div className="case-calculation-note"><span>ผลคำนวณรุ่น {snapshot.revision}</span>{snapshot.result.outcome === "ready" && snapshot.result.allowableCredit !== null
+          ? <strong>เครดิตภาษีที่ใช้ได้ {formatMoney(snapshot.result.allowableCredit)} บาท</strong>
+          : <span>{resultStatus}</span>}</div>}
+      </div>
+      <div className="case-card-action"><Link className="button button-secondary" to={destination}>{currentRecord.status === "submitted" ? "ดูผลและรายงาน" : "ทำร่างต่อ"}</Link>{reportHref && <Link className="button button-quiet button-small" to={reportHref}>เปิดรายงาน</Link>}</div>
     </article>
   );
 }
