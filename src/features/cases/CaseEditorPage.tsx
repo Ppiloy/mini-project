@@ -345,13 +345,13 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
         if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
         snapshot = (await hostedApi.calculate(record.id, saved.draft.revision, csrfToken)).snapshot;
       }
-      navigate(`${mode === "demo" ? "/demo" : ""}/cases/${encodeURIComponent(record.id)}/result?preview=${encodeURIComponent(snapshot.id)}`);
+      navigate(`${mode === "demo" ? "/demo" : "/app"}/cases/${encodeURIComponent(record.id)}/result?preview=${encodeURIComponent(snapshot.id)}`);
     } catch (error) { setProblem(apiFailureMessage(error, "คำนวณตัวอย่างไม่สำเร็จ")); }
   };
 
   if (loading) return <div className="loading-card" role="status">กำลังโหลดร่าง…</div>;
   if (!record || !draft) return <section className="card error-page"><h1>เปิดร่างไม่ได้</h1><div className="alert alert-error" role="alert">{problem ?? "ไม่พบกรณีนี้"}</div><a className="button button-secondary" href={mode === "demo" ? "/demo/app" : "/app"}>กลับรายการกรณี</a></section>;
-  if (record.status !== "draft") return <div className="card"><p>กรณีนี้ส่งแล้วและเปิดได้แบบอ่านอย่างเดียว</p><a href={`${mode === "demo" ? "/demo" : ""}/cases/${record.id}/result`}>ดูผลที่บันทึก</a></div>;
+  if (record.status !== "draft") return <div className="card"><p>กรณีนี้ส่งแล้วและเปิดได้แบบอ่านอย่างเดียว</p><a href={`${mode === "demo" ? "/demo" : "/app"}/cases/${record.id}/result`}>ดูผลที่บันทึก</a></div>;
 
   const stepProps = { draft, onChange: updateDraft, attachments, onUpload: upload, onDeleteAttachment: deleteAttachment, onDownloadAttachment: downloadAttachment, busy: uploading };
   const taxCurrent = isThaiTaxConfirmationCurrent(draft);

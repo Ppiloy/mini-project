@@ -21,7 +21,7 @@ interface AppSession {
   pendingLogout: LogoutIntent | null;
   pendingLogoutErrors: unknown[];
   setHosted: (session: AuthSession) => void;
-  setDemo: (persona: DemoPersona) => void;
+  setDemo: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
   beginLogout: (accountId: string, expectedRole: ApiUser["role"], wrongRole?: boolean) => void;
   retryPendingLogout: (fallback?: LogoutIntent) => Promise<LogoutConfirmationResult>;
   clear: () => void;
@@ -122,11 +122,27 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(session.user);
       setCsrfToken(session.csrfToken);
     },
-    setDemo: (persona) => {
+    setDemo: async (persona) => {
+      if (user && csrfToken && !demo) {
+        const intent = { accountId: user.id, expectedRole: user.role };
+        persistLogoutIntent(intent);
+        setPendingLogout(intent);
+        setPendingLogoutErrors([]);
+        const result = await logoutAndConfirm(csrfToken);
+        if (!result.confirmed) {
+          setPendingLogoutErrors(result.errors);
+          return result;
+        }
+      }
+      persistLogoutIntent(null);
+      setPendingLogout(null);
+      setPendingLogoutErrors([]);
+      clearPendingDrafts();
       sessionStorage.setItem("ftc.demo.persona", persona);
       setIsDemo(true);
       setUser(demoUser(persona));
       setCsrfToken(null);
+      return { confirmed: true };
     },
     beginLogout: (accountId, expectedRole, wrongRole = false) => {
       const intent = { accountId, expectedRole, wrongRole };
@@ -207,13 +223,19 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
-function RequireRole({ role, children }: { role: ApiUser["role"]; children: React.ReactNode }) {
+function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "demo" | "hosted"; children: React.ReactNode }) {
   const { user, demo, csrfToken, clear, clearDemo, beginLogout, pendingLogout, pendingLogoutErrors, ready } = useAppSession();
   const navigate = useNavigate();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
   if (!user || user.role !== role) return <Navigate to={demo ? "/demo" : role === "officer" ? "/officer/login" : "/login"} replace />;
+  if (demo !== (mode === "demo")) {
+    const destination = demo
+      ? (role === "officer" ? "/demo/officer" : "/demo/app")
+      : (role === "officer" ? "/officer" : "/app");
+    return <Navigate to={destination} replace />;
+  }
   const signOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
@@ -255,6 +277,7 @@ function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {
   const { user, demo, ready } = useAppSession();
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
   if (!user) return <Navigate to={mode === "demo" ? "/demo" : "/login"} replace />;
+  if (demo !== (mode === "demo")) return <Navigate to={demo ? (user.role === "officer" ? "/demo/officer" : "/demo/app") : (user.role === "officer" ? "/officer" : "/app")} replace />;
   return <SiteFrame user={user} demo={demo}><ReportPage mode={mode} /></SiteFrame>;
 }
 
@@ -266,16 +289,16 @@ function AppRoutes() {
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/officer/login" element={<LoginRoute officer />} />
       <Route path="/demo" element={<DemoEntryPage onChoose={setDemo} />} />
-      <Route path="/demo/app" element={<RequireRole role="taxpayer"><DashboardPage mode="demo" /></RequireRole>} />
-      <Route path="/app" element={<RequireRole role="taxpayer"><DashboardPage mode="hosted" /></RequireRole>} />
-      <Route path="/demo/cases/:id/edit" element={<RequireRole role="taxpayer"><CaseEditorPage mode="demo" /></RequireRole>} />
-      <Route path="/app/cases/:id/edit" element={<RequireRole role="taxpayer"><CaseEditorPage mode="hosted" /></RequireRole>} />
-      <Route path="/demo/cases/:id/result" element={<RequireRole role="taxpayer"><CaseResultPage mode="demo" /></RequireRole>} />
-      <Route path="/app/cases/:id/result" element={<RequireRole role="taxpayer"><CaseResultPage mode="hosted" /></RequireRole>} />
-      <Route path="/demo/officer" element={<RequireRole role="officer"><OfficerQueuePage mode="demo" /></RequireRole>} />
-      <Route path="/officer" element={<RequireRole role="officer"><OfficerQueuePage mode="hosted" /></RequireRole>} />
-      <Route path="/demo/officer/cases/:id" element={<RequireRole role="officer"><OfficerCasePage mode="demo" /></RequireRole>} />
-      <Route path="/officer/cases/:id" element={<RequireRole role="officer"><OfficerCasePage mode="hosted" /></RequireRole>} />
+      <Route path="/demo/app" element={<RequireRole role="taxpayer" mode="demo"><DashboardPage mode="demo" /></RequireRole>} />
+      <Route path="/app" element={<RequireRole role="taxpayer" mode="hosted"><DashboardPage mode="hosted" /></RequireRole>} />
+      <Route path="/demo/cases/:id/edit" element={<RequireRole role="taxpayer" mode="demo"><CaseEditorPage mode="demo" /></RequireRole>} />
+      <Route path="/app/cases/:id/edit" element={<RequireRole role="taxpayer" mode="hosted"><CaseEditorPage mode="hosted" /></RequireRole>} />
+      <Route path="/demo/cases/:id/result" element={<RequireRole role="taxpayer" mode="demo"><CaseResultPage mode="demo" /></RequireRole>} />
+      <Route path="/app/cases/:id/result" element={<RequireRole role="taxpayer" mode="hosted"><CaseResultPage mode="hosted" /></RequireRole>} />
+      <Route path="/demo/officer" element={<RequireRole role="officer" mode="demo"><OfficerQueuePage mode="demo" /></RequireRole>} />
+      <Route path="/officer" element={<RequireRole role="officer" mode="hosted"><OfficerQueuePage mode="hosted" /></RequireRole>} />
+      <Route path="/demo/officer/cases/:id" element={<RequireRole role="officer" mode="demo"><OfficerCasePage mode="demo" /></RequireRole>} />
+      <Route path="/officer/cases/:id" element={<RequireRole role="officer" mode="hosted"><OfficerCasePage mode="hosted" /></RequireRole>} />
       <Route path="/demo/reports/:snapshotId" element={<AuthorizedReportRoute mode="demo" />} />
       <Route path="/reports/:snapshotId" element={<AuthorizedReportRoute mode="hosted" />} />
       <Route path="*" element={<main className="page-wrap"><section className="card"><h1>ไม่พบหน้านี้</h1><a href="/login">กลับหน้าเข้าสู่ระบบ</a></section></main>} />

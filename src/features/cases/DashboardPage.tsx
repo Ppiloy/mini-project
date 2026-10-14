@@ -45,7 +45,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
         record = (await hostedApi.createCase(csrfToken, createRequestId.current)).case;
         createRequestId.current = crypto.randomUUID();
       }
-      navigate(`${mode === "demo" ? "/demo" : ""}/cases/${encodeURIComponent(record.id)}/edit`);
+      navigate(`${mode === "demo" ? "/demo" : "/app"}/cases/${encodeURIComponent(record.id)}/edit`);
     } catch (error) {
       setProblem(apiFailureMessage(error, "สร้างกรณีไม่สำเร็จ"));
     } finally {
@@ -91,7 +91,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
 }
 
 function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
-  const hrefRoot = mode === "demo" ? "/demo" : "";
+  const hrefRoot = mode === "demo" ? "/demo" : "/app";
   const destination = record.status === "submitted" ? `${hrefRoot}/cases/${record.id}/result` : `${hrefRoot}/cases/${record.id}/edit`;
   const updated = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(record.updatedAt));
   return (
