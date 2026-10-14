@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import type { ApiUser } from "../../shared/contracts.js";
 import type { AuthSession } from "../data/api.js";
-import { ApiClientError, hostedApi } from "../data/api.js";
+import { ApiClientError, hostedApi, logoutAndConfirm } from "../data/api.js";
 import type { DemoPersona } from "../data/demoRepository.js";
 import { demoUser } from "../data/demoRepository.js";
 import { DashboardPage } from "../features/cases/DashboardPage.js";
@@ -18,12 +18,32 @@ interface AppSession {
   csrfToken: string | null;
   demo: boolean;
   ready: boolean;
+  pendingLogout: LogoutIntent | null;
   setHosted: (session: AuthSession) => void;
   setDemo: (persona: DemoPersona) => void;
+  beginLogout: (accountId: string, expectedRole: ApiUser["role"], wrongRole?: boolean) => void;
+  retryPendingLogout: (fallback?: LogoutIntent) => Promise<boolean>;
   clear: () => void;
+  clearDemo: () => void;
 }
 
 const SessionContext = createContext<AppSession | null>(null);
+const pendingLogoutStorageKey = "ftc.hosted.logout.pending";
+export interface LogoutIntent { accountId: string; expectedRole: ApiUser["role"]; wrongRole?: boolean }
+
+function readLogoutIntent(): LogoutIntent | null {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(pendingLogoutStorageKey) ?? "null") as Partial<LogoutIntent> | null;
+    if (!value || typeof value.accountId !== "string" || !value.accountId || (value.expectedRole !== "taxpayer" && value.expectedRole !== "officer")) return null;
+    return { accountId: value.accountId, expectedRole: value.expectedRole, wrongRole: value.wrongRole === true };
+  } catch { return null; }
+}
+
+function persistLogoutIntent(intent: LogoutIntent | null): void {
+  if (intent) sessionStorage.setItem(pendingLogoutStorageKey, JSON.stringify(intent));
+  else sessionStorage.removeItem(pendingLogoutStorageKey);
+}
+
 export function hostedPendingDraftKey(ownerId: string, caseId: string): string {
   return `ftc.hosted.pending.${ownerId}.${caseId}`;
 }
@@ -49,6 +69,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const [demo, setIsDemo] = useState(false);
   const [ready, setReady] = useState(false);
+  const [pendingLogout, setPendingLogout] = useState<LogoutIntent | null>(readLogoutIntent);
 
   useEffect(() => {
     const persona = sessionStorage.getItem("ftc.demo.persona") as DemoPersona | null;
@@ -59,10 +80,20 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let live = true;
+    const logoutIntent = readLogoutIntent();
+    setPendingLogout(logoutIntent);
     hostedApi.session().then((session) => {
       if (live && session) {
+        if (logoutIntent && session.user.id !== logoutIntent.accountId) {
+          persistLogoutIntent(null);
+          setPendingLogout(null);
+        }
         setUser(session.user);
         setCsrfToken(session.csrfToken);
+      }
+      if (live && !session) {
+        persistLogoutIntent(null);
+        setPendingLogout(null);
       }
     }).catch(() => {
       // The login screen presents the connection error when the user chooses hosted access.
@@ -75,7 +106,10 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     csrfToken,
     demo,
     ready,
+    pendingLogout,
     setHosted: (session) => {
+      persistLogoutIntent(null);
+      setPendingLogout(null);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts(session.user.id);
       setIsDemo(false);
@@ -88,35 +122,111 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(demoUser(persona));
       setCsrfToken(null);
     },
+    beginLogout: (accountId, expectedRole, wrongRole = false) => {
+      const intent = { accountId, expectedRole, wrongRole };
+      persistLogoutIntent(intent);
+      setPendingLogout(intent);
+    },
+    retryPendingLogout: async (fallback) => {
+      const storedIntent = pendingLogout ?? readLogoutIntent();
+      const intent = fallback && storedIntent?.accountId === fallback.accountId ? storedIntent : fallback ?? storedIntent;
+      if (!intent) return false;
+      persistLogoutIntent(intent);
+      setPendingLogout(intent);
+      let activeSession: AuthSession | null;
+      try { activeSession = await hostedApi.session(); }
+      catch { return false; }
+      if (!activeSession) {
+        persistLogoutIntent(null);
+        clearPendingDrafts();
+        setPendingLogout(null);
+        setIsDemo(false);
+        setUser(null);
+        setCsrfToken(null);
+        return true;
+      }
+      if (activeSession.user.id !== intent.accountId) {
+        persistLogoutIntent(null);
+        setPendingLogout(null);
+        sessionStorage.removeItem("ftc.demo.persona");
+        clearPendingDrafts(activeSession.user.id);
+        setIsDemo(false);
+        setUser(activeSession.user);
+        setCsrfToken(activeSession.csrfToken);
+        return true;
+      }
+      sessionStorage.removeItem("ftc.demo.persona");
+      clearPendingDrafts(activeSession.user.id);
+      setIsDemo(false);
+      setUser(activeSession.user);
+      setCsrfToken(activeSession.csrfToken);
+      if (!await logoutAndConfirm(activeSession.csrfToken)) return false;
+      persistLogoutIntent(null);
+      clearPendingDrafts();
+      setPendingLogout(null);
+      setIsDemo(false);
+      setUser(null);
+      setCsrfToken(null);
+      return true;
+    },
     clear: () => {
+      persistLogoutIntent(null);
+      setPendingLogout(null);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts();
       setIsDemo(false);
       setUser(null);
       setCsrfToken(null);
     },
-  }), [user, csrfToken, demo, ready]);
+    clearDemo: () => {
+      sessionStorage.removeItem("ftc.demo.persona");
+      setIsDemo(false);
+      setUser(null);
+      setCsrfToken(null);
+    },
+  }), [user, csrfToken, demo, ready, pendingLogout]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
 function RequireRole({ role, children }: { role: ApiUser["role"]; children: React.ReactNode }) {
-  const { user, demo, csrfToken, clear, ready } = useAppSession();
+  const { user, demo, csrfToken, clear, clearDemo, beginLogout, pendingLogout, ready } = useAppSession();
   const navigate = useNavigate();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
   if (!user || user.role !== role) return <Navigate to={demo ? "/demo" : role === "officer" ? "/officer/login" : "/login"} replace />;
   const signOut = async () => {
-    if (!demo && csrfToken) {
-      try { await hostedApi.logout(csrfToken); } catch { /* Clear local identity after network failures too. */ }
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError(null);
+    try {
+      if (!demo) {
+        beginLogout(user.id, role);
+        if (!csrfToken) {
+          setSignOutError("ไม่พบโทเค็นสำหรับออกจากระบบ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองโหลดหน้าใหม่หรือเข้าสู่ระบบอีกครั้ง");
+          return;
+        }
+        if (!await logoutAndConfirm(csrfToken)) {
+          setSignOutError("เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ");
+          return;
+        }
+      }
+      if (demo) clearDemo();
+      else clear();
+      navigate("/login", { replace: true });
+    } finally {
+      setSigningOut(false);
     }
-    clear();
-    navigate("/login", { replace: true });
   };
-  return <SiteFrame user={user} demo={demo} onSignOut={signOut}>{children}</SiteFrame>;
+  const pendingLogoutError = pendingLogout?.accountId === user.id ? "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ" : null;
+  return <SiteFrame user={user} demo={demo} onSignOut={signOut} signOutError={signOutError ?? pendingLogoutError} signingOut={signingOut}>{children}</SiteFrame>;
 }
 
 function LoginRoute({ officer = false }: { officer?: boolean }) {
-  const { setHosted } = useAppSession();
-  return <LoginPage officer={officer} onLogin={setHosted} />;
+  const { setHosted, clear, user, csrfToken, demo, ready, pendingLogout, retryPendingLogout, beginLogout } = useAppSession();
+  if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
+  const activeSession = user && csrfToken && !demo ? { user, csrfToken } : null;
+  return <LoginPage officer={officer} onLogin={setHosted} onClearSession={clear} activeSession={activeSession} pendingLogout={pendingLogout} retryPendingLogout={retryPendingLogout} beginLogout={beginLogout} />;
 }
 
 function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {

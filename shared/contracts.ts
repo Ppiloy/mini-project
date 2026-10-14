@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 /** Values crossing browser, API, PostgreSQL JSON and snapshot boundaries. */
 export type DecimalString = string;
 export type IsoDate = string;
@@ -237,6 +239,25 @@ export interface ApiError {
     requestId: RequestId;
   };
 }
+
+export const validationMessageSchema: z.ZodType<ValidationMessage> = z.object({
+  code: z.string(),
+  message: z.string(),
+  path: z.array(z.union([z.string(), z.number()])).optional(),
+});
+
+export const apiErrorEnvelopeSchema: z.ZodType<ApiError> = z.object({
+  error: z.object({
+    code: z.enum([
+      "unauthenticated", "forbidden", "not_found", "conflict", "payload_too_large",
+      "unsupported_media_type", "invalid_input", "incomplete_case", "unsupported_case",
+      "rate_limited", "service_unavailable",
+    ]),
+    message: z.string(),
+    fields: z.array(validationMessageSchema).optional(),
+    requestId: z.string(),
+  }),
+});
 
 /** JSON success responses carry an explicit request ID for support and retries. */
 export interface ApiSuccess<T> {
