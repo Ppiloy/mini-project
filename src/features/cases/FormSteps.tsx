@@ -16,9 +16,11 @@ const evidenceKinds: Array<{ kind: EvidenceKind; label: string }> = [
   { kind: "foreign_income", label: "หลักฐานเงินได้ต่างประเทศ" },
   { kind: "foreign_tax", label: "หลักฐานภาษีที่ชำระในต่างประเทศ" },
   { kind: "remittance", label: "หลักฐานการนำเงินเข้าไทย" },
+  { kind: "other", label: "หลักฐานรวม / เอกสารอื่น" },
 ];
 
 function nullableText(value: string): string | null { return value === "" ? null : value; }
+function isZeroAmount(value: string | null | undefined): boolean { return value !== null && value !== undefined && /^[-+]?0(?:\.0+)?$/.test(value); }
 
 export function StepOne({ draft, onChange }: StepProps) {
   const year = draft.taxYear;
@@ -145,20 +147,24 @@ export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttac
     <div className="alert alert-info"><strong>ข้อมูลจำลองเท่านั้น</strong><span>ในโหมดสาธิตจะแสดงชื่อและชนิดไฟล์ โดยไม่ส่งไฟล์ขึ้นเซิร์ฟเวอร์หรือใช้เป็นหลักฐานจริง</span></div>
     <div className="evidence-list">
       {allItems.map(({ sourceId, sourceIndex, label }, itemIndex) => {
-        const items = attachments.filter((file) => file.sourceId === sourceId);
+        const source = sourceIndex === undefined ? null : draft.sources[sourceIndex] ?? null;
+        const items = attachments.filter((file) => sourceIndex === undefined ? file.sourceId === null : sourceId !== null && file.sourceId === sourceId);
+        const needsSourceProof = !isZeroAmount(source?.remittedIncomeAmount);
+        const checklistKinds = evidenceKinds.filter(({ kind }) => kind !== "foreign_tax" || !isZeroAmount(source?.eligibleForeignTax));
         return <article className="evidence-card" key={sourceIndex === undefined ? "thai-tax-evidence" : `source-evidence-${sourceIndex}`}>
           <div className="evidence-title"><div><h3>{label}</h3><p>ไฟล์ {items.length}/5 · รวมไม่เกิน 30 MiB ต่อกรณี</p></div><div className="evidence-upload-actions">
             {sourceIndex === undefined ? <UploadButton label="แนบหลักฐานภาษีไทย" kind="thai_tax" sourceId={null} disabled={busy || items.length >= 5} onUpload={onUpload} /> : evidenceKinds.map(({ kind, label: kindLabel }) => <UploadButton key={kind} label={`แนบ: ${kindLabel}`} kind={kind} sourceId={sourceId} sourceIndex={sourceIndex} disabled={busy || items.length >= 5} onUpload={onUpload} />)}
           </div></div>
           <ul className="file-list">{items.map((item) => <li key={item.id}><span className="file-icon" aria-hidden="true">{item.mediaType.includes("pdf") ? "PDF" : "IMG"}</span><span className="file-name"><strong>{item.displayName}</strong><small>{item.kind.replaceAll("_", " ")} · {item.mediaType} · {formatBytes(item.byteSize)} · {item.status === "ready" ? "พร้อมใช้งาน" : item.status === "pending" ? "กำลังตรวจสอบ" : "อัปโหลดไม่สำเร็จ"}</small></span><button className="button button-quiet button-small" disabled={item.status !== "ready"} onClick={() => void onDownloadAttachment(item)}>ดาวน์โหลด</button><button className="button button-danger-quiet button-small" disabled={busy} onClick={() => void onDeleteAttachment(item.id)}>ลบ</button></li>)}</ul>
           {items.length === 0 && <p className="empty-evidence">ยังไม่มีไฟล์แนบ</p>}
-          {sourceId !== null && <div className="evidence-checklist"><strong>รายการหลักฐานที่ควรมี</strong><div className="checklist-items">{evidenceKinds.map(({ kind, label: kindLabel }) => <label key={kind}><input type="checkbox" checked={draft.sources[itemIndex - 1]?.evidenceChecklist.includes(kind) ?? false} onChange={(event) => {
+          {sourceIndex !== undefined && needsSourceProof && <div className="evidence-checklist"><strong>รายการหลักฐานที่ควรมี</strong><div className="checklist-items">{checklistKinds.map(({ kind, label: kindLabel }) => <label key={kind}><input type="checkbox" checked={source?.evidenceChecklist.includes(kind) ?? false} onChange={(event) => {
             const sourceIndex = itemIndex - 1;
             const source = draft.sources[sourceIndex];
             if (!source) return;
             const evidenceChecklist = event.target.checked ? [...new Set([...source.evidenceChecklist, kind])] : source.evidenceChecklist.filter((value) => value !== kind);
             onChange({ ...draft, sources: draft.sources.map((item, index) => index === sourceIndex ? { ...item, evidenceChecklist } : item) });
           }} />{kindLabel}</label>)}</div></div>}
+          {sourceIndex !== undefined && !needsSourceProof && <p className="field-hint">F = 0: ระบบไม่กำหนดให้แนบหลักฐานแหล่งเงินได้สำหรับยอดที่ไม่ได้นำเข้าไทย</p>}
         </article>;
       })}
     </div>

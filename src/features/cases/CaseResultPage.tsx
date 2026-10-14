@@ -82,7 +82,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
         const messages = validateSubmission(record.draft, snapshot.result, {
           currentRevision: record.draft.revision,
           previewRevision: snapshot.revision,
-          readyEvidence: attachments,
+          attachments,
         });
         if (messages.length) { setSubmitProblems(messages.map((item) => item.message)); return; }
         const frozenSnapshot = saveDemoSnapshot({ ...snapshot, id: `demo-submitted-${crypto.randomUUID()}`, kind: "submitted", createdAt: new Date().toISOString() });

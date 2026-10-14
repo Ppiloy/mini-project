@@ -12,6 +12,13 @@ async function advanceToReview(page: import("@playwright/test").Page) {
   }
 }
 
+async function openPartialRemittance(page: import("@playwright/test").Page) {
+  await enterTaxpayerDemo(page);
+  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+}
+
 test("fixture partial-remittance example calculates, saves evidence, submits once, and reaches the officer report", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toBeVisible();
@@ -67,6 +74,46 @@ test("editing Thai tax invalidates its confirmation and prevents a ready preview
   await expect(page.getByText("ข้อมูลรายได้ อัตราแลกเปลี่ยน หรือที่มาของภาษีไทยเปลี่ยนแล้ว กรุณายืนยันภาษีไทยอีกครั้ง")).toBeVisible();
   await expect(page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" })).toBeDisabled();
   await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toHaveCount(0);
+});
+
+test("zero eligible tax permits one combined source file with income and remittance checklist only", async ({ page }) => {
+  await openPartialRemittance(page);
+  await page.getByLabel("E · ภาษีที่สมมติว่าเข้าเกณฑ์").fill("0.00");
+  await page.getByLabel("เหตุผลของสมมติฐาน E").fill("ในตัวอย่างนี้ไม่ได้ขอใช้เครดิตภาษีต่างประเทศ");
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย L" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยัน E และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("checkbox", { name: "หลักฐานเงินได้ต่างประเทศ" }).check();
+  await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
+  await expect(page.getByRole("checkbox", { name: "หลักฐานภาษีที่ชำระในต่างประเทศ" })).toHaveCount(0);
+
+  await page.getByLabel("แนบ: หลักฐานรวม / เอกสารอื่น").setInputFiles({ name: "รายงานรวม.pdf", mimeType: "application/pdf", buffer: Buffer.from("combined source evidence") });
+  await expect(page.getByText("รายงานรวม.pdf")).toBeVisible();
+  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
+  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+});
+
+test("zero remittance needs no source evidence checklist", async ({ page }) => {
+  await openPartialRemittance(page);
+  await page.getByLabel("F · ส่วนเงินได้ที่นำเข้าไทย").fill("0");
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await expect(page.getByText("F = 0: ระบบไม่กำหนดให้แนบหลักฐานแหล่งเงินได้สำหรับยอดที่ไม่ได้นำเข้าไทย")).toBeVisible();
+  await expect(page.locator(".evidence-checklist")).toHaveCount(0);
+});
+
+test("a transfer total that conflicts with F is presented for review, not as a ready credit", async ({ page }) => {
+  await openPartialRemittance(page);
+  await page.getByLabel("ยอดโอนทั้งหมด (ข้อมูลประกอบ)").fill("20000");
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
+  await expect(page.getByText("ยอดโอนรวมไม่ตรงกับเงินได้ที่ระบุว่าเป็นรายได้ล้วน จึงอาจมีเงินต้นหรือรายการอื่นปะปน")).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" })).toBeDisabled();
 });
 
 test("unsupported tax year stays visible and does not produce an ordinary credit result", async ({ page }) => {

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, EvidenceKind, FtcCaseDraft, FtcCaseRecord, FrozenEvidenceReference } from "../../../shared/contracts.js";
-import { calculateFTC } from "../../../shared/calculator.js";
 import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, sourceEligibilityFingerprint, stripStaleConfirmations, taxInputFingerprint } from "../../../shared/confirmations.js";
 import { draftSchema } from "../../../shared/draft.js";
 import { DEMO_POLICY } from "../../../shared/policy.js";
@@ -325,9 +324,8 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     try {
       let snapshot: CalculationSnapshot;
       if (mode === "demo") {
-        const result = calculateFTC(saved.draft, DEMO_POLICY);
         const evidence: FrozenEvidenceReference[] = listDemoAttachments(record.id).filter((item) => item.status === "ready").map(({ id: evidenceId, sourceId: evidenceSourceId, kind: evidenceKind, displayName, mediaType, byteSize, sha256 }) => ({ id: evidenceId, sourceId: evidenceSourceId, kind: evidenceKind, displayName, mediaType, byteSize, sha256 }));
-        snapshot = createCalculationSnapshot({ id: `demo-snapshot-${crypto.randomUUID()}`, caseId: record.id, revision: saved.draft.revision, kind: "preview", inputs: saved.draft, result, evidence, createdAt: new Date().toISOString() });
+        snapshot = createCalculationSnapshot({ id: `demo-snapshot-${crypto.randomUUID()}`, caseId: record.id, revision: saved.draft.revision, kind: "preview", inputs: saved.draft, evidence, createdAt: new Date().toISOString(), policy: DEMO_POLICY });
         saveDemoSnapshot(snapshot);
       } else {
         if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
