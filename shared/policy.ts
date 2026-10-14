@@ -13,7 +13,9 @@ export const SYNTHETIC_USD_PER_100_FX_REFERENCE: ExchangeRateReference = Object.
   educationalAssumption: "Deliberately synthetic quote to demonstrate conversion per 100 units; not a historical market rate.",
 });
 
-export interface DemoPolicy extends PolicyReference {
+export interface DemoPolicy extends Omit<PolicyReference, "sourceUrls" | "assumptions"> {
+  readonly sourceUrls: readonly string[];
+  readonly assumptions: readonly string[];
   readonly engineVersion: string;
   readonly supportedCountries: Readonly<Record<string, string>>;
   readonly supportedIncomeTypes: Readonly<Record<string, readonly string[]>>;
@@ -32,20 +34,20 @@ export const DEMO_POLICY: DemoPolicy = Object.freeze({
   taxYear: 2025,
   effectiveFrom: "2025-01-01",
   effectiveTo: "2025-12-31",
-  sourceUrls: [
+  sourceUrls: Object.freeze([
     "https://www.rd.go.th/fileadmin/user_upload/porphor/GuideTaxFromAbroad_TH.pdf",
     "https://www.rd.go.th/english/2526.html",
     "https://www.rd.go.th/2607.html",
-  ],
+  ]),
   reviewedAt: "2026-10-14",
-  assumptions: [
+  assumptions: Object.freeze([
     "Educational worksheet demonstration only; not a tax assessment or legal eligibility opinion.",
     "Tax paid abroad is assumed eligible only when the user confirms E and records a rationale.",
     "Same-year earned income and remittance; one remittance per source; no cumulative prior-year tracking.",
     "A source supports salary under 40(1) or the demonstrated dividend subtype `dividend` under 40(4).",
     "Prepared THB worksheet inputs are already expressed in THB; original-currency D/E/F share one explicit FX quote.",
     "All fixture FX values are synthetic educational values unless the fixture itself identifies a checked source row.",
-  ],
+  ]),
   roundingPolicy: "40 significant digits; sum unrounded country credits, then round total half-up to 2 decimals; display each country at 2 decimals and reconcile the difference.",
   engineVersion: "ftc-engine-v1",
   supportedCountries: Object.freeze({ VN: "Vietnam", CN: "China" }),
