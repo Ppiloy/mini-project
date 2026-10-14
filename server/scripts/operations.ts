@@ -853,7 +853,7 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
   if (!prior.rows[0]) {
     const current = await readSnapshotTables(pool);
     if (Object.entries(current).some(([name, rows]) => !excludedBackupTables.has(name) && rows.length > 0)) throw new Error("Restore target is not blank; use a newly created disposable local database and store.");
-    if ((await blobs.list(marker, "cases/")).length) throw new Error("Restore target Blob store is not empty; create a fresh database-derived local store.");
+    if ((await blobs.list(marker, "")).length) throw new Error("Restore target Blob store is not empty; create a fresh database-derived local store.");
   }
   const manifestId = digest({ operationId, backupSha256: backupSha, target: { markerId: marker.id, databaseFingerprint: marker.databaseFingerprint, store: marker.storageStore, region: marker.storageRegion },
     tables: artifact.manifest.tables, objects: artifact.blobs.map(({ key, sha256 }) => ({ key, sha256 })) });
@@ -884,7 +884,7 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
         const expected = Buffer.from(object.bytesBase64, "base64"); const current = await blobs.get(marker, object.key);
         if (!current || Buffer.compare(Buffer.from(current), expected) !== 0) throw new Error("A restored Blob changed; the completed restore is not equivalent.");
       }
-      const keys = (await blobs.list(marker, "cases/")).map((item) => item.key).sort();
+      const keys = (await blobs.list(marker, "")).map((item) => item.key).sort();
       if (canonical(keys) !== canonical(artifact.blobs.map((item) => item.key).sort())) throw new Error("Completed restore store has extra or missing objects.");
       verifyRestoredRelationalSnapshot(await readSnapshotTables(pool), artifact, marker);
       return { status: "replayed", manifestId, markerId: marker.id, credentialPath };
@@ -917,7 +917,7 @@ export async function runRestoreRehearsalCommand(args: string[], dependencies: O
     const verified = await blobs.get(marker, object.key);
     if (!verified || Buffer.compare(Buffer.from(verified), bytes) !== 0) throw new Error("Restored Blob failed strong read-back verification.");
   }
-  const copiedKeys = (await blobs.list(marker, "cases/")).map((item) => item.key).sort();
+  const copiedKeys = (await blobs.list(marker, "")).map((item) => item.key).sort();
   const expectedKeys = artifact.blobs.map((item) => item.key).sort();
   if (canonical(copiedKeys) !== canonical(expectedKeys)) throw new Error("Fresh restore store contains extra or missing case objects; the authentication gate remains closed.");
   const hashes = new Map(await Promise.all(credentials.credentials.map(async (item) => [item.loginName, await hashPassword(item.password)] as const)));

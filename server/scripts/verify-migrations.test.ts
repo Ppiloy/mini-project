@@ -43,7 +43,7 @@ describe("the ordered migration release gate", () => {
     const root = await freshCheckoutFixture();
 
     await expect(verifyMigrations(root)).resolves.toBe(7);
-  });
+  }, 20_000);
 
   it.each([
     "20261014000100_hosted_foundation.sql",

@@ -113,7 +113,7 @@ describe("authenticated Netlify CLI Blob adapter", () => {
   });
 });
 
-async function cleanupFixture(includeOfficer = false) {
+async function cleanupFixture(includeOfficer = false, readyStorageKey?: string) {
   const database = new PGlite();
   activeDatabases.push(database);
   for (const name of (await readdir("netlify/database/migrations")).filter((entry) => entry.endsWith(".sql")).sort()) {
@@ -143,7 +143,7 @@ async function cleanupFixture(includeOfficer = false) {
   await pool.query("INSERT INTO foreign_income_sources(id,case_id,position,source_data,gross_income_amount) VALUES ('35000000-0000-4000-8000-000000000001',$1,0,'{}'::jsonb,123.450000000123)", [caseId]);
   const readyBytes = Buffer.from("%PDF-1.7\nimmutable ready evidence\n%%EOF", "ascii");
   const deletedBytes = Buffer.from("%PDF-1.7\ntombstone evidence\n%%EOF", "ascii");
-  const readyKey = `cases/${caseId}/${readyId}`;
+  const readyKey = readyStorageKey ?? `cases/${caseId}/${readyId}`;
   const deletedKey = `cases/${caseId}/${deletedId}`;
   const insertAttachment = async (id: string, key: string, bytes: Buffer) => {
     await pool.query(
@@ -422,7 +422,9 @@ describe("coordinated backup command", () => {
 
 describe("fresh local restore rehearsal", () => {
   it("restores facts and every object into a marker-derived isolated store, revokes sessions, and gates login until ready", async () => {
-    const source = await cleanupFixture(true);
+    const source = await cleanupFixture(true, "legacy/evidence-key");
+    const unrelatedBytes = Buffer.from("fictional unrelated retained Blob", "ascii");
+    await source.blobs.put(source.marker, "unrelated/orphan", unrelatedBytes);
     const dir = await mkdtemp(join(tmpdir(), "ftc-restore-")); temporaryDirectories.push(dir);
     const backupPath = join(dir, "source-backup.json");
     const manifestPath = (command: string, id: string) => join(dir, `review-${command}-${id}.json`);
@@ -457,7 +459,14 @@ describe("fresh local restore rehearsal", () => {
     expect(restorePlan.status).toBe("planned");
     expect((await pool.query("SELECT id FROM app_users")).rows).toHaveLength(0);
     expect((await pool.query("SELECT environment_marker_id FROM operator_environment_gates")).rows).toHaveLength(0);
-    expect(await blobs.list(marker, "cases/")).toEqual([]);
+    expect(await blobs.list(marker, "")).toEqual([]);
+    await blobs.put(marker, "unexpected/foreign-object", Buffer.from("leave target untouched", "ascii"));
+    await expect(runRestoreRehearsalCommand([...baseArgs, "--confirm", restorePlan.manifestId!], deps))
+      .rejects.toThrow(/Blob store is not empty/);
+    expect((await pool.query("SELECT id FROM app_users")).rows).toHaveLength(0);
+    expect((await pool.query("SELECT environment_marker_id FROM operator_environment_gates")).rows).toHaveLength(0);
+    expect(await blobs.list(marker, "")).toEqual([{ key: "unexpected/foreign-object", etag: "etag-unexpected/foreign-object" }]);
+    await blobs.delete(marker, "unexpected/foreign-object");
     const args = [...baseArgs, "--confirm", restorePlan.manifestId!];
     const restored = await runRestoreRehearsalCommand(args, deps);
     expect(restored.status).toBe("restored");
@@ -466,6 +475,7 @@ describe("fresh local restore rehearsal", () => {
     expect(restoredCase).toMatchObject({ ...sourceCase, environment_marker_id: marker.id });
     expect((await pool.query("SELECT gross_income_amount::text FROM foreign_income_sources WHERE case_id=$1", [source.caseId])).rows[0]?.gross_income_amount).toBe("123.450000000123");
     expect(Buffer.from((await blobs.get(marker, source.readyKey))!)).toEqual(source.readyBytes);
+    expect(Buffer.from((await blobs.get(marker, "unrelated/orphan"))!)).toEqual(unrelatedBytes);
     expect((await pool.query("SELECT count(*)::int count FROM user_sessions")).rows[0]?.count).toBe(0);
     const credentials = JSON.parse(await readFile(credentialsPath, "utf8")) as { credentials: { loginName: string; password: string }[] };
     const loginName = credentials.credentials[0]!.loginName; const password = credentials.credentials.find((item) => item.loginName === loginName)!.password;
@@ -486,6 +496,7 @@ describe("fresh local restore rehearsal", () => {
     await expect(runRestoreRehearsalCommand(args, deps)).rejects.toThrow(/relational snapshot differs/);
     await pool.query("UPDATE app_users SET display_name=$2 WHERE login_name=$1", [loginName, originalDisplayName]);
     expect((await runRestoreRehearsalCommand(args, deps)).status).toBe("replayed");
+    expect((await blobs.list(marker, "")).map((item) => item.key).sort()).toEqual([source.readyKey, source.deletedKey, "unrelated/orphan"].sort());
     expect(output.join(" ")).not.toContain("fixture-password-01");
     await rm(credentialsPath, { force: true });
     await expect(runRestoreRehearsalCommand(args, deps)).rejects.toThrow(/credential file is missing/);
