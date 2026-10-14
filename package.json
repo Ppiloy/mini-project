@@ -15,7 +15,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "migrations:verify": "tsx server/scripts/verify-migrations.ts",
+    "demo:seed": "tsx server/scripts/bootstrap.ts seed",
+    "demo:rotate": "tsx server/scripts/bootstrap.ts rotate",
+    "verify:release": "npm run typecheck && npm test && npm run migrations:verify && npm run build"
   },
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",
