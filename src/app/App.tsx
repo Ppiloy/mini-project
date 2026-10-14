@@ -21,6 +21,9 @@ interface AppSession {
   pendingLogout: LogoutIntent | null;
   pendingLogoutErrors: unknown[];
   sessionLookupError: unknown | null;
+  sessionLookupStatus: "unverified" | "active" | null;
+  refreshHostedSession: () => Promise<void>;
+  checkingHostedSession: boolean;
   setHosted: (session: AuthSession) => void;
   setDemo: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
   beginLogout: (accountId: string, expectedRole: ApiUser["role"], wrongRole?: boolean) => void;
@@ -32,6 +35,7 @@ interface AppSession {
 const SessionContext = createContext<AppSession | null>(null);
 const pendingLogoutStorageKey = "ftc.hosted.logout.pending";
 const unverifiedHostedSessionStorageKey = "ftc.hosted.session.unverified";
+type HostedSessionLookupStatus = "unverified" | "active" | null;
 export interface LogoutIntent { accountId: string; expectedRole: ApiUser["role"]; wrongRole?: boolean }
 
 function readLogoutIntent(): LogoutIntent | null {
@@ -75,11 +79,17 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   const [pendingLogout, setPendingLogout] = useState<LogoutIntent | null>(readLogoutIntent);
   const [pendingLogoutErrors, setPendingLogoutErrors] = useState<unknown[]>([]);
   const [sessionLookupError, setSessionLookupError] = useState<unknown | null>(null);
+  const [sessionLookupStatus, setSessionLookupStatus] = useState<HostedSessionLookupStatus>(null);
+  const [checkingHostedSession, setCheckingHostedSession] = useState(false);
 
   useEffect(() => {
     const persona = sessionStorage.getItem("ftc.demo.persona") as DemoPersona | null;
     if (persona === "taxpayer" || persona === "officer") {
-      if (sessionStorage.getItem(unverifiedHostedSessionStorageKey) === "1") {
+      const storedLookupStatus = sessionStorage.getItem(unverifiedHostedSessionStorageKey);
+      if (storedLookupStatus === "active") {
+        setSessionLookupStatus("active");
+      } else if (storedLookupStatus === "unverified" || storedLookupStatus === "1") {
+        setSessionLookupStatus("unverified");
         setSessionLookupError(new Error("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว เซสชันออนไลน์เดิมอาจยังเปิดอยู่"));
       }
       setUser(demoUser(persona));
@@ -93,6 +103,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     hostedApi.session().then((session) => {
       if (live) {
         setSessionLookupError(null);
+        setSessionLookupStatus(null);
         sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       }
       if (live && session) {
@@ -110,7 +121,10 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         setPendingLogoutErrors([]);
       }
     }).catch((error: unknown) => {
-      if (live) setSessionLookupError(error);
+      if (live) {
+        setSessionLookupError(error);
+        setSessionLookupStatus("unverified");
+      }
       if (live && logoutIntent) setPendingLogoutErrors([error]);
     }).finally(() => { if (live) setReady(true); });
     return () => { live = false; };
@@ -124,11 +138,14 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     pendingLogout,
     pendingLogoutErrors,
     sessionLookupError,
+    sessionLookupStatus,
+    checkingHostedSession,
     setHosted: (session) => {
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
       setSessionLookupError(null);
+      setSessionLookupStatus(null);
       sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts(session.user.id);
@@ -154,7 +171,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
-      if (sessionLookupError) sessionStorage.setItem(unverifiedHostedSessionStorageKey, "1");
+      if (sessionLookupStatus) sessionStorage.setItem(unverifiedHostedSessionStorageKey, sessionLookupStatus);
       else sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       clearPendingDrafts();
       sessionStorage.setItem("ftc.demo.persona", persona);
@@ -227,6 +244,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setPendingLogout(null);
       setPendingLogoutErrors([]);
       setSessionLookupError(null);
+      setSessionLookupStatus(null);
       sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts();
@@ -240,12 +258,40 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
       setCsrfToken(null);
     },
-  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError]);
+    refreshHostedSession: async () => {
+      if (checkingHostedSession) return;
+      setCheckingHostedSession(true);
+      try {
+        const session = await hostedApi.session();
+        setSessionLookupError(null);
+        if (session) {
+          setSessionLookupStatus("active");
+          sessionStorage.setItem(unverifiedHostedSessionStorageKey, "active");
+        } else {
+          setSessionLookupStatus(null);
+          sessionStorage.removeItem(unverifiedHostedSessionStorageKey);
+        }
+      } catch (error) {
+        setSessionLookupError(error);
+        setSessionLookupStatus("unverified");
+        sessionStorage.setItem(unverifiedHostedSessionStorageKey, "unverified");
+      } finally {
+        setCheckingHostedSession(false);
+      }
+    },
+  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError, sessionLookupStatus, checkingHostedSession]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
+function hostedSessionNotice(status: HostedSessionLookupStatus, error: unknown | null): string | null {
+  if (status === "active") return "ตรวจพบว่าเซสชันออนไลน์เดิมยังเปิดอยู่ ข้อมูลที่เห็นในหน้านี้ยังเป็นข้อมูลจำลองและแยกจากบัญชีออนไลน์ หากต้องการใช้บัญชีเดิม ให้เข้าสู่ระบบออนไลน์และออกจากระบบให้เรียบร้อย";
+  if (status === "unverified") return apiFailureMessages(error ? [error] : [], "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว โหมดสาธิตยังใช้ข้อมูลในอุปกรณ์นี้ได้ แต่เซสชันออนไลน์เดิมอาจยังเปิดอยู่ โปรดตรวจสอบสถานะก่อนใช้บัญชีออนไลน์");
+  return null;
+}
+
 function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "demo" | "hosted"; children: React.ReactNode }) {
-  const { user, demo, csrfToken, clear, clearDemo, beginLogout, pendingLogout, pendingLogoutErrors, ready } = useAppSession();
+  const { user, demo, csrfToken, clear, clearDemo, beginLogout, pendingLogout, pendingLogoutErrors, ready,
+    sessionLookupError, sessionLookupStatus, refreshHostedSession, checkingHostedSession } = useAppSession();
   const navigate = useNavigate();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
@@ -284,7 +330,9 @@ function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "d
   const pendingLogoutError = pendingLogout?.accountId === user.id
     ? apiFailureMessages(pendingLogoutErrors, "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ")
     : null;
-  return <SiteFrame user={user} demo={demo} onSignOut={signOut} signOutError={signOutError ?? pendingLogoutError} signingOut={signingOut}>{children}</SiteFrame>;
+  return <SiteFrame user={user} demo={demo} onSignOut={signOut} signOutError={signOutError ?? pendingLogoutError} signingOut={signingOut}
+    hostedSessionNotice={demo ? hostedSessionNotice(sessionLookupStatus, sessionLookupError) : null}
+    onRefreshHostedSession={refreshHostedSession} checkingHostedSession={checkingHostedSession}>{children}</SiteFrame>;
 }
 
 function LoginRoute({ officer = false }: { officer?: boolean }) {
@@ -295,11 +343,13 @@ function LoginRoute({ officer = false }: { officer?: boolean }) {
 }
 
 function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {
-  const { user, demo, ready } = useAppSession();
+  const { user, demo, ready, sessionLookupError, sessionLookupStatus, refreshHostedSession, checkingHostedSession } = useAppSession();
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
   if (!user) return <Navigate to={mode === "demo" ? "/demo" : "/login"} replace />;
   if (demo !== (mode === "demo")) return <Navigate to={demo ? (user.role === "officer" ? "/demo/officer" : "/demo/app") : (user.role === "officer" ? "/officer" : "/app")} replace />;
-  return <SiteFrame user={user} demo={demo}><ReportPage mode={mode} /></SiteFrame>;
+  return <SiteFrame user={user} demo={demo}
+    hostedSessionNotice={demo ? hostedSessionNotice(sessionLookupStatus, sessionLookupError) : null}
+    onRefreshHostedSession={refreshHostedSession} checkingHostedSession={checkingHostedSession}><ReportPage mode={mode} /></SiteFrame>;
 }
 
 function AppRoutes() {
@@ -327,9 +377,10 @@ function AppRoutes() {
 }
 
 function DemoEntryRoute() {
-  const { ready, setDemo, sessionLookupError } = useAppSession();
+  const { ready, setDemo, sessionLookupError, sessionLookupStatus, refreshHostedSession, checkingHostedSession } = useAppSession();
   if (!ready) return <main className="page-wrap"><div className="loading-card" role="status">กำลังตรวจสอบเซสชัน…</div></main>;
-  return <DemoEntryPage onChoose={setDemo} sessionLookupError={sessionLookupError} />;
+  return <DemoEntryPage onChoose={setDemo} sessionNotice={hostedSessionNotice(sessionLookupStatus, sessionLookupError)}
+    onRefreshHostedSession={refreshHostedSession} checkingHostedSession={checkingHostedSession} />;
 }
 
 export function App() {

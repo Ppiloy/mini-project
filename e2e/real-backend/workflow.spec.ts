@@ -422,7 +422,7 @@ test("offline fixture fallback discloses that an existing hosted session could n
   let offlineContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   try {
     const signedInPage = await signedInContext.newPage();
-    await login(signedInPage, credential);
+    const signedInSession = await login(signedInPage, credential);
     offlineContext = await browser.newContext({ storageState: await signedInContext.storageState() });
     const page = await offlineContext.newPage();
     await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"));
@@ -435,12 +435,28 @@ test("offline fixture fallback discloses that an existing hosted session could n
     await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
     await expect(page).toHaveURL(/\/demo\/app$/);
     await expect(page.locator(".mode-tag")).toBeVisible();
+    const persistentWarning = page.getByRole("alert");
+    await expect(persistentWarning).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
     await page.reload();
     await expect(page.locator(".mode-tag")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
+    await page.goto(`/demo/reports/${crypto.randomUUID()}`);
+    await expect(page.getByRole("alert").filter({ hasText: "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว" })).toBeVisible();
     await page.goto("/demo");
+    await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
+    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
+    await expect(page).toHaveURL(/\/demo\/officer$/);
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
     await page.unroute("**/api/auth/session");
     expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+    await page.getByRole("button", { name: "ตรวจสอบสถานะออนไลน์" }).click();
+    await expect(page.getByRole("alert")).toContainText("ตรวจพบว่าเซสชันออนไลน์เดิมยังเปิดอยู่");
+    await page.reload();
+    await expect(page.getByRole("alert")).toContainText("ตรวจพบว่าเซสชันออนไลน์เดิมยังเปิดอยู่");
+    const endedOnlineSession = await browserApi(page, "/api/auth/logout", { method: "POST", csrfToken: signedInSession.csrfToken });
+    expect(endedOnlineSession.status).toBe(200);
+    await page.getByRole("button", { name: "ตรวจสอบสถานะออนไลน์" }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   } finally {
     await offlineContext?.close();
     await signedInContext.close();

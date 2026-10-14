@@ -123,9 +123,11 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
   );
 }
 
-export function DemoEntryPage({ onChoose, sessionLookupError }: {
+export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession, checkingHostedSession }: {
   onChoose: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
-  sessionLookupError: unknown | null;
+  sessionNotice: string | null;
+  onRefreshHostedSession: () => Promise<void>;
+  checkingHostedSession: boolean;
 }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
@@ -154,7 +156,13 @@ export function DemoEntryPage({ onChoose, sessionLookupError }: {
         <h1>สาธิตระบบต้นแบบ</h1>
         <p className="muted">เลือกบทบาทสำหรับข้อมูลสมมติ โหมดนี้ใช้เครื่องคำนวณเดียวกับแอปและจำลองการบันทึกกับเอกสารในอุปกรณ์นี้</p>
         <div className="alert alert-info"><strong>ข้อมูลในโหมดสาธิตแยกจากระบบออนไลน์</strong><span>ไม่มีการใช้รหัสผ่าน และไม่เชื่อมต่อกับบัญชีหรือคิวที่บันทึกไว้บนเซิร์ฟเวอร์</span></div>
-        {Boolean(sessionLookupError) && <div className="alert alert-error" role="alert">{apiFailureMessages([sessionLookupError], "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว โหมดสาธิตยังใช้ข้อมูลในอุปกรณ์นี้ได้ แต่เซสชันออนไลน์เดิมอาจยังเปิดอยู่ โปรดกลับมาเชื่อมต่อและตรวจสอบเซสชันก่อนใช้บัญชีออนไลน์")}</div>}
+        {sessionNotice && <div className="alert alert-error" role="alert">
+          <span>{sessionNotice}</span>
+          <div className="form-actions-right">
+            <button className="button button-secondary button-small" onClick={() => void onRefreshHostedSession()} disabled={checkingHostedSession}>{checkingHostedSession ? "กำลังตรวจสอบ…" : "ตรวจสอบสถานะออนไลน์"}</button>
+            <a className="button button-quiet button-small" href="/login">เข้าสู่ระบบออนไลน์</a>
+          </div>
+        </div>}
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         <div className="demo-role-list">
           <button className="role-card" onClick={() => void select("taxpayer")} disabled={busy}>
