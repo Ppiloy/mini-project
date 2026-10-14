@@ -6,7 +6,7 @@ const session = { user, csrfToken: "csrf-logout-test" };
 async function installHostedDashboard(page: import("@playwright/test").Page, isAuthenticated: () => boolean, onLogout: () => { status: number; body: object }) {
   await page.route("**/api/auth/session", (route) => {
     if (isAuthenticated()) return route.fulfill({ json: { data: session, requestId: "session-active" } });
-    return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "session-anonymous" } } });
+    return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "session-anonymous", fields: [{ code: "session", message: "expired", path: ["auth", 0] }] } } });
   });
   await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
   await page.route("**/api/auth/logout", async (route) => {
@@ -41,7 +41,7 @@ test("a failed response followed by anonymous session confirmation completes log
   await page.route("**/api/auth/session", (route) => {
     sessionCalls += 1;
     if (authenticated) return route.fulfill({ json: { data: session, requestId: "session-active" } });
-    return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "session-anonymous" } } });
+    return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "session-anonymous", fields: [{ code: "session", message: "expired", path: ["auth", 0] }] } } });
   });
   await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
   await page.route("**/api/auth/logout", async (route) => {
@@ -78,6 +78,7 @@ test("an unavailable session check keeps logout visibly unresolved", async ({ pa
 for (const invalid401 of [
   { name: "an HTML access page", contentType: "text/html", body: "<html><body>Access denied</body></html>" },
   { name: "an unauthenticated envelope without request ID", json: { error: { code: "unauthenticated", message: "Session ended" } } },
+  { name: "an unauthenticated envelope with malformed validation fields", json: { error: { code: "unauthenticated", message: "Session ended", requestId: "req-malformed-fields", fields: [{ message: 17, path: "not-an-array" }] } } },
   { name: "a 401 envelope with the wrong code", json: { error: { code: "forbidden", message: "Not allowed", requestId: "wrong-code" } } },
 ]) {
   test(`logout recovery rejects ${invalid401.name} as proof of anonymity`, async ({ page }) => {
@@ -98,6 +99,42 @@ for (const invalid401 of [
       logoutCalls += 1;
       if (logoutCalls === 1) return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Logout unavailable", requestId: "logout-503" } } });
       authenticated = false;
+      return route.fulfill({ json: { data: { loggedOut: true }, requestId: "logout-retry" } });
+    });
+
+    await page.goto("/app");
+    await page.getByRole("button", { name: "ออกจากระบบ" }).click();
+    await expect(page).toHaveURL(/\/app$/);
+    await expect(page.getByRole("alert").filter({ hasText: "ระบบอาจยังเปิดเซสชันนี้อยู่" })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"))).toContain(user.id);
+
+    await page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" }).click();
+    await expect(page).toHaveURL(/\/login$/);
+    expect(logoutCalls).toBe(2);
+  });
+}
+
+test("a malformed successful session response does not authenticate a private user", async ({ page }) => {
+  await page.route("**/api/auth/session", (route) => route.fulfill({ json: { data: { user: { ...user }, csrfToken: 17 }, requestId: "malformed-session" } }));
+  await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
+
+  await page.goto("/app");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "เข้าสู่ระบบ" })).toBeVisible();
+});
+
+for (const malformedLogoutSuccess of [
+  { name: "loggedOut false", json: { data: { loggedOut: false }, requestId: "logout-false" } },
+  { name: "missing response request ID", json: { data: { loggedOut: true } } },
+]) {
+  test(`a malformed logout success (${malformedLogoutSuccess.name}) remains unresolved`, async ({ page }) => {
+    let logoutCalls = 0;
+    await page.route("**/api/auth/session", (route) => route.fulfill({ json: { data: session, requestId: "active-session" } }));
+    await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
+    await page.route("**/api/auth/logout", async (route) => {
+      logoutCalls += 1;
+      if (logoutCalls === 1) return route.fulfill({ json: malformedLogoutSuccess.json });
       return route.fulfill({ json: { data: { loggedOut: true }, requestId: "logout-retry" } });
     });
 

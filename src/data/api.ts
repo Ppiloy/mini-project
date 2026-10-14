@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { apiErrorEnvelopeSchema } from "../../shared/contracts.js";
 import type {
   ApiError,
   ApiSuccess,
@@ -53,53 +55,71 @@ export interface OfficerCaseDetail {
   auditEvents: Array<{ event: string; actor: string; occurredAt: string }>;
 }
 
-async function request<T>(path: string, init: RequestInit = {}, csrfToken?: string): Promise<T> {
+const authSessionSchema: z.ZodType<AuthSession> = z.object({
+  user: z.object({
+    id: z.string(),
+    loginName: z.string(),
+    displayName: z.string(),
+    role: z.enum(["taxpayer", "officer"]),
+    maskedReference: z.string().nullable(),
+  }),
+  csrfToken: z.string(),
+});
+
+const authSessionEnvelopeSchema: z.ZodType<ApiSuccess<AuthSession>> = z.object({ data: authSessionSchema, requestId: z.string() });
+const logoutSuccessEnvelopeSchema: z.ZodType<ApiSuccess<{ loggedOut: true }>> = z.object({ data: z.object({ loggedOut: z.literal(true) }), requestId: z.string() });
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  csrfToken?: string,
+  successSchema?: z.ZodType<ApiSuccess<T>>,
+): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
   const response = await fetch(path, { ...init, headers, credentials: "include", cache: "no-store" });
-  const body = (await response.json().catch(() => null)) as ApiSuccess<T> | ApiError | null;
+  const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    const problem = body && typeof body === "object" && "error" in body ? body.error : undefined;
+    const parsedError = apiErrorEnvelopeSchema.safeParse(body);
+    const problem = parsedError.success ? parsedError.data.error : undefined;
     throw new ApiClientError(
       response.status,
       problem?.code ?? "service_unavailable",
       problem?.message ?? "ไม่สามารถเชื่อมต่อระบบได้ กรุณาลองอีกครั้ง",
       problem?.fields,
       problem?.requestId,
-      isAuthoritativeUnauthenticatedEnvelope(response, body),
+      response.status === 401 && isJsonResponse(response) && problem?.code === "unauthenticated",
     );
   }
-  if (!body || !("data" in body)) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ");
-  return body.data;
+  if (successSchema) {
+    const parsedSuccess = successSchema.safeParse(body);
+    if (!parsedSuccess.success) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ");
+    return parsedSuccess.data.data;
+  }
+  if (!body || typeof body !== "object" || !("data" in body)) throw new ApiClientError(response.status, "invalid_response", "ระบบส่งข้อมูลกลับมาไม่ครบ");
+  return body.data as T;
 }
 
-function isAuthoritativeUnauthenticatedEnvelope(response: Response, body: unknown): boolean {
+function isJsonResponse(response: Response): boolean {
   const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  const isJson = contentType === "application/json" || Boolean(contentType?.startsWith("application/") && contentType.endsWith("+json"));
-  if (response.status !== 401 || !isJson || !body || typeof body !== "object" || !("error" in body)) return false;
-  const error = body.error;
-  return Boolean(error && typeof error === "object" &&
-    "code" in error && error.code === "unauthenticated" &&
-    "message" in error && typeof error.message === "string" && error.message.trim() &&
-    "requestId" in error && typeof error.requestId === "string" && error.requestId.trim() &&
-    (!("fields" in error) || Array.isArray(error.fields)));
+  return contentType === "application/json" || Boolean(contentType?.startsWith("application/") && contentType.endsWith("+json"));
 }
 
 export const hostedApi = {
   async session(): Promise<AuthSession | null> {
     try {
-      return await request<AuthSession>("/api/auth/session");
+      return await request<AuthSession>("/api/auth/session", {}, undefined, authSessionEnvelopeSchema);
     } catch (error) {
       if (error instanceof ApiClientError && error.authoritativeUnauthenticated) return null;
       throw error;
     }
   },
   login(loginName: string, password: string): Promise<AuthSession> {
-    return request("/api/auth/login", { method: "POST", body: JSON.stringify({ loginName, password }) });
+    return request("/api/auth/login", { method: "POST", body: JSON.stringify({ loginName, password }) }, undefined, authSessionEnvelopeSchema);
   },
   logout(csrfToken: string): Promise<{ loggedOut: true }> {
-    return request("/api/auth/logout", { method: "POST" }, csrfToken);
+    return request("/api/auth/logout", { method: "POST" }, csrfToken, logoutSuccessEnvelopeSchema);
   },
   listCases(): Promise<{ cases: FtcCaseRecord[] }> {
     return request("/api/cases");
