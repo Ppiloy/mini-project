@@ -5,7 +5,7 @@ import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, s
 import { draftSchema } from "../../../shared/draft.js";
 import { DEMO_POLICY } from "../../../shared/policy.js";
 import { createCalculationSnapshot } from "../../../shared/snapshot.js";
-import { ApiClientError, hostedApi } from "../../data/api.js";
+import { ApiClientError, apiFailureMessage, hostedApi } from "../../data/api.js";
 import { addDemoAttachment, deleteDemoAttachment, findDemoCase, listDemoAttachments, saveDemoDraft, saveDemoSnapshot } from "../../data/demoRepository.js";
 import { hostedPendingDraftKey, useAppSession } from "../../app/App.js";
 import { PageHeading } from "../../components/SiteFrame.js";
@@ -71,7 +71,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       setSavedJson(JSON.stringify(loaded.draft));
       setAttachments(files);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "โหลดร่างไม่สำเร็จ");
+      setProblem(apiFailureMessage(error, "โหลดร่างไม่สำเร็จ"));
     } finally {
       setLoading(false);
     }
@@ -152,21 +152,21 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     } catch (error) {
       if (mode === "hosted" && error instanceof ApiClientError && error.status === 401) {
         sessionStorage.setItem(hostedPendingDraftKey(record.ownerId, record.id), JSON.stringify({ ownerId: record.ownerId, caseId: record.id, draft }));
-        setProblem("เซสชันหมดอายุ ข้อมูลที่กรอกถูกเก็บไว้ชั่วคราวในแท็บนี้และจะเรียกคืนเมื่อบัญชีเดิมเข้าสู่ระบบอีกครั้ง");
+        setProblem(apiFailureMessage(error, "เซสชันหมดอายุ ข้อมูลที่กรอกถูกเก็บไว้ชั่วคราวในแท็บนี้และจะเรียกคืนเมื่อบัญชีเดิมเข้าสู่ระบบอีกครั้ง"));
         return null;
       }
       if (mode === "hosted" && error instanceof ApiClientError && error.status === 409) {
         try {
           const latest = (await hostedApi.getCase(record.id)).case;
           setConflictLatest(latest);
-          setProblem("ร่างถูกบันทึกจากอีกหน้าต่างแล้ว เลือกโหลดฉบับล่าสุดหรือยืนยันนำการแก้ไขปัจจุบันไปใช้ต่อ");
-        } catch { setProblem("ข้อมูลขัดแย้งกับรุ่นล่าสุด และโหลดฉบับล่าสุดไม่ได้ กรุณาลองใหม่เมื่อเชื่อมต่อได้"); }
+          setProblem(apiFailureMessage(error, "ร่างถูกบันทึกจากอีกหน้าต่างแล้ว เลือกโหลดฉบับล่าสุดหรือยืนยันนำการแก้ไขปัจจุบันไปใช้ต่อ"));
+        } catch (reloadError) { setProblem(apiFailureMessage(reloadError, "ข้อมูลขัดแย้งกับรุ่นล่าสุด และโหลดฉบับล่าสุดไม่ได้ กรุณาลองใหม่เมื่อเชื่อมต่อได้")); }
         return null;
       }
       if (mode === "hosted" && error instanceof ApiClientError && error.fields?.length) {
         setFieldErrors(error.fields.map((item) => ({ path: item.path, message: item.message })));
       }
-      setProblem(error instanceof Error ? error.message : "บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง");
+      setProblem(apiFailureMessage(error, "บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง"));
       return null;
     } finally {
       setSaving(false);
@@ -230,7 +230,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       // Keep this exact operation so a retry replays the same bytes and idempotency key.
       // A filename match from a status lookup cannot prove which bytes the server stored.
       setFailedUpload(operation);
-      setProblem(error instanceof Error ? error.message : "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่");
+      setProblem(apiFailureMessage(error, "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่"));
     } finally { setUploading(false); }
   };
 
@@ -270,7 +270,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       };
       await sendUpload(operation);
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่");
+      setProblem(apiFailureMessage(error, "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่"));
     } finally { setUploading(false); }
   };
 
@@ -293,7 +293,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
         setRecord(detail.case); setDraft(structuredClone(detail.case.draft)); setSavedJson(JSON.stringify(detail.case.draft));
       }
       setSavedMessage("ลบรายการไฟล์แล้ว");
-    } catch (error) { setProblem(error instanceof Error ? error.message : "ลบไฟล์ไม่สำเร็จ"); }
+    } catch (error) { setProblem(apiFailureMessage(error, "ลบไฟล์ไม่สำเร็จ")); }
   };
 
   const downloadAttachment = async (attachment: AttachmentMetadata) => {
@@ -310,7 +310,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       anchor.download = filename;
       anchor.click();
       URL.revokeObjectURL(url);
-    } catch (error) { setProblem(error instanceof Error ? error.message : "ดาวน์โหลดไฟล์ไม่สำเร็จ"); }
+    } catch (error) { setProblem(apiFailureMessage(error, "ดาวน์โหลดไฟล์ไม่สำเร็จ")); }
   };
 
   const reloadLatest = async (reapply: boolean) => {
@@ -346,7 +346,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
         snapshot = (await hostedApi.calculate(record.id, saved.draft.revision, csrfToken)).snapshot;
       }
       navigate(`${mode === "demo" ? "/demo" : ""}/cases/${encodeURIComponent(record.id)}/result?preview=${encodeURIComponent(snapshot.id)}`);
-    } catch (error) { setProblem(error instanceof Error ? error.message : "คำนวณตัวอย่างไม่สำเร็จ"); }
+    } catch (error) { setProblem(apiFailureMessage(error, "คำนวณตัวอย่างไม่สำเร็จ")); }
   };
 
   if (loading) return <div className="loading-card" role="status">กำลังโหลดร่าง…</div>;

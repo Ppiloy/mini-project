@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
 import { formatDate, formatMoney } from "../../components/money.js";
 import { PageHeading } from "../../components/SiteFrame.js";
-import { hostedApi } from "../../data/api.js";
+import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoAttachments, listDemoCases } from "../../data/demoRepository.js";
 
 type Mode = "demo" | "hosted";
@@ -18,7 +18,7 @@ export function OfficerQueuePage({ mode }: { mode: Mode }) {
     setBusy(true);
     setProblem(null);
     try { setRecords(mode === "demo" ? listDemoCases("officer") : (await hostedApi.listOfficerCases()).cases); }
-    catch (error) { setProblem(error instanceof Error ? error.message : "โหลดคิวไม่สำเร็จ"); }
+    catch (error) { setProblem(apiFailureMessage(error, "โหลดคิวไม่สำเร็จ")); }
     finally { setBusy(false); }
   };
   useEffect(() => { void load(); }, [mode]);
@@ -71,7 +71,7 @@ export function OfficerCasePage({ mode }: { mode: Mode }) {
           if (response.case.status !== "submitted" || !response.case.submittedSnapshotId) throw new Error("กรณีนี้ไม่อยู่ในคิวที่เจ้าหน้าที่ได้รับมอบหมาย");
           if (active) { setRecord(response.case); setSnapshot(response.snapshot); setAttachments(response.attachments); setAudit(response.auditEvents); }
         }
-      } catch (error) { if (active) setProblem(error instanceof Error ? error.message : "เปิดกรณีไม่สำเร็จ"); }
+      } catch (error) { if (active) setProblem(apiFailureMessage(error, "เปิดกรณีไม่สำเร็จ")); }
       finally { if (active) setBusy(false); }
     };
     void load();

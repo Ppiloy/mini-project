@@ -3,8 +3,8 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { z } from "zod";
-import type { AuthSession } from "../../data/api.js";
-import { ApiClientError, hostedApi, logoutAndConfirm } from "../../data/api.js";
+import type { AuthSession, LogoutConfirmationResult } from "../../data/api.js";
+import { apiFailureMessage, apiFailureMessages, hostedApi, logoutAndConfirm } from "../../data/api.js";
 import type { LogoutIntent } from "../../app/App.js";
 import type { DemoPersona } from "../../data/demoRepository.js";
 
@@ -14,13 +14,14 @@ const loginSchema = z.object({
 });
 type LoginValues = z.infer<typeof loginSchema>;
 
-export function LoginPage({ officer, onLogin, onClearSession, activeSession, pendingLogout, retryPendingLogout, beginLogout }: {
+export function LoginPage({ officer, onLogin, onClearSession, activeSession, pendingLogout, pendingLogoutErrors, retryPendingLogout, beginLogout }: {
   officer: boolean;
   onLogin: (session: AuthSession) => void;
   onClearSession: () => void;
   activeSession: AuthSession | null;
   pendingLogout: LogoutIntent | null;
-  retryPendingLogout: (fallback?: LogoutIntent) => Promise<boolean>;
+  pendingLogoutErrors: unknown[];
+  retryPendingLogout: (fallback?: LogoutIntent) => Promise<LogoutConfirmationResult>;
   beginLogout: (accountId: string, expectedRole: "taxpayer" | "officer", wrongRole?: boolean) => void;
 }) {
   const navigate = useNavigate();
@@ -51,8 +52,9 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
         setCleanupSession(session);
         setCleanupError(null);
         beginLogout(session.user.id, expectedRole, true);
-        if (!await logoutAndConfirm(session.csrfToken)) {
-          setCleanupError("ยังออกจากระบบไม่สำเร็จ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองปิดเซสชันอีกครั้ง");
+        const result = await logoutAndConfirm(session.csrfToken);
+        if (!result.confirmed) {
+          setCleanupError(apiFailureMessages(result.errors, "ยังออกจากระบบไม่สำเร็จ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองปิดเซสชันอีกครั้ง"));
         } else {
           onClearSession();
           setCleanupSession(null);
@@ -63,7 +65,7 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
       const allowedReturn = returnTo && returnTo.startsWith("/app/cases/") && returnTo.endsWith("/edit") && !returnTo.includes("//") ? returnTo : null;
       navigate(allowedReturn ?? (session.user.role === "officer" ? "/officer" : "/app"), { replace: true });
     } catch (error) {
-      setProblem(error instanceof ApiClientError ? error.message : "เข้าสู่ระบบไม่ได้ ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง");
+      setProblem(apiFailureMessage(error, "เข้าสู่ระบบไม่ได้ ตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง"));
     } finally {
       setBusy(false);
     }
@@ -75,8 +77,9 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
     setCleanupError(null);
     try {
       const fallback = pendingCleanupSession ? { accountId: pendingCleanupSession.user.id, expectedRole } : undefined;
-      if (!await retryPendingLogout(fallback)) {
-        setCleanupError("ยังออกจากระบบไม่สำเร็จ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองปิดเซสชันอีกครั้ง");
+      const result = await retryPendingLogout(fallback);
+      if (!result.confirmed) {
+        setCleanupError(apiFailureMessages(result.errors.length ? result.errors : pendingLogoutErrors, "ยังออกจากระบบไม่สำเร็จ เซิร์ฟเวอร์อาจยังเปิดเซสชันนี้อยู่ กรุณาลองปิดเซสชันอีกครั้ง"));
         return;
       }
       onClearSession();
@@ -92,18 +95,19 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
       <section className="entry-card card">
         <a className="entry-brand" href="/login"><span className="brand-mark" aria-hidden="true">FTC</span><span>ระบบต้นแบบเครดิตภาษีต่างประเทศ</span></a>
         <p className="prototype-banner">ระบบต้นแบบเพื่อการศึกษา</p>
+        <p className="fine-print">รุ่นนโยบายอ้างอิง: rd-ftc-demo-2568-v1</p>
         <p className="eyebrow">{officer ? "REVIEWER ACCESS" : "TAXPAYER ACCESS"}</p>
         <h1>{officer ? "เข้าสู่ระบบเจ้าหน้าที่" : "เข้าสู่ระบบผู้เสียภาษี"}</h1>
         <p className="muted">ใช้บัญชีตัวอย่างที่ผู้ดูแลระบบจัดเตรียมให้ ระบบนี้จำลองการคำนวณเพื่อการศึกษาและไม่ใช่บริการยื่นภาษี</p>
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         {pendingCleanupSession && <section className="stack-form" aria-label="การกู้คืนเซสชัน">
           {!problem && <div className="alert alert-error" role="alert">{roleMismatchGuidance}</div>}
-          <div className="alert alert-error" role="alert">{cleanupError ?? "บัญชีที่กำลังใช้อยู่ไม่ตรงกับบทบาทของหน้านี้ เซสชันอาจยังเปิดอยู่"}</div>
+          <div className="alert alert-error" role="alert">{cleanupError ?? apiFailureMessages(pendingLogoutErrors, "บัญชีที่กำลังใช้อยู่ไม่ตรงกับบทบาทของหน้านี้ เซสชันอาจยังเปิดอยู่")}</div>
           <button className="button button-secondary button-wide" onClick={retryCleanup} disabled={cleanupBusy}>{cleanupBusy ? "กำลังยืนยัน…" : "ลองปิดเซสชันอีกครั้ง"}</button>
         </section>}
         {!pendingCleanupSession && pendingLogout && <section className="stack-form" aria-label="การกู้คืนเซสชัน">
           {pendingLogout.wrongRole && <div className="alert alert-error" role="alert">{pendingLogout.expectedRole === "officer" ? "บัญชีนี้ไม่มีสิทธิ์เจ้าหน้าที่" : "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้"}</div>}
-          <div className="alert alert-error" role="alert">{cleanupError ?? "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ กรุณาตรวจสอบเซสชันก่อนลองออกจากระบบอีกครั้ง"}</div>
+          <div className="alert alert-error" role="alert">{cleanupError ?? apiFailureMessages(pendingLogoutErrors, "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ กรุณาตรวจสอบเซสชันก่อนลองออกจากระบบอีกครั้ง")}</div>
           <button className="button button-secondary button-wide" onClick={retryCleanup} disabled={cleanupBusy}>{cleanupBusy ? "กำลังตรวจสอบ…" : "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง"}</button>
         </section>}
         <form className="stack-form" onSubmit={submit} noValidate>

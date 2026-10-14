@@ -2,11 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { type Express, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
 import type { ApiUser, CalculationSnapshot, FtcCaseRecord, FrozenEvidenceReference } from "../../shared/contracts.js";
+import { apiSuccessSchemas } from "../../shared/contracts.js";
 import { validateSubmission } from "../../shared/calculator.js";
 import { DEMO_POLICY } from "../../shared/policy.js";
 import { createCalculationSnapshot } from "../../shared/snapshot.js";
 import type { PgPoolLike, PgQueryable } from "../postgres.js";
 import { ApiFailure } from "../api-failure.js";
+import { sendApiSuccess } from "../api-success.js";
 import { digest, inTransaction, loadCaseRecord, type CaseRow } from "../app.js";
 import type { BlobIO } from "../storage/blob-io.js";
 import type { EnvironmentMarker } from "../runtime/environment.js";
@@ -126,7 +128,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         if (!result.rows[0]) notFound();
         return loadWorkflowCase(client,result.rows[0],marker.id);
       });
-      response.json({ data: detail, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.caseDetail, detail, response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -154,7 +156,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         await addMutationReplay(client, row.id, "calculate", id, bodyDigest, { snapshot });
         return { snapshot, replayed: false };
       });
-      response.json({ data: { snapshot: result.snapshot }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.snapshot, { snapshot: result.snapshot }, response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -222,7 +224,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         return { attachmentId, replay: null, created: true };
       });
       if (reservation.replay) {
-        response.json({ data: reservation.replay, requestId: response.locals.requestId });
+        sendApiSuccess(response, apiSuccessSchemas.attachmentUpload, reservation.replay, response.locals.requestId);
         return;
       }
       if (!blobIO) throw new Error("Evidence storage is unavailable.");
@@ -276,7 +278,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         } catch { /* leave the durable cleanup marker for operations recovery */ }
         notFound();
       }
-      response.status(reservation.created ? 201 : 200).json({ data: completed.data, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.attachmentUpload, completed.data, response.locals.requestId, reservation.created ? 201 : 200);
     } catch (error) { next(error); }
   });
 
@@ -313,7 +315,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
           await options.pool.query("UPDATE attachments SET cleanup_pending=false,storage_deleted_at=now() WHERE id=$1 AND status='deleted'", [attachmentId]);
         } catch { /* durable cleanup_pending is left for operations recovery */ }
       }
-      response.json({ data: result.response, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.attachmentDelete, result.response, response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -411,7 +413,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         await addMutationReplay(client,row.id,"submit",id,digestValue,data);
         return data;
       });
-      response.json({ data: submitted, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.submission, submitted, response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -430,7 +432,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         `SELECT c.* FROM ftc_cases c WHERE c.id=ANY($1::uuid[]) AND c.assigned_officer_id=$2 AND c.status='submitted' AND c.environment_marker_id=$3
          ORDER BY c.submitted_at DESC,c.id`,[ids,user.id,marker.id]);
       const cases = await Promise.all(result.rows.map((row) => loadCaseRecord(options.pool,row)));
-      response.json({ data: { cases }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.cases, { cases }, response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -452,7 +454,9 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       const detail = await loadWorkflowCase(options.pool,fullCase.rows[0],marker.id);
       const snapshotResult = await options.pool.query<SnapshotRow>("SELECT * FROM calculation_snapshots WHERE id=$1 AND case_id=$2 AND kind='submitted'", [result.submitted_snapshot_id,caseId]);
       if (!snapshotResult.rows[0]) notFound();
-      response.json({ data: { case: detail.case,attachments: detail.attachments,snapshot:snapshotRecord(snapshotResult.rows[0]),auditEvents:await getAuditSummaries(options.pool,caseId) }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.officerCaseDetail,
+        { case: detail.case, attachments: detail.attachments, snapshot: snapshotRecord(snapshotResult.rows[0]), auditEvents: await getAuditSummaries(options.pool,caseId) },
+        response.locals.requestId);
     } catch (error) { next(error); }
   });
 
@@ -479,7 +483,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       });
       const result = await options.pool.query<SnapshotRow>("SELECT * FROM calculation_snapshots WHERE id=$1 AND case_id=$2",[snapshotId,row.case_id]);
       if (!result.rows[0]) notFound();
-      response.json({ data: { snapshot: snapshotRecord(result.rows[0]) }, requestId: response.locals.requestId });
+      sendApiSuccess(response, apiSuccessSchemas.snapshot, { snapshot: snapshotRecord(result.rows[0]) }, response.locals.requestId);
     } catch (error) { next(error); }
   });
 }
