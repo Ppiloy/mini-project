@@ -50,6 +50,6 @@ The verified complete backup path and SHA-256 are required for every reset. The 
 
 ## Release and smoke checks
 
-Run `npm ci`, `npm run verify:release`, and `npm run test:e2e`. CI runs the release gate using `.node-version`; `netlify.toml` gates publication with the same checks. `migrations:verify` validates ordered SQL files against locked byte checksums. Never change an already-applied migration to resolve a checksum failure; add an ordered migration instead.
+Run `npm ci`, `npm run verify:release`, and `npm run test:e2e`. The default browser suite covers fixture and development-server journeys; run `npm run test:e2e:real` separately for the real Express app with disposable PGlite. CI runs the release gate using `.node-version`; `netlify.toml` gates publication with the same checks. `migrations:verify` validates ordered SQL files against locked byte checksums. Never change an already-applied migration to resolve a checksum failure; add an ordered migration instead.
 
 For local smoke use Netlify Dev, fictional accounts, separate browser profiles for the two taxpayer roles and officer, a saved draft, sample PDF upload/download with matching digest, submit, and the same report through officer review. For hosted smoke record actual UTC, deploy and DB branch identifiers, migration result, exact URL/origin, API health, role boundaries, object digest, preview/production isolation, redeploy persistence, cold start, and account usage. None of those hosted observations are asserted as passed here.
