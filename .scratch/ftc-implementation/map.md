@@ -13,9 +13,10 @@ Specification: [spec](spec.md), [plan](../../FTC-PROTOTYPE-PLAN.md).
 | [07 Snapshots/evidence/submission](issues/07-snapshots-evidence.md) | 02, 03 | resolved |
 | [08 Bootstrap/release checks](issues/08-bootstrap-checks.md) | 03 | resolved |
 | [09 Logout recovery](issues/09-logout-recovery.md) | 04 | resolved |
-| [10 Response/report gaps](issues/10-response-report.md) | 04, 07, 09 | claimed |
+| [10 Response/report gaps](issues/10-response-report.md) | 04, 07, 09 | resolved |
+| [11 Real backend browser](issues/11-real-backend-browser.md) | 03, 04, 07, 08, 09, 10 | claimed |
 | [05 Operations](issues/05-operations.md) | 07, 08 | claimed |
-| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07, 08, 09, 10 | open |
+| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07, 08, 09, 10, 11 | open |
 
 ## Review log
 
@@ -28,3 +29,4 @@ Record reviewer, commit, findings, fixes and rerun evidence per ticket. Resolve 
 - 07 Snapshots/evidence/submission — independent workflow and storage/environment rereviews PASS at `7586c645d902bbee13c7f4d2930f086640064ac9`. Role, multipart and context findings repaired; integration typecheck, 69 tests and build pass. Evidence: [ticket 07](issues/07-snapshots-evidence.md), [workflow review](reviews/07-workflow.md), [storage review](reviews/07-evidence.md). Cleanup tool and hosted acceptance are still required downstream.
 - 09 Logout recovery — independent final schema/recovery review PASS at `89050f496fddd284b3cff30ea650534497ae7401`; integration typecheck, 69 tests and build pass after merge `76f2673`. Fifteen focused browser journeys passed independently. Evidence: [ticket 09](issues/09-logout-recovery.md) and [session review](reviews/09-session.md). Hosted session checks remain open.
 - 08 Bootstrap/release checks — independent credential rereview PASS at `611da3a` and checkout checksum rereview PASS at `01c6952e2ad2ef4ab739b9e068778164f4d73cba`. Integration release gate passes 83 tests, four migrations, typecheck and build after merge `92cd08b`. Evidence: [ticket 08](issues/08-bootstrap-checks.md), [bootstrap review](reviews/08-bootstrap.md), [checkout review](reviews/08-checkout.md). Operator checks use local PGlite; hosted acceptance remains open.
+- 10 Response/report gaps — independent rereview PASS at `d9e346d585ed04c118f5ebb6bbdf4e1d14efb7fe`; integration release gate passes 86 tests and all 31 local browser journeys after merge `fed9e285`. Shared JSON schemas, failure request IDs/policy context and frozen FX provenance are verified. Evidence: [ticket 10](issues/10-response-report.md), [response/report review](reviews/10-response-report.md). Real backend browser and hosted acceptance remain required.
