@@ -33,9 +33,8 @@ function safeSiteName(siteId: string): string {
 }
 
 export function resolveRuntimeEnvironmentConfig(env: NodeJS.ProcessEnv): RuntimeEnvironmentConfig {
-  const isHosted = env.NETLIFY === "true" || Boolean(env.SITE_ID || env.NETLIFY_SITE_ID || env.URL);
-  const context = env.FTC_DEPLOYMENT_CONTEXT ?? (!isHosted ? env.CONTEXT ?? "dev" : undefined);
-  if (!context) throw new Error("FTC_DEPLOYMENT_CONTEXT is required in the hosted Function runtime.");
+  const context = env.FTC_DEPLOYMENT_CONTEXT;
+  if (!context) throw new Error("FTC_DEPLOYMENT_CONTEXT is required; use dev explicitly for local Function development.");
   const kind: RuntimeEnvironmentKind = context === "production" ? "production"
     : context === "deploy-preview" || context === "branch-deploy" ? "preview"
       : context === "dev" ? "local"

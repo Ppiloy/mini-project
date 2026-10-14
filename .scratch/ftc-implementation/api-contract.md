@@ -2,6 +2,8 @@
 
 All JSON replies include an opaque `requestId`. Successful replies use `{ data, requestId }`; failures use `{ error: { code, message, fields?, requestId } }`. Every `/api` response is `Cache-Control: private, no-store`. Money, rates and computed decimals are strings. Missing draft facts are explicit `null` values. The browser never chooses a role, officer, status, storage key, rule set or derived total.
 
+Role checks are enforced in Express as well as ownership/assignment checks. Taxpayer case list/create/read/save, calculate, upload, delete, and submit routes require role `taxpayer`; an authenticated officer receives `403` before any case or child mutation. Owner branches for snapshot and attachment reads require both taxpayer role and matching owner ID. Officer reads on those resources require role `officer`, submitted status, and an active assignment; other IDs return `404`. Officer queue/detail routes remain officer-only.
+
 Mutations require the exact configured same-origin `Origin` header. Authenticated mutations also require `X-CSRF-Token`, returned by login/session. The hosted cookie is `ftc.sid`, host-only, `Path=/`, `HttpOnly`, `Secure`, `SameSite=Lax`; local HTTP development omits `Secure`. JSON request bodies are limited to 1 MiB.
 
 ## Authentication and drafts (ticket 03)
@@ -26,7 +28,7 @@ These route names follow plan section 7 and are implemented by ticket 07. Taxpay
 
 | Request | Request contract | Success envelope |
 |---|---|---|
-| `POST /api/cases/:id/attachments` | Multipart one file plus `AttachmentUploadMetadata` fields `expectedRevision`, `requestId`, `sourceId`, `kind`, `displayName` | `201 { data: { attachment: AttachmentMetadata, case: FtcCaseRecord, revision }, requestId }`; identical retry is `200` with the original response |
+| `POST /api/cases/:id/attachments` | Multipart one file plus `AttachmentUploadMetadata` fields `expectedRevision`, `requestId`, `sourceId`, `kind`, `displayName`; the UI sends the selected file's original `File.name` as `displayName`, which the server validates and stores | `201 { data: { attachment: AttachmentMetadata, case: FtcCaseRecord, revision }, requestId }`; identical retry is `200` with the original response |
 | `DELETE /api/attachments/:id` | JSON `{ expectedRevision, requestId }` | `200 { data: { deleted: true, revision }, requestId }` |
 | `GET /api/attachments/:id` | — | authorized byte response with attachment disposition and `nosniff` |
 | `POST /api/cases/:id/calculate` | `{ expectedRevision, requestId }` | `200 { data: { snapshot: CalculationSnapshot }, requestId }` |
@@ -36,6 +38,8 @@ These route names follow plan section 7 and are implemented by ticket 07. Taxpay
 | `GET /api/snapshots/:id` | — | `200 { data: { snapshot: CalculationSnapshot }, requestId }`; owner or assigned officer only |
 
 `CaseWorkflowDetail` is `{ case, attachments, currentPreview, snapshotSummaries, auditEvents }`. Attachments exclude deleted tombstones but retain pending/failed state; snapshot summaries and audit events are newest-first and capped at 20. `AuditEventSummary` uses display strings `{ id, event, actor, occurredAt }` for the taxpayer and officer views. Evidence upload advances revision once when reserved and once when finalized; deletion advances it once. Preview and audit append do not advance the input/evidence revision.
+
+Deleted evidence retains its immutable environment marker, store, region, key, digest, and tombstone. `cleanup_pending` plus `storage_deleted_at` are indexed durable cleanup bookkeeping; an operator cleanup process can list pending tombstones, delete from the recorded trusted store/region, then update only those cleanup fields. SQL permits those bookkeeping updates after submission while keeping evidence metadata, status, and tombstones immutable. The cleanup command/worker is owned by the operations ticket.
 
 ## Hosted environment setup
 

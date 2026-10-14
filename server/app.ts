@@ -648,6 +648,14 @@ export function createApp(options: CreateAppOptions): Express {
     next();
   };
 
+  const taxpayerOnly = (_request: Request, response: Response, next: (error?: unknown) => void) => {
+    if ((response.locals.user as ApiUser | undefined)?.role !== "taxpayer") {
+      apiError(response, 403, "forbidden", "ไม่มีสิทธิ์เข้าถึงรายการผู้เสียภาษี");
+      return;
+    }
+    next();
+  };
+
   app.post("/api/auth/login", async (request, response, next) => {
     try {
       const body = requireExactFields(request.body, ["loginName", "password"]);
@@ -699,7 +707,7 @@ export function createApp(options: CreateAppOptions): Express {
     }
   });
 
-  app.get("/api/cases", authenticated, async (_request, response, next) => {
+  app.get("/api/cases", authenticated, taxpayerOnly, async (_request, response, next) => {
     try {
       const result = await options.pool.query<CaseRow>(
         "SELECT * FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2 ORDER BY updated_at DESC, id",
@@ -712,7 +720,7 @@ export function createApp(options: CreateAppOptions): Express {
     }
   });
 
-  app.post("/api/cases", authenticated, csrf, async (request, response, next) => {
+  app.post("/api/cases", authenticated, taxpayerOnly, csrf, async (request, response, next) => {
     try {
       const body = requireExactFields(request.body, ["requestId"]);
       const requestId = requireString(body.requestId, "requestId", 128);
@@ -745,7 +753,7 @@ export function createApp(options: CreateAppOptions): Express {
     }
   });
 
-  app.put("/api/cases/:id/draft", authenticated, csrf, async (request, response, next) => {
+  app.put("/api/cases/:id/draft", authenticated, taxpayerOnly, csrf, async (request, response, next) => {
     try {
       const id = routeCaseId(request.params.id);
       if (!id) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
@@ -852,6 +860,7 @@ export function createApp(options: CreateAppOptions): Express {
   registerWorkflowRoutes(app, {
     pool: options.pool,
     authenticated,
+    taxpayerOnly,
     csrf,
     blobIO: options.blobIO,
     officerUserId: options.officerUserId,

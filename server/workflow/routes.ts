@@ -15,6 +15,7 @@ import { appendAudit, attachmentMetadata, getAttachments, getAuditSummaries, get
 interface RouteOptions {
   pool: PgPoolLike;
   authenticated: RequestHandler;
+  taxpayerOnly: RequestHandler;
   csrf: RequestHandler;
   blobIO?: BlobIO;
   officerUserId?: string;
@@ -113,9 +114,9 @@ async function priorMutation(client: PgQueryable, caseId: string, operation: str
 
 export function registerWorkflowRoutes(app: Express, options: RouteOptions): void {
   const blobIO = options.blobIO;
-  const upload: RequestHandler[] = [options.authenticated, options.csrf, uploadParser.single("file")];
+  const upload: RequestHandler[] = [options.authenticated, options.taxpayerOnly, options.csrf, uploadParser.single("file")];
 
-  app.get("/api/cases/:id", options.authenticated, async (request, response, next) => {
+  app.get("/api/cases/:id", options.authenticated, options.taxpayerOnly, async (request, response, next) => {
     try {
       const id = routeId(request.params.id); if (!id) notFound();
       const user = response.locals.user as ApiUser;
@@ -129,7 +130,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
     } catch (error) { next(error); }
   });
 
-  app.post("/api/cases/:id/calculate", options.authenticated, options.csrf, async (request, response, next) => {
+  app.post("/api/cases/:id/calculate", options.authenticated, options.taxpayerOnly, options.csrf, async (request, response, next) => {
     try {
       const caseId = routeId(request.params.id); if (!caseId) notFound();
       const body = exact(request.body, ["expectedRevision", "requestId"]);
@@ -279,7 +280,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
     } catch (error) { next(error); }
   });
 
-  app.delete("/api/attachments/:id", options.authenticated, options.csrf, async (request, response, next) => {
+  app.delete("/api/attachments/:id", options.authenticated, options.taxpayerOnly, options.csrf, async (request, response, next) => {
     let cleanup: { marker: EnvironmentMarker; key: string } | null = null;
     try {
       const attachmentId = routeId(request.params.id); if (!attachmentId) notFound();
@@ -328,7 +329,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
            AND a.storage_environment=$3 AND a.storage_store=$4 AND a.storage_region=$5`,
         [attachmentId,marker.id,marker.kind,marker.storageStore,marker.storageRegion,user.id]);
       const item = metadata.rows[0]; if (!item) notFound();
-      const isOwner = item.owner_id === user.id;
+      const isOwner = user.role === "taxpayer" && item.owner_id === user.id;
       const isAssignedOfficer = item.case_status === "submitted" && item.assigned_officer_id === user.id && item.active_assignment && user.role === "officer";
       if (!isOwner && !isAssignedOfficer) notFound();
       if (isAssignedOfficer) {
@@ -359,7 +360,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
     } catch (error) { next(error); }
   });
 
-  app.post("/api/cases/:id/submit", options.authenticated, options.csrf, async (request, response, next) => {
+  app.post("/api/cases/:id/submit", options.authenticated, options.taxpayerOnly, options.csrf, async (request, response, next) => {
     try {
       const caseId = routeId(request.params.id); if (!caseId) notFound();
       const body = exact(request.body, ["expectedRevision", "previewSnapshotId", "requestId"]);
@@ -465,7 +466,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
          FROM calculation_snapshots s JOIN ftc_cases c ON c.id=s.case_id
          WHERE s.id=$1 AND c.environment_marker_id=$2`, [snapshotId,marker.id,user.id]);
       const row = access.rows[0]; if (!row) notFound();
-      const isOwner = row.owner_id === user.id;
+      const isOwner = user.role === "taxpayer" && row.owner_id === user.id;
       const isOfficer = user.role === "officer" && row.assigned_officer_id === user.id && row.active_assignment && row.status === "submitted";
       if (!isOwner && !isOfficer) notFound();
       if (isOfficer) await inTransaction(options.pool,async (client) => {

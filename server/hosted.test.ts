@@ -9,6 +9,7 @@ import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { createFunctionHandler } from "../netlify/functions/api.js";
+import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
 
 class PGlitePool implements PgPoolLike {
   constructor(private readonly database: PGlite) {}
@@ -144,6 +145,31 @@ describe("hosted authentication and durable draft API", () => {
       expect(JSON.parse(String(insecure.body)).error.code).toBe("forbidden");
       expect(String(insecure.headers["cache-control"])).toContain("no-store");
     }
+  });
+
+  it("fails closed through the Lambda boundary when deployment context and platform markers are absent", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    vi.stubEnv("SESSION_SECRET", "test-only-session-secret-with-sufficient-entropy");
+    const { app } = await setup(true);
+    const functionEnvironment = {
+      NETLIFY_DB_URL: "postgres://ftc_role:synthetic-secret@db.example.test/production",
+      FTC_ALLOWED_ORIGIN: origin,
+      SESSION_SECRET: "test-only-session-secret-with-sufficient-entropy",
+    } as NodeJS.ProcessEnv;
+    let appWasBuilt = false;
+    const handler = createFunctionHandler(() => {
+      resolveRuntimeEnvironmentConfig(functionEnvironment);
+      appWasBuilt = true;
+      return app;
+    });
+    const response = await handler({
+      httpMethod: "GET", path: "/api/health", rawUrl: `${origin}/api/health`,
+      headers: { host: "ftc.example.test" }, body: "", isBase64Encoded: false,
+    }, {});
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(String(response.body)).error.code).toBe("service_unavailable");
+    expect(String(response.headers["cache-control"])).toContain("no-store");
+    expect(appWasBuilt).toBe(false);
   });
 
   it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {
