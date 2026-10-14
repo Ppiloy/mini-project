@@ -8,7 +8,7 @@ Specification: [spec](spec.md), [plan](../../FTC-PROTOTYPE-PLAN.md).
 |---|---|---|
 | [01 Foundation](issues/01-foundation.md) | none | resolved |
 | [02 Domain engine](issues/02-domain.md) | 01 | claimed |
-| [03 Authentication/drafts](issues/03-hosted.md) | 01, 02 contract | open |
+| [03 Authentication/drafts](issues/03-hosted.md) | 01, 02 contract | claimed |
 | [04 Thai application](issues/04-ui.md) | 01, 02 contract | open |
 | [07 Snapshots/evidence/submission](issues/07-snapshots-evidence.md) | 02, 03 | open |
 | [05 Operations](issues/05-operations.md) | 03, 07 | open |
