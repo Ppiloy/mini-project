@@ -1,6 +1,6 @@
 # Real-backend browser adversarial review
 
-Status: PASS for the repaired application candidate; merger integration pending.
+Status: PASS for local UI/backend composition; hosted acceptance remains open.
 
 Independent GPT-6 Luna reviewer assessed `55cd33b0499c7deddebb499ec739ec69130b27c5` against baseline `c4a98c2`. The five real-HTTP browser journeys passed independently on owned ports, but a delayed actual initial-session response reproduced a fixture/hosted identity race: fixture selection before session readiness skipped logout, and the late response replaced the fixture identity with the hosted account while the fixture mode remained active.
 
@@ -15,3 +15,5 @@ External report: `ftc-review-real-backend-browser.md` in the task's 14 October 2
 Independent final rereview passed exact candidate `6518c33823fd4fba4e175958e4232e05024cbf04`: 11 actual-backend browser journeys and the 87-test/four-migration release gate. Delayed actual responses retain their headers and cannot displace a newer login or delete its cookie. A delayed-pool public HTTP regression first reproduced an old SID being recreated after logout; established-session persistence now updates an existing unexpired row rather than upserting a revoked SID. Browser Back/Forward and sign-out preserve dirty inputs unless the user confirms discard. The reviewer separately verified accepted dirty-editor sign-out, one prompt, login navigation and subsequent 401.
 
 The implementer then merged current integration documentation only, producing clean `464ee83ea63b9ab5d484d47638801b7f1dd7cb44`. Application/harness files are identical to the independently passed SHA. The final external verdict is `ftc-session-generation-review.md`; earlier failures remain described above. Hosted PostgreSQL concurrency remains a separate gate.
+
+Merger integrated the browser application and operations at `590d8bb`: combined release passes 101 tests, seven migrations and 11 actual-backend browser journeys. Root's composition check found the default Playwright command selecting the 11 real-backend tests without that harness; repair `85dfb5a02344fb13893d20a256fff5f7ade8082d` excludes that directory from default discovery and documents both commands. Its author passed 31 default and 11 real journeys on owned ports, and independent source/discovery review verified all 42 tests remain selected across the two commands. Final merger `47c7f90` preserves the validated application/package/migration tree unchanged. External runner report: `ftc-browser-runner-review.md`.
