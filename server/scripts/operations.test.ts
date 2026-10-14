@@ -203,7 +203,7 @@ describe("the cleanup operator command", () => {
     const review = JSON.parse(await readFile(reviewPath!, "utf8")) as { manifest: { candidates: { attachmentId: string; status: string; requestedAgeMs: number; attemptCount: number; protection: string; snapshotReferences: { kind: string }[] }[]; target: { markerId: string; store: string; region: string } } };
     expect(review.manifest.target).toMatchObject({ markerId: fixture.marker.id, store: fixture.marker.storageStore, region: "us-east-2" });
     expect(review.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.deletedId)).toMatchObject({
-      status: "deleted", requestedAgeMs: expect.any(Number), attemptCount: expect.any(Number), protection: "none",
+      status: "deleted", caseStatus: "submitted", requestedAgeMs: expect.any(Number), attemptCount: expect.any(Number), protection: "none",
       snapshotReferences: [{ kind: "preview" }],
     });
     expect(review.manifest.candidates.find((candidate) => candidate.attachmentId === fixture.readyId)?.protection).toBe("ready_evidence");
@@ -493,6 +493,92 @@ describe("fresh local restore rehearsal", () => {
 });
 
 describe("dedicated demo reset command", () => {
+  it("requires a fresh coordinated backup for a draft-only whole-demo reset and accepts that exact backup without a cutoff", async () => {
+    const database = new PGlite(); activeDatabases.push(database);
+    for (const name of (await readdir("netlify/database/migrations")).filter((entry) => entry.endsWith(".sql")).sort()) {
+      await database.exec(await readFile(`netlify/database/migrations/${name}`, "utf8"));
+    }
+    const pool = new TestPool(database);
+    const env: NodeJS.ProcessEnv = { FTC_DEPLOYMENT_CONTEXT: "dev", NETLIFY_DEV: "true", FTC_BLOB_REGION: "us-east-2",
+      NETLIFY_DB_URL: "postgres://local-user:local-secret@127.0.0.1/ftc-draft-reset" };
+    const marker = await ensureEnvironmentMarker(pool, resolveRuntimeEnvironmentConfig(env));
+    env.FTC_DEMO_RESET_MARKER_ID = marker.id;
+    env.FTC_UPLOAD_SETTLE_MS = "0";
+    expect(env.FTC_DEMO_RETENTION_CUTOFF).toBeUndefined();
+    const taxpayers = [
+      { id: "96000000-0000-4000-8000-000000000001", login: "taxpayer-demo-a", role: "taxpayer" },
+      { id: "96000000-0000-4000-8000-000000000002", login: "taxpayer-demo-b", role: "taxpayer" },
+      { id: "96000000-0000-4000-8000-000000000003", login: "officer-demo", role: "officer" },
+    ] as const;
+    for (const account of taxpayers) {
+      await pool.query("INSERT INTO app_users(id,login_name,display_name,password_hash,role) VALUES ($1,$2,$2,$3,$4)",
+        [account.id, account.login, await hashPasswordForTest("draft-reset-fixture-password"), account.role]);
+    }
+    const caseId = "97000000-0000-4000-8000-000000000001";
+    const attachmentId = "98000000-0000-4000-8000-000000000001";
+    const snapshotId = "99000000-0000-4000-8000-000000000001";
+    const draft = createEmptyDraft(); draft.id = caseId;
+    await pool.query("INSERT INTO ftc_cases(id,owner_id,draft,create_request_id,environment_marker_id) VALUES ($1,$2,$3::jsonb,'draft-reset-fixture',$4)",
+      [caseId, taxpayers[0].id, JSON.stringify(draft), marker.id]);
+    const bytes = Buffer.from("%PDF-1.3\nFictional draft evidence for reset backup test\n%%EOF\n", "ascii");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    await pool.query(`INSERT INTO attachments(id,case_id,storage_environment,storage_store,storage_region,storage_key,display_name,media_type,byte_size,sha256,kind,status,environment_marker_id,created_at)
+      VALUES ($1,$2,'local',$3,$4,$5,'draft-evidence.pdf','application/pdf',$6,$7,'other','ready',$8,'2020-01-01T00:00:00Z')`,
+    [attachmentId, caseId, marker.storageStore, marker.storageRegion, "legacy/noncase-key", bytes.length, sha256, marker.id]);
+    const evidence = { id: attachmentId, sourceId: null, kind: "other" as const, displayName: "draft-evidence.pdf", mediaType: "application/pdf", byteSize: bytes.length, sha256 };
+    const snapshot = createCalculationSnapshot({ id: snapshotId, caseId, revision: draft.revision, kind: "preview", inputs: draft, evidence: [evidence], createdAt: "2020-01-01T00:00:00.000Z" });
+    await pool.query(`INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+      VALUES ($1,$2,$3,'preview',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+    [snapshotId, caseId, draft.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result), JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt]);
+    const blobs = new TestBlobs(); await blobs.put(marker, "legacy/noncase-key", bytes);
+
+    const dir = await mkdtemp(join(tmpdir(), "ftc-draft-reset-")); temporaryDirectories.push(dir);
+    const backupPath = join(dir, "complete-backup.json");
+    const resetCredentialPath = join(dir, "reset-credentials.json");
+    const manifestPath = (command: string, id: string) => join(dir, `review-${command}-${id}.json`);
+    const resetId = "9a000000-0000-4000-8000-000000000001";
+    const output: string[] = [];
+    const artifactPath = (command: string) => command === "demo-reset" ? resetCredentialPath : backupPath;
+    const deps = { pool, env, blobs, manifestPath, artifactPath, now: () => new Date("2026-10-14T00:10:00.000Z"), writeOutput: (line: string) => output.push(line) };
+    const mismatchedAttachmentId = "98000000-0000-4000-8000-000000000002";
+    await pool.query(`INSERT INTO attachments(id,case_id,storage_environment,storage_store,storage_region,storage_key,display_name,media_type,byte_size,sha256,kind,status,environment_marker_id,created_at)
+      VALUES ($1,$2,'local','ftc-evidence-local-mismatched-store-123456','us-east-2','legacy/wrong-store-key','wrong-store.pdf','application/pdf',$3,$4,'other','deleted',$5,'2020-01-01T00:00:00Z')`,
+    [mismatchedAttachmentId, caseId, bytes.length, sha256, marker.id]);
+    await expect(runResetDemoCommand(["--target", "local", "--operation-id", resetId, "--dry-run"], deps))
+      .rejects.toThrow(/storage identity does not match the active target/);
+    await expect(runBackupCommand(["--target", "local", "--dry-run"], deps))
+      .rejects.toThrow(/different storage identity from the active target/);
+    await pool.query("DELETE FROM attachments WHERE id=$1", [mismatchedAttachmentId]);
+    const plan = await runResetDemoCommand(["--target", "local", "--operation-id", resetId, "--dry-run"], deps);
+    expect(plan.manifest.cases).toHaveLength(1);
+    expect(plan.manifest.cases[0]).toMatchObject({ id: caseId, status: "draft", snapshots: [{ id: snapshotId, kind: "preview" }] });
+    expect(plan.manifest.objects).toContainEqual({ key: "legacy/noncase-key", sha256, byteSize: bytes.length, state: "present", scope: "attachment" });
+    expect(plan.manifest.retentionGuard).toMatchObject({ configuredCutoff: null, submittedEligible: null });
+    const initialAccountHashes = await pool.query("SELECT login_name,password_hash FROM app_users ORDER BY login_name");
+    const noBackupArgs = ["--target", "local", "--operation-id", resetId, "--confirm", plan.manifestId];
+    await expect(runResetDemoCommand(noBackupArgs, deps)).rejects.toThrow(/requires a verified complete backup/);
+    expect((await pool.query("SELECT id,status FROM ftc_cases WHERE id=$1", [caseId])).rows).toEqual([{ id: caseId, status: "draft" }]);
+    expect(await pool.query("SELECT login_name,password_hash FROM app_users ORDER BY login_name")).toEqual(initialAccountHashes);
+    const retainedEvidence = await blobs.get(marker, "legacy/noncase-key");
+    expect(retainedEvidence).not.toBeNull();
+    expect(Buffer.from(retainedEvidence!)).toEqual(bytes);
+
+    const backupPlan = await runBackupCommand(["--target", "local", "--dry-run"], deps);
+    const backup = await runBackupCommand(["--target", "local", "--operation-id", "9b000000-0000-4000-8000-000000000001", "--confirm", backupPlan.manifestId], deps);
+    expect(backup.status).toBe("written");
+    const backupArtifact = JSON.parse(await readFile(backupPath, "utf8")) as { blobs: { key: string; sha256: string }[] };
+    expect(backupArtifact.blobs.find((item) => item.key === "legacy/noncase-key")).toMatchObject({ key: "legacy/noncase-key", sha256 });
+    const completed = await runResetDemoCommand([...noBackupArgs, "--backup", backupPath, "--backup-sha256", backup.artifactSha256!], deps);
+    expect(completed.status).toBe("completed");
+    expect(completed.manifestId).toBe(plan.manifestId);
+    expect(await pool.query("SELECT id FROM ftc_cases WHERE id=$1", [caseId])).toHaveProperty("rows.length", 0);
+    expect(await pool.query("SELECT id FROM attachments WHERE id=$1", [attachmentId])).toHaveProperty("rows.length", 0);
+    expect(await blobs.get(marker, "legacy/noncase-key")).toBeNull();
+    expect((await pool.query("SELECT backup_sha256,retention_cutoff FROM operator_demo_resets WHERE operation_id=$1", [resetId])).rows[0])
+      .toEqual({ backup_sha256: backup.artifactSha256, retention_cutoff: null });
+    expect(output.join(" ")).not.toMatch(/draft-reset-fixture-password|Fictional draft evidence|bytesBase64/);
+  });
+
   it("requires a marker-bound verified backup for submitted data, deletes only its exact scope, and replays without another mutation", async () => {
     const fixture = await cleanupFixture();
     for (const [id, login, role] of [
@@ -532,7 +618,7 @@ describe("dedicated demo reset command", () => {
     expect(resetReview.manifest).toEqual(plan.manifest);
     expect(resetOutput.join(" ")).not.toMatch(/gross_income|123\.450000|fixture-password|bytesBase64/);
     await expect(runResetDemoCommand(["--target", "local", "--confirm", plan.manifestId, "--operation-id", "92000000-0000-4000-8000-000000000001", "--retention-cutoff", fixture.env.FTC_DEMO_RETENTION_CUTOFF], resetDeps))
-      .rejects.toThrow(/requires the exact private backup path/);
+      .rejects.toThrow(/requires a verified complete backup/);
     expect((await fixture.pool.query("SELECT id FROM ftc_cases WHERE id=$1", [fixture.caseId])).rows).toHaveLength(1);
     const completed = await runResetDemoCommand(["--target", "local", "--confirm", plan.manifestId, "--operation-id", "92000000-0000-4000-8000-000000000001",
       "--retention-cutoff", fixture.env.FTC_DEMO_RETENTION_CUTOFF!, "--backup", backupPath, "--backup-sha256", backup.artifactSha256!], resetDeps);

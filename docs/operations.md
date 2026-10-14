@@ -38,7 +38,7 @@ netlify dev:exec npm run ops:cleanup -- --target local --dry-run
 netlify dev:exec npm run ops:cleanup -- --target local --confirm <exact-fresh-manifest-id>
 ```
 
-Demo reset is limited to the exact `FTC_DEMO_RESET_MARKER_ID`; production is rejected. Start with a dry-run and inspect its protected scope manifest: accounts, exact cases, attachments, snapshot references, audit events, object names and SHA-256 digests, settle-period blockers, and retention eligibility. Pending/recent uploads block reset. Submitted examples require a configured `FTC_DEMO_RETENTION_CUTOFF`, the exact same `--retention-cutoff`, and a verified complete private backup. No numeric retention interval is specified here because the supplied owner confirmation did not give one. Reset is never an end-user feature or deploy action.
+Demo reset is limited to the exact `FTC_DEMO_RESET_MARKER_ID`; production is rejected. Start with a dry-run and inspect its protected scope manifest: accounts, exact cases, attachments, snapshot references, audit events, object names and SHA-256 digests, settle-period blockers, and retention eligibility. Pending/recent uploads block reset. Every whole-demo reset, including a draft-only reset, requires a fresh verified complete private backup whose marker and relational snapshot still match. Submitted examples additionally require a configured `FTC_DEMO_RETENTION_CUTOFF` and the exact same `--retention-cutoff`; draft-only resets do not require a retention cutoff. No numeric retention interval is specified here because the supplied owner confirmation did not give one. Reset is never an end-user feature or deploy action.
 
 ```powershell
 $resetId = [guid]::NewGuid().Guid

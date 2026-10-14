@@ -34,7 +34,7 @@ The rehearsal restores case/snapshot/report facts and verified evidence digests,
 
 ## Retention and environment lifecycle
 
-Submitted demo examples are retained until an owner-supplied cutoff is configured. No specific days/months value is documented. A reset requires the precise configured cutoff and a complete verified export covering the exact active marker and scope. Preview initialization binds to a trusted database branch lifecycle; fresh preview branches are initialized once. Do not claim that a replacement branch automatically preserves data from an earlier branch. Production records/evidence are expected to persist through redeploy, but that behavior still needs a live verification.
+Every whole-demo reset requires a fresh complete verified export that matches the exact active marker and current relational snapshot, including when the scope contains only drafts. Submitted demo examples additionally require an owner-supplied retention cutoff; no specific days/months value is documented. Draft-only resets require the backup but do not require an unrelated retention cutoff. Preview initialization binds to a trusted database branch lifecycle; fresh preview branches are initialized once. Do not claim that a replacement branch automatically preserves data from an earlier branch. Production records/evidence are expected to persist through redeploy, but that behavior still needs a live verification.
 
 ## Current evidence and open hosted gates
 

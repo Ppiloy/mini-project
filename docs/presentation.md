@@ -11,7 +11,7 @@ Use the hosted HTTPS site only after the deployment is verified, and use separat
 5. Switch to the officer's separate profile, open the assigned submitted case, and compare the unchanged result and printable report.
 6. Close with the educational assumptions, the source arithmetic discrepancy, and the difference between hosted shared state and the local fallback.
 
-Keep the sourced slide discrepancy visible: the independently recomputed example is **143,544.30**; a source presentation stated **143,554.30**, a **10.00** discrepancy. See `.scratch/reviews/arithmetic-reference.md` when that reviewed reference is present on the integration branch. Do not characterize the calculation as a legal conclusion, tax filing, or proof of treaty eligibility.
+Keep the sourced slide discrepancy visible: the source presentation stated **143,554.30**; independent recomputation gives **143,544.30**, a **10.00** difference. See `.scratch/ftc-implementation/reviews/arithmetic-reference.md`. Do not characterize the calculation as a legal conclusion, tax filing, or proof of treaty eligibility.
 
 ## Offline fixture fallback
 

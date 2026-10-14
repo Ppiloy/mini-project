@@ -207,6 +207,7 @@ interface OperatorDependencies {
 export interface CleanupCandidate {
   attachmentId: string;
   caseId: string;
+  caseStatus: string;
   storageKey: string;
   status: string;
   action: "delete-and-verify" | "verify-absent" | "blocked-ready-evidence" | "blocked-settle-period" | "blocked-snapshot-reference" | "blocked-marker-mismatch" | "blocked-active-lease";
@@ -271,10 +272,10 @@ async function requireTargetMarker(pool: PgPoolLike, config: RuntimeEnvironmentC
 
 async function cleanupManifest(pool: PgPoolLike, blobs: OperatorBlobIO, marker: EnvironmentMarker, now: Date, settleMs: number, leaseMs: number): Promise<CleanupManifest> {
   const rows = await pool.query<{
-    id: string; case_id: string; status: string; cleanup_pending: boolean; cleanup_requested_at: Date | string | null;
+    id: string; case_id: string; case_status: string; status: string; cleanup_pending: boolean; cleanup_requested_at: Date | string | null;
     cleanup_claimed_at: Date | string | null; cleanup_attempt_count: number; cleanup_last_attempt_at: Date | string | null;
     cleanup_last_error: string | null; storage_key: string; environment_marker_id: string | null;
-  }>(`SELECT a.id,a.case_id,a.status,a.cleanup_pending,a.cleanup_requested_at,a.cleanup_claimed_at,a.cleanup_attempt_count,
+  }>(`SELECT a.id,a.case_id,c.status AS case_status,a.status,a.cleanup_pending,a.cleanup_requested_at,a.cleanup_claimed_at,a.cleanup_attempt_count,
           a.cleanup_last_attempt_at,a.cleanup_last_error,a.storage_key,a.environment_marker_id
       FROM attachments a JOIN ftc_cases c ON c.id=a.case_id
       WHERE a.storage_environment=$1 AND a.storage_store=$2 AND a.storage_region=$3
@@ -307,7 +308,7 @@ async function cleanupManifest(pool: PgPoolLike, blobs: OperatorBlobIO, marker: 
           : protection === "active_claim_lease" ? "blocked-active-lease"
             : protection === "upload_settle_period" ? "blocked-settle-period"
               : object ? "delete-and-verify" : "verify-absent";
-    candidates.push({ attachmentId: row.id, caseId: row.case_id, storageKey: row.storage_key, status: row.status, action,
+    candidates.push({ attachmentId: row.id, caseId: row.case_id, caseStatus: row.case_status, storageKey: row.storage_key, status: row.status, action,
       requestedAt: row.cleanup_requested_at ? new Date(row.cleanup_requested_at).toISOString() : null,
       requestedAgeMs: Number.isFinite(requested) ? now.getTime() - requested : null,
       attemptCount: row.cleanup_attempt_count, lastAttemptAt: row.cleanup_last_attempt_at ? new Date(row.cleanup_last_attempt_at).toISOString() : null,
@@ -703,8 +704,14 @@ async function captureBackup(pool: PgPoolLike, blobs: OperatorBlobIO, marker: En
   finally { client.release(); }
   const databaseSnapshotSha256 = digest(tables);
   const attachmentRows = tables.attachments ?? [];
+  for (const row of attachmentRows) {
+    if (row.storage_environment !== marker.kind || row.storage_store !== marker.storageStore || row.storage_region !== marker.storageRegion ||
+      row.environment_marker_id !== marker.id) {
+      throw new Error("A backed-up evidence reference has a different storage identity from the active target; backup was refused.");
+    }
+  }
   const attached = new Map(attachmentRows.map((row) => [String(row.storage_key), row]));
-  const listed = await blobs.list(marker, "cases/");
+  const listed = await blobs.list(marker, "");
   const objects: BackupManifest["objects"] = [];
   const saved: BackupArtifact["blobs"] = [];
   for (const { key } of listed) {
@@ -953,7 +960,8 @@ export interface ResetManifest {
   target: { kind: string; markerId: string; store: string; region: string };
   accounts: { loginName: string; id: string; role: string }[];
   cases: { id: string; status: string; submittedAt: string | null;
-    attachments: { id: string; status: string; storageKey: string; sha256: string; byteSize: number }[];
+    attachments: { id: string; status: string; storageKey: string; sha256: string; byteSize: number;
+      storageEnvironment: string; storageStore: string; storageRegion: string; environmentMarkerId: string | null }[];
     snapshots: { id: string; kind: string; revision: number; createdAt: string; evidenceAttachmentIds: string[] }[];
     auditEvents: { id: string; eventType: string; createdAt: string }[] }[];
   objects: { key: string; sha256: string | null; byteSize: number | null; state: "present" | "missing"; scope: "attachment" | "untracked-case-object" }[];
@@ -972,24 +980,35 @@ async function resetInventory(pool: PgPoolLike, blobs: OperatorBlobIO, marker: E
     `SELECT id,status,submitted_at FROM ftc_cases WHERE environment_marker_id=$1 AND owner_id=ANY($2::uuid[]) ORDER BY id`,
     [marker.id, users.rows.map((row) => row.id)]);
   const detail = await Promise.all(cases.rows.map(async (item) => {
-    const attachments = await pool.query<{ id: string; status: string; storage_key: string; sha256: string; byte_size: number }>(
-      "SELECT id,status,storage_key,sha256,byte_size FROM attachments WHERE case_id=$1 ORDER BY id", [item.id]);
+    const attachments = await pool.query<{ id: string; status: string; storage_key: string; sha256: string; byte_size: number;
+      storage_environment: string; storage_store: string; storage_region: string; environment_marker_id: string | null }>(
+      "SELECT id,status,storage_key,sha256,byte_size,storage_environment,storage_store,storage_region,environment_marker_id FROM attachments WHERE case_id=$1 ORDER BY id", [item.id]);
+    for (const attachment of attachments.rows) {
+      if (attachment.storage_environment !== marker.kind || attachment.storage_store !== marker.storageStore ||
+        attachment.storage_region !== marker.storageRegion || attachment.environment_marker_id !== marker.id) {
+        throw new Error(`Attachment ${attachment.id} storage identity does not match the active target; reset was refused.`);
+      }
+    }
     const snapshots = await pool.query<{ id: string; kind: string; revision: number; created_at: Date | string; evidence: unknown }>(
       "SELECT id,kind,revision,created_at,evidence FROM calculation_snapshots WHERE case_id=$1 ORDER BY created_at,id", [item.id]);
     const auditEvents = await pool.query<{ id: string; event_type: string; occurred_at: Date | string }>(
       "SELECT id,event_type,occurred_at FROM audit_events WHERE case_id=$1 ORDER BY occurred_at,id", [item.id]);
     return { id: item.id, status: item.status, submittedAt: item.submitted_at ? new Date(item.submitted_at).toISOString() : null,
       attachments: attachments.rows.map((attachment) => ({ id: attachment.id, status: attachment.status, storageKey: attachment.storage_key,
-        sha256: attachment.sha256, byteSize: Number(attachment.byte_size) })),
+        sha256: attachment.sha256, byteSize: Number(attachment.byte_size), storageEnvironment: attachment.storage_environment,
+        storageStore: attachment.storage_store, storageRegion: attachment.storage_region, environmentMarkerId: attachment.environment_marker_id })),
       snapshots: snapshots.rows.map((snapshot) => ({ id: snapshot.id, kind: snapshot.kind, revision: snapshot.revision,
         createdAt: new Date(snapshot.created_at).toISOString(), evidenceAttachmentIds: Array.isArray(snapshot.evidence)
           ? snapshot.evidence.flatMap((entry) => entry && typeof entry === "object" && "id" in entry && typeof entry.id === "string" ? [entry.id] : []) : [] })),
       auditEvents: auditEvents.rows.map((event) => ({ id: event.id, eventType: event.event_type, createdAt: new Date(event.occurred_at).toISOString() })) };
   }));
-  const keys = await blobs.list(marker, "cases/");
+  const keys = await blobs.list(marker, "");
   const attachedKeys = new Set(detail.flatMap((item) => item.attachments.map((attachment) => attachment.storageKey)));
   const casePrefixes = cases.rows.map((item) => `cases/${item.id}/`);
-  const caseKeys = keys.map((item) => item.key).filter((key) => casePrefixes.some((prefix) => key.startsWith(prefix))).sort();
+  const caseKeys = [...new Set([
+    ...keys.map((item) => item.key).filter((key) => casePrefixes.some((prefix) => key.startsWith(prefix))),
+    ...detail.flatMap((item) => item.attachments.map((attachment) => attachment.storageKey)),
+  ])].sort();
   const objects = await Promise.all(caseKeys.map(async (key) => {
     const bytes = await blobs.get(marker, key);
     return { key, sha256: bytes ? createHash("sha256").update(bytes).digest("hex") : null,
@@ -1152,12 +1171,14 @@ export async function runResetDemoCommand(args: string[], dependencies: Operator
     if (!configured || !supplied || configured !== supplied || !Number.isFinite(Date.parse(configured))) throw new Error("Submitted demo records require an exact FTC_DEMO_RETENTION_CUTOFF value passed again with --retention-cutoff.");
     retentionCutoff = new Date(configured);
     if (submitted.some((item) => !item.submittedAt || new Date(item.submittedAt) > retentionCutoff!)) throw new Error("A submitted demo case is newer than the configured retention cutoff; reset was refused.");
-    const backupPath = options.get("--backup"); const backupHash = options.get("--backup-sha256");
-    if (!backupPath || !backupHash) throw new Error("Submitted-record reset requires the exact private backup path and SHA-256.");
-    const artifact = await verifiedBackup(resolve(backupPath), backupHash, marker, pool, Boolean(dependencies.credentialsPath || dependencies.artifactPath));
-    backupSha256 = backupHash.toLowerCase();
-    const backedCases = artifact.tables.ftc_cases ?? [];
-    if (!manifest.cases.every((item) => backedCases.some((row) => row.id === item.id && row.environment_marker_id === marker.id))) throw new Error("Verified backup does not contain the complete scoped demo cases.");
+  }
+  const backupPath = options.get("--backup"); const backupHash = options.get("--backup-sha256");
+  if (!backupPath || !backupHash) throw new Error("Every whole-demo reset requires a verified complete backup with its exact private path and SHA-256.");
+  const artifact = await verifiedBackup(resolve(backupPath), backupHash, marker, pool, Boolean(dependencies.credentialsPath || dependencies.artifactPath));
+  backupSha256 = backupHash.toLowerCase();
+  const backedCases = artifact.tables.ftc_cases ?? [];
+  if (!manifest.cases.every((item) => backedCases.some((row) => row.id === item.id && row.environment_marker_id === marker.id))) {
+    throw new Error("Verified backup does not contain the complete scoped demo cases.");
   }
   const passwords = await Promise.all(demoLogins.map(async (loginName) => ({ loginName, password: `${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "").slice(0, 8)}` })));
   const file: ResetCredentialFile = { version: 1, target, markerId: marker.id, operationId, createdAt: (dependencies.now ?? (() => new Date()))().toISOString(), credentials: passwords };
