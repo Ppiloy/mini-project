@@ -7,6 +7,14 @@
     {
       "name": "20261014000200_login_attempt_reservations.sql",
       "sha256": "dad0f67fb737ce54a34a812af48d099d1931e9cdb1244aa38a8c4eb0802fc789"
+    },
+    {
+      "name": "20261014000300_workflow_environment.sql",
+      "sha256": "6c64ac67a3e289306393be31bf498fd9c6ee44052999fd2bfbce6c1e0c8386a5"
+    },
+    {
+      "name": "20261014000400_operator_credential_rotations.sql",
+      "sha256": "a6de4037793e1ab169e90476b00fe2c03b028a3267bb00afe1a76de8e74fdbd1"
     }
   ]
 }
