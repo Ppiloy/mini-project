@@ -120,10 +120,13 @@ export const hostedApi = {
   snapshot(id: string): Promise<{ snapshot: CalculationSnapshot }> {
     return request(`/api/snapshots/${encodeURIComponent(id)}`);
   },
-  uploadEvidence(caseId: string, file: File, metadata: { sourceId: string | null; kind: string }, csrfToken: string): Promise<{ attachment: AttachmentMetadata }> {
+  uploadEvidence(caseId: string, file: File, metadata: { sourceId: string | null; kind: string; expectedRevision: number; requestId: string }, csrfToken: string): Promise<{ attachment: AttachmentMetadata; case: FtcCaseRecord }> {
     const form = new FormData();
     form.set("file", file, file.name);
-    form.set("metadata", JSON.stringify({ ...metadata, displayName: file.name }));
+    form.set("sourceId", metadata.sourceId ?? "");
+    form.set("kind", metadata.kind);
+    form.set("expectedRevision", String(metadata.expectedRevision));
+    form.set("requestId", metadata.requestId);
     return request(`/api/cases/${encodeURIComponent(caseId)}/attachments`, { method: "POST", body: form }, csrfToken);
   },
   removeEvidence(id: string, expectedRevision: number, csrfToken: string): Promise<{ deleted: true; revision: number }> {

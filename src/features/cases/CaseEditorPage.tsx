@@ -12,6 +12,7 @@ import { PageHeading } from "../../components/SiteFrame.js";
 import { StepFive, StepFour, StepOne, StepThree, StepTwo } from "./FormSteps.js";
 
 type Mode = "demo" | "hosted";
+type UploadOperation = { sourceId: string | null; sourceIndex?: number; kind: EvidenceKind; file: File; expectedRevision: number; requestId: string };
 const stepLabels = ["ปีภาษี", "เงินได้", "นำเข้าและภาษี", "ภาษีไทย", "หลักฐานและทบทวน"];
 
 export function CaseEditorPage({ mode }: { mode: Mode }) {
@@ -30,7 +31,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
   const [fieldErrors, setFieldErrors] = useState<Array<{ path?: Array<string | number>; message: string }>>([]);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const [conflictLatest, setConflictLatest] = useState<FtcCaseRecord | null>(null);
-  const [failedUpload, setFailedUpload] = useState<{ sourceId: string | null; sourceIndex?: number; kind: EvidenceKind; file: File } | null>(null);
+  const [failedUpload, setFailedUpload] = useState<UploadOperation | null>(null);
   const saveRequest = useRef<{ caseId: string; revision: number; contentKey: string; requestId: string } | null>(null);
 
   const isDirty = draft !== null && JSON.stringify(draft) !== savedJson;
@@ -198,6 +199,41 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     setSavedMessage(null);
   };
 
+  const sendUpload = async (operation: UploadOperation) => {
+    if (!record) return;
+    setUploading(true);
+    setProblem(null);
+    try {
+      let attachment: AttachmentMetadata;
+      if (mode === "demo") {
+        attachment = addDemoAttachment(record.id, operation.sourceId, operation.kind, operation.file);
+        setAttachments((all) => [attachment, ...all]);
+        const latest = findDemoCase(record.id, "taxpayer");
+        if (latest) { setRecord(latest); setDraft(structuredClone(latest.draft)); setSavedJson(JSON.stringify(latest.draft)); }
+      } else {
+        if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+        const response = await hostedApi.uploadEvidence(record.id, operation.file, {
+          sourceId: operation.sourceId,
+          kind: operation.kind,
+          expectedRevision: operation.expectedRevision,
+          requestId: operation.requestId,
+        }, csrfToken);
+        attachment = response.attachment;
+        setRecord(response.case);
+        setDraft(structuredClone(response.case.draft));
+        setSavedJson(JSON.stringify(response.case.draft));
+        setAttachments((all) => [attachment, ...all.filter((item) => item.id !== attachment.id)]);
+      }
+      setFailedUpload(null);
+      setSavedMessage("แนบรายการไฟล์แล้ว");
+    } catch (error) {
+      // Keep this exact operation so a retry replays the same bytes and idempotency key.
+      // A filename match from a status lookup cannot prove which bytes the server stored.
+      setFailedUpload(operation);
+      setProblem(error instanceof Error ? error.message : "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่");
+    } finally { setUploading(false); }
+  };
+
   const upload = async (sourceId: string | null, kind: EvidenceKind, file: File, sourceIndex?: number) => {
     if (!record) return;
     const typeOk = ["application/pdf", "image/jpeg", "image/png"].includes(file.type);
@@ -220,42 +256,20 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       // The API assigns source IDs while saving. Resolve a new row from the acknowledged draft
       // so its attachment is linked to the actual source instead of becoming case-level evidence.
       resolvedSourceId = sourceIndex === undefined ? sourceId : saved.draft.sources[sourceIndex]?.id ?? null;
-      const savedFiles = mode === "demo" ? listDemoAttachments(saved.id) : (await hostedApi.getCase(saved.id)).attachments ?? [];
+      const detail = mode === "demo" ? null : await hostedApi.getCase(saved.id);
+      const savedFiles = mode === "demo" ? listDemoAttachments(saved.id) : detail?.attachments ?? [];
       const savedSameSource = savedFiles.filter((item) => item.sourceId === resolvedSourceId && item.status !== "deleted");
       if (savedSameSource.length >= 5) { setProblem("แนบไฟล์ต่อรายการได้ไม่เกิน 5 ไฟล์"); return; }
-      let attachment: AttachmentMetadata;
-      if (mode === "demo") attachment = addDemoAttachment(saved.id, resolvedSourceId, kind, file);
-      else {
-        if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
-        attachment = (await hostedApi.uploadEvidence(saved.id, file, { sourceId: resolvedSourceId, kind }, csrfToken)).attachment;
-      }
-      if (mode === "demo") {
-        setAttachments((all) => [attachment, ...all]);
-        const latest = findDemoCase(saved.id, "taxpayer");
-        if (latest) { setRecord(latest); setDraft(structuredClone(latest.draft)); setSavedJson(JSON.stringify(latest.draft)); }
-      } else {
-        const detail = await hostedApi.getCase(saved.id);
-        setAttachments(detail.attachments ?? [attachment]);
-        setRecord(detail.case); setDraft(structuredClone(detail.case.draft)); setSavedJson(JSON.stringify(detail.case.draft));
-      }
-      setFailedUpload(null);
-      setSavedMessage("แนบรายการไฟล์แล้ว");
+      const operation: UploadOperation = {
+        sourceId: resolvedSourceId,
+        sourceIndex,
+        kind,
+        file,
+        expectedRevision: detail?.case.draft.revision ?? saved.draft.revision,
+        requestId: crypto.randomUUID(),
+      };
+      await sendUpload(operation);
     } catch (error) {
-      if (mode === "hosted") {
-        try {
-          const detail = await hostedApi.getCase(record.id);
-          const possiblySaved = (detail.attachments ?? []).filter((item) => item.sourceId === resolvedSourceId && item.kind === kind && item.displayName === file.name);
-          if (possiblySaved.length > 0) {
-            setAttachments(detail.attachments ?? []);
-            setRecord(detail.case); setDraft(structuredClone(detail.case.draft)); setSavedJson(JSON.stringify(detail.case.draft));
-            setFailedUpload(null);
-            setSavedMessage(possiblySaved[0]?.status === "ready" ? "ตรวจพบไฟล์ที่บันทึกแล้วหลังการตอบกลับขัดข้อง" : "ตรวจพบรายการไฟล์ในระบบ กำลังแสดงสถานะล่าสุด");
-            setProblem(null);
-            return;
-          }
-        } catch { /* Keep the original failure and offer a deliberate retry. */ }
-      }
-      setFailedUpload({ sourceId, sourceIndex, kind, file });
       setProblem(error instanceof Error ? error.message : "แนบไฟล์ไม่สำเร็จ กรุณาลองใหม่");
     } finally { setUploading(false); }
   };
@@ -346,7 +360,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     <StepTwo key="two" {...stepProps} />,
     <StepThree key="three" {...stepProps} />,
     <StepFour key="four" {...stepProps} />,
-    <StepFive key="five" {...stepProps} />,
+    <StepFive key="five" {...stepProps} mode={mode} />,
   ][step];
 
   return <>
@@ -356,7 +370,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     <nav className="stepper" aria-label="ขั้นตอนแบบฟอร์ม">
       {stepLabels.map((label, index) => <div key={label} className={`stepper-item ${step === index ? "is-current" : step > index ? "is-done" : ""}`} aria-current={step === index ? "step" : undefined}><span className="step-number">{step > index ? "✓" : index + 1}</span><span>{label}</span></div>)}
     </nav>
-    {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{problem.includes("เซสชันหมดอายุ") && mode === "hosted" && <a href={`/login?returnTo=${encodeURIComponent(`/app/cases/${record.id}/edit`)}`}>เข้าสู่ระบบอีกครั้งในบัญชีเดิม</a>}{failedUpload && <button className="button button-secondary button-small" onClick={() => void upload(failedUpload.sourceId, failedUpload.kind, failedUpload.file, failedUpload.sourceIndex)}>ลองแนบไฟล์เดิมอีกครั้ง</button>}{fieldErrors.length > 0 && <ul>{fieldErrors.map((item, index) => <li key={index}><a href="#step-title">{item.message}{item.path?.length ? ` · ${item.path.join(" › ")}` : ""}</a></li>)}</ul>}</div>}
+    {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{problem.includes("เซสชันหมดอายุ") && mode === "hosted" && <a href={`/login?returnTo=${encodeURIComponent(`/app/cases/${record.id}/edit`)}`}>เข้าสู่ระบบอีกครั้งในบัญชีเดิม</a>}{failedUpload && <button className="button button-secondary button-small" disabled={uploading} onClick={() => void sendUpload(failedUpload)}>ลองแนบไฟล์เดิมอีกครั้ง</button>}{fieldErrors.length > 0 && <ul>{fieldErrors.map((item, index) => <li key={index}><a href="#step-title">{item.message}{item.path?.length ? ` · ${item.path.join(" › ")}` : ""}</a></li>)}</ul>}</div>}
     {conflictLatest && <div className="conflict-panel"><strong>ไม่บันทึกทับข้อมูลล่าสุดโดยอัตโนมัติ</strong><p>ฉบับบนเซิร์ฟเวอร์เป็นรุ่น {conflictLatest.draft.revision}; ข้อความที่คุณกำลังแก้ยังอยู่ในหน้านี้.</p><div><button className="button button-secondary button-small" onClick={() => void reloadLatest(false)}>โหลดฉบับล่าสุดและละทิ้งการแก้ไข</button><button className="button button-primary button-small" onClick={() => void reloadLatest(true)}>นำการแก้ไขปัจจุบันไปใช้ต่อ</button></div></div>}
     {savedMessage && <div className="alert alert-success" role="status">{savedMessage}</div>}
     <div className="form-workspace card">{stepContent}
