@@ -3,10 +3,11 @@ import { expect, test } from "@playwright/test";
 import { apiSuccessSchemas } from "../../shared/contracts.js";
 import type { CalculationSnapshot } from "../../shared/contracts.js";
 import { advance, browserApi, createCase, login, operatorSeed } from "./fixtures.js";
+import { assertFocusedSkipLinkIsScreenOnly } from "./print-acceptance.js";
 
 const proofBytes = (label: string) => Buffer.from(`%PDF-1.7\n% fictional acceptance evidence: ${label}\n%%EOF\n`, "ascii");
 
-test("real taxpayer journey persists a server-assigned source, evidence, calculation, submitted snapshot and officer audit", async ({ browser, page }) => {
+test("real taxpayer journey persists a server-assigned source, evidence, calculation, submitted snapshot and officer audit", async ({ browser, page }, testInfo) => {
   const seed = await operatorSeed();
   const taxpayerA = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
   const taxpayerB = seed.credentials.find((item) => item.loginName === "taxpayer-demo-b")!;
@@ -119,6 +120,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await expect(page).toHaveURL(new RegExp(`/reports/${previewId}$`));
   await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
   await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await assertFocusedSkipLinkIsScreenOnly(page, testInfo.outputPath("draft-report.pdf"));
   await page.goto(`/app/cases/${caseId}/result?preview=${previewId}`);
   await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
   const sourceLines = preview.result.lines.filter((line) => line.sourceId === sourceId);
@@ -174,6 +176,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await page.reload();
   await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
   await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await assertFocusedSkipLinkIsScreenOnly(page, testInfo.outputPath("submitted-report.pdf"));
 
   const taxpayerBContext = await browser.newContext();
   try {
