@@ -13,6 +13,7 @@ Target: linked Netlify project `ppiloy-mini-project`, site ID `3bc8fc1b-7af0-47c
 - [Deploy log](https://app.netlify.com/projects/ppiloy-mini-project/deploys/6acf429752fbb19f3b176f9e).
 - API probes to health, anonymous session, unknown API and invalid login all returned Netlify `401`, content type `text/html`, title `Login Redirect`. These responses came before application JSON and do **not** verify Function routing, Database writes or application authentication.
 - The user offered to make preview access public if the dashboard permits it. Accessibility has not yet been verified. Visitor-access changes use the dashboard, as required by the local Netlify access-control skill; no token extraction or unsupported API setting was attempted.
+- A documented CLI `database status --branch codex/ftc-integration --json` check after the draft deployment returned `Error: No database branch found for "codex/ftc-integration". Has a deploy been published for this branch?`. That remote branch check was stopped; a manual draft URL is not evidence of a published Git branch or a working Database branch. No lower-level provisioning workaround was attempted.
 - Private deployment secret/configuration and raw CLI output are in ignored `tmp/` files and are excluded from Git/frontend artifacts.
 
 ## Gates still required
