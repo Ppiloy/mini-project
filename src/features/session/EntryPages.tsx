@@ -123,11 +123,29 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
   );
 }
 
-export function DemoEntryPage({ onChoose }: { onChoose: (persona: DemoPersona) => void }) {
+export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession, checkingHostedSession }: {
+  onChoose: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
+  sessionNotice: string | null;
+  onRefreshHostedSession: () => Promise<void>;
+  checkingHostedSession: boolean;
+}) {
   const navigate = useNavigate();
-  const select = (persona: DemoPersona) => {
-    onChoose(persona);
-    navigate(persona === "officer" ? "/demo/officer" : "/demo/app", { replace: true });
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const select = async (persona: DemoPersona) => {
+    if (busy) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      const result = await onChoose(persona);
+      if (!result.confirmed) {
+        setProblem(apiFailureMessages(result.errors, "ยังสลับไปโหมดสาธิตไม่ได้ เพราะเซิร์ฟเวอร์ยังยืนยันการออกจากระบบไม่สำเร็จ กรุณาลองอีกครั้ง"));
+        return;
+      }
+      navigate(persona === "officer" ? "/demo/officer" : "/demo/app", { replace: true });
+    } catch (error) {
+      setProblem(apiFailureMessage(error, "เปิดโหมดสาธิตไม่ได้ กรุณาลองอีกครั้ง"));
+    } finally { setBusy(false); }
   };
   return (
     <main className="entry-page">
@@ -138,11 +156,19 @@ export function DemoEntryPage({ onChoose }: { onChoose: (persona: DemoPersona) =
         <h1>สาธิตระบบต้นแบบ</h1>
         <p className="muted">เลือกบทบาทสำหรับข้อมูลสมมติ โหมดนี้ใช้เครื่องคำนวณเดียวกับแอปและจำลองการบันทึกกับเอกสารในอุปกรณ์นี้</p>
         <div className="alert alert-info"><strong>ข้อมูลในโหมดสาธิตแยกจากระบบออนไลน์</strong><span>ไม่มีการใช้รหัสผ่าน และไม่เชื่อมต่อกับบัญชีหรือคิวที่บันทึกไว้บนเซิร์ฟเวอร์</span></div>
+        {sessionNotice && <div className="alert alert-error" role="alert">
+          <span>{sessionNotice}</span>
+          <div className="form-actions-right">
+            <button className="button button-secondary button-small" onClick={() => void onRefreshHostedSession()} disabled={checkingHostedSession}>{checkingHostedSession ? "กำลังตรวจสอบ…" : "ตรวจสอบสถานะออนไลน์"}</button>
+            <a className="button button-quiet button-small" href="/login">เข้าสู่ระบบออนไลน์</a>
+          </div>
+        </div>}
+        {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         <div className="demo-role-list">
-          <button className="role-card" onClick={() => select("taxpayer")}>
+          <button className="role-card" onClick={() => void select("taxpayer")} disabled={busy}>
             <span className="role-icon" aria-hidden="true">ผ</span><span><strong>เข้าสู่สาธิตในฐานะผู้เสียภาษี</strong><small>สร้างและแก้ไขกรณีตัวอย่าง ส่งเข้าคิวจำลอง</small></span><span aria-hidden="true">→</span>
           </button>
-          <button className="role-card" onClick={() => select("officer")}>
+          <button className="role-card" onClick={() => void select("officer")} disabled={busy}>
             <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เข้าสู่สาธิตในฐานะเจ้าหน้าที่</strong><small>ดูรายการที่ส่งแล้วในคิวจำลอง</small></span><span aria-hidden="true">→</span>
           </button>
         </div>

@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:real": "playwright test --config=playwright.real-backend.config.ts",
     "preview": "vite preview",
     "migrations:verify": "tsx server/scripts/verify-migrations.ts",
     "demo:seed": "tsx server/scripts/bootstrap.ts seed",

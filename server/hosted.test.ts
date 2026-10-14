@@ -30,6 +30,37 @@ class PGlitePool implements PgPoolLike {
   }
 }
 
+class DelayedUserLookupPool implements PgPoolLike {
+  private releaseLookup!: () => void;
+  private lookupStarted!: () => void;
+  readonly lookupReady = new Promise<void>((resolve) => { this.lookupStarted = resolve; });
+  private readonly lookupGate = new Promise<void>((resolve) => { this.releaseLookup = resolve; });
+
+  constructor(private readonly pool: PgPoolLike) {}
+
+  release() { this.releaseLookup(); }
+
+  async query<Row = Record<string, unknown>>(text: string, values?: unknown[], callback?: (error: Error | null, result?: { rows: Row[]; rowCount: number }) => void) {
+    const operation = (async () => {
+      const result = await this.pool.query<Row>(text, values);
+      if (/^\s*SELECT users\.id, users\.login_name, users\.display_name, profiles\.masked_reference, users\.role, users\.active/i.test(text)) {
+        this.lookupStarted();
+        await this.lookupGate;
+      }
+      return result;
+    })();
+    if (callback) operation.then((result) => callback(null, result), (error: Error) => callback(error));
+    return operation;
+  }
+
+  async connect(): Promise<PgQueryable> {
+    return {
+      query: (text, values, callback) => this.query(text, values, callback),
+      release: () => undefined,
+    };
+  }
+}
+
 const origin = "https://ftc.example.test";
 const afterEachCallbacks: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -82,10 +113,35 @@ describe("hosted authentication and durable draft API", () => {
     const restored = await agent.get("/api/auth/session").set("Origin", origin);
     expect(restored.status).toBe(200);
     expect(restored.body.data.user).toEqual(user);
+    expect(restored.headers["set-cookie"]).toBeUndefined();
+    const cases = await agent.get("/api/cases").set("Origin", origin);
+    expect(cases.status).toBe(200);
+    expect(cases.headers["set-cookie"]).toBeUndefined();
 
     const logout = await agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", csrfToken);
     expect(logout.status).toBe(200);
+    expect(logout.headers["set-cookie"]).toBeUndefined();
     expect((await agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+  });
+
+  it("does not resurrect a session when an authenticated lookup finishes after logout", async () => {
+    const { app, pool } = await setup();
+    const loggedIn = await login(app, "taxpayer-a");
+    const delayedPool = new DelayedUserLookupPool(pool);
+    const delayedApp = createApp({ pool: delayedPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps: false });
+    const lateRequest = request(delayedApp).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    const pendingResponse = lateRequest.then((response) => response);
+
+    await delayedPool.lookupReady;
+    const logout = await loggedIn.agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", loggedIn.csrfToken);
+    expect(logout.status).toBe(200);
+    delayedPool.release();
+    const lateResponse = await pendingResponse;
+    expect(lateResponse.status).toBe(401);
+    expect(lateResponse.headers["set-cookie"]).toBeUndefined();
+
+    const afterLateResponse = await request(app).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    expect(afterLateResponse.status).toBe(401);
   });
 
   it("sets a Secure host-only cookie when the trusted adapter marks hosted HTTPS", async () => {

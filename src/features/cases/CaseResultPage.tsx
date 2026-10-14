@@ -56,7 +56,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     return () => { active = false; };
   }, [id, mode, requestedSnapshotId]);
 
-  const calculateCurrent = () => navigate(`${mode === "demo" ? "/demo" : ""}/cases/${encodeURIComponent(id)}/edit`);
+  const calculateCurrent = () => navigate(`${mode === "demo" ? "/demo" : "/app"}/cases/${encodeURIComponent(id)}/edit`);
   const isSubmitted = record?.status === "submitted";
   const isCurrent = record && snapshot && snapshot.revision === record.draft.revision;
   const canSubmit = !isSubmitted && snapshot?.kind === "preview" && isCurrent && snapshot.result.outcome === "ready";
@@ -127,8 +127,8 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
   if (problem && (!record || !snapshot)) return <section className="card"><h1>แสดงผลคำนวณไม่ได้</h1><div className="alert alert-error" role="alert">{problem}</div><a className="button button-secondary" href={mode === "demo" ? "/demo/app" : "/app"}>กลับรายการกรณี</a></section>;
   if (!record || !snapshot) return null;
 
-  const root = mode === "demo" ? "/demo" : "";
-  const reportHref = `${root}/reports/${encodeURIComponent(snapshot.id)}`;
+  const reportRoot = mode === "demo" ? "/demo" : "";
+  const reportHref = `${reportRoot}/reports/${encodeURIComponent(snapshot.id)}`;
   const stale = !isCurrent && !isSubmitted;
   const outcomeText = snapshot.result.outcome === "ready" ? "คำนวณได้ภายใต้สมมติฐานที่ระบุ" : snapshot.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ" : "มีข้อเท็จจริงที่อยู่นอกขอบเขตตัวอย่าง";
   const sourceRows = snapshot.result.lines.filter((line) => line.sourceId !== null);
