@@ -13,8 +13,9 @@ Specification: [spec](spec.md), [plan](../../FTC-PROTOTYPE-PLAN.md).
 | [07 Snapshots/evidence/submission](issues/07-snapshots-evidence.md) | 02, 03 | resolved |
 | [08 Bootstrap/release checks](issues/08-bootstrap-checks.md) | 03 | claimed |
 | [09 Logout recovery](issues/09-logout-recovery.md) | 04 | resolved |
+| [10 Response/report gaps](issues/10-response-report.md) | 04, 07, 09 | claimed |
 | [05 Operations](issues/05-operations.md) | 07, 08 | open |
-| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07, 08, 09 | open |
+| [06 Integrated acceptance](issues/06-acceptance.md) | 02, 03, 04, 05, 07, 08, 09, 10 | open |
 
 ## Review log
 
