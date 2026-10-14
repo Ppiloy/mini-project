@@ -46,7 +46,9 @@ export function resolveRuntimeEnvironmentConfig(env: NodeJS.ProcessEnv): Runtime
   if (!supportedRegions.has(region)) throw new Error("FTC_BLOB_REGION is unsupported.");
   const siteId = env.SITE_ID ?? env.NETLIFY_SITE_ID;
   let storageStore: string;
-  if (kind === "local") storageStore = "ftc-evidence-local";
+  // Bind sandboxed local Blobs to this trusted database identity. A restore to
+  // another disposable database therefore cannot see the source DB's objects.
+  if (kind === "local") storageStore = `ftc-evidence-local-${databaseFingerprint.slice(0, 16)}`;
   else {
     if (!siteId) throw new Error("SITE_ID is required for hosted evidence isolation.");
     const site = safeSiteName(siteId);
@@ -112,4 +114,23 @@ export async function ensureEnvironmentMarker(pool: PgPoolLike, config: RuntimeE
   } finally {
     client.release();
   }
+}
+
+/** Resolve the active marker without creating or rotating one; read-only operator plans use this. */
+export async function loadEnvironmentMarker(pool: PgPoolLike, config: RuntimeEnvironmentConfig): Promise<EnvironmentMarker> {
+  const result = await pool.query<{
+    id: string; kind: RuntimeEnvironmentKind; database_fingerprint: string; storage_store: string;
+    storage_region: string; deployment_context: string; initialized_at: Date | string;
+  }>(`SELECT marker.* FROM active_hosting_environment active
+      JOIN hosting_environment_markers marker ON marker.id=active.marker_id
+      WHERE active.singleton=true`);
+  const row = result.rows[0];
+  if (!row) throw new Error("No active environment marker exists; run the explicit environment initialization command first.");
+  const matches = row.kind === config.kind && row.database_fingerprint === config.databaseFingerprint &&
+    row.storage_store === config.storageStore && row.storage_region === config.storageRegion &&
+    row.deployment_context === config.deploymentContext;
+  if (!matches) throw new Error("Stored hosting environment does not match this trusted runtime configuration.");
+  return { kind: row.kind, databaseFingerprint: row.database_fingerprint, storageStore: row.storage_store,
+    storageRegion: row.storage_region, deploymentContext: row.deployment_context, id: row.id,
+    initializedAt: new Date(row.initialized_at).toISOString() };
 }

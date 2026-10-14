@@ -360,7 +360,7 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 @media print {
   @page { size: A4; margin: 13mm 12mm; }
   :root, body { background: white !important; color: #152c45 !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .topbar, .site-footer, .no-print, .report-toolbar, .sticky-save { display: none !important; }
+  .topbar, .site-footer, .skip-link, .no-print, .report-toolbar, .sticky-save { display: none !important; }
   .app-frame, .page-wrap { display: block; width: 100%; max-width: none; margin: 0; padding: 0; }
   .print-report { width: 100%; max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
   .report-header, .report-total, .report-summary-grid > div, .report-source-grid > div, .report-converted, .source-discrepancy { print-color-adjust: exact; -webkit-print-color-adjust: exact; }

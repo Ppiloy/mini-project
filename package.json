@@ -19,6 +19,11 @@
     "migrations:verify": "tsx server/scripts/verify-migrations.ts",
     "demo:seed": "tsx server/scripts/bootstrap.ts seed",
     "demo:rotate": "tsx server/scripts/bootstrap.ts rotate",
+    "ops:cleanup": "tsx server/scripts/operations.ts cleanup",
+    "ops:preview-init": "tsx server/scripts/operations.ts preview-init",
+    "ops:backup": "tsx server/scripts/operations.ts backup",
+    "demo:reset": "tsx server/scripts/operations.ts reset-demo",
+    "ops:restore": "tsx server/scripts/operations.ts restore",
     "verify:release": "npm run typecheck && npm test && npm run migrations:verify && npm run build"
   },
   "dependencies": {

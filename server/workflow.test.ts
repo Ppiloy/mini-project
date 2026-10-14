@@ -228,18 +228,17 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
     const guardedBlobs:BlobIO={...storage(),async get(){productionReads+=1;return null;}};
     const secondApp = createApp({pool,sessionSecret:"workflow-test-session-secret-has-sufficient-entropy",allowedOrigin:origin,trustedHttps:false,
       blobIO:guardedBlobs,officerUserId:officerId,environment:secondConfig});
-    const newSession = await login(secondApp);
-    expect((await newSession.agent.get(`/api/cases/${created.id}`).set("Origin",origin)).status).toBe(404);
-    const previewCase=await createCase(newSession.agent,newSession.csrf,"fresh-preview-case");
+    const gated = await request.agent(secondApp).post("/api/auth/login").set("Origin",origin)
+      .send({loginName:"taxpayer-a",password:"test-password-01"});
+    expect(gated.status).toBe(503);
+    expect(gated.body.error.code).toBe("preview_initialization_required");
     for (const changed of [{...secondConfig,storageStore:"drifted-preview-store"},{...secondConfig,storageRegion:"ap-southeast-1"},{...secondConfig,deploymentContext:"branch-deploy"}]) {
       await expect(ensureEnvironmentMarker(pool,changed)).rejects.toThrow(/does not match/);
       const driftApp=createApp({pool,sessionSecret:"workflow-test-session-secret-has-sufficient-entropy",allowedOrigin:origin,trustedHttps:false,
         blobIO:guardedBlobs,officerUserId:officerId,environment:changed});
-      expect((await newSession.agent.get(`/api/cases/${previewCase.id}`).set("Origin",origin)).status).toBe(200);
-      expect((await request.agent(driftApp).get(`/api/cases/${previewCase.id}`).set("Origin",origin)).status).toBe(503);
+      expect((await request.agent(driftApp).get(`/api/cases/${created.id}`).set("Origin",origin)).status).toBe(503);
     }
-    expect((await newSession.agent.get(`/api/cases/${previewCase.id}`).set("Origin",origin)).status).toBe(200);
-    expect((await newSession.agent.get(`/api/attachments/${copiedAttachment.rows[0]!.id}`).set("Origin",origin)).status).toBe(404);
+    expect((await request.agent(secondApp).get(`/api/attachments/${copiedAttachment.rows[0]!.id}`).set("Origin",origin)).status).toBe(503);
     expect(productionReads).toBe(0);
     expect((await pool.query<{count:number}>("SELECT count(*)::int AS count FROM ftc_cases WHERE environment_marker_id=$1",[firstId])).rows[0]?.count).toBe(1);
   },10000);

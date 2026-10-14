@@ -185,6 +185,7 @@ async function seedAccounts(
   target: TargetEnvironment,
   markerId: string,
   path: string,
+  configuredOfficerId: string | undefined,
   now: () => Date,
 ): Promise<{ created: string[]; credentialPath?: string; officerId: string }> {
   const generated = await Promise.all(accounts.map(async (account) => {
@@ -198,7 +199,7 @@ async function seedAccounts(
       const created: CredentialRecord[] = [];
       const ids = new Map<string, string>();
       for (const { account, password, passwordHash } of generated) {
-        const id = randomUUID();
+        const id = account.loginName === "officer-demo" && configuredOfficerId ? configuredOfficerId : randomUUID();
         const inserted = await client.query<{ id: string; role: string }>(
           `INSERT INTO app_users (id, login_name, display_name, password_hash, role)
            VALUES ($1, $2, $3, $4, $5)
@@ -210,6 +211,9 @@ async function seedAccounts(
         )).rows[0];
         if (!existing || existing.role !== account.role || ("active" in existing && !existing.active)) {
           throw new Error(`Existing demo account ${account.loginName} has an unexpected or inactive identity; refusing to change it.`);
+        }
+        if (account.loginName === "officer-demo" && configuredOfficerId && existing.id !== configuredOfficerId) {
+          throw new Error("Existing officer ID does not match FTC_OFFICER_USER_ID; refusing to replace an established identity.");
         }
         ids.set(account.loginName, existing.id);
         if (inserted.rows[0]) {
@@ -333,6 +337,12 @@ export async function runBootstrapCommand(args: string[], dependencies: Operator
   if (runtime.kind !== parsed.target) {
     throw new Error(`Target mismatch: requested ${parsed.target}, trusted runtime identifies ${runtime.kind}. No database changes were made.`);
   }
+  if (parsed.action === "seed" && env.FTC_OFFICER_USER_ID && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(env.FTC_OFFICER_USER_ID)) {
+    throw new Error("FTC_OFFICER_USER_ID must be a configured UUID before seeding.");
+  }
+  if (parsed.action === "seed" && parsed.target !== "local" && !env.FTC_OFFICER_USER_ID) {
+    throw new Error("Hosted seed requires a preconfigured FTC_OFFICER_USER_ID so Function assignment is ready on first preview use.");
+  }
   const pool = dependencies.pool ?? poolFromEnvironment(env);
   const marker = await ensureEnvironmentMarker(pool, runtime);
   if (marker.kind !== parsed.target) throw new Error("The database environment marker does not match the explicit target.");
@@ -341,7 +351,7 @@ export async function runBootstrapCommand(args: string[], dependencies: Operator
   const operationId = parsed.action === "rotate" ? parsed.operationId : undefined;
   const path = dependencies.credentialsPath ?? credentialsPathFor(parsed.action, parsed.target, parsed.loginName, operationId, now());
   if (parsed.action === "seed") {
-    const result = await seedAccounts(pool, parsed.target, marker.id, path, now);
+    const result = await seedAccounts(pool, parsed.target, marker.id, path, env.FTC_OFFICER_USER_ID, now);
     if (result.created.length === 0) {
       writeSafeSummary(writeOutput, `All three fictional accounts already exist; credentials and cases were preserved. FTC_OFFICER_USER_ID=${result.officerId}`);
     } else {

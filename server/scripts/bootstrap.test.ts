@@ -122,6 +122,20 @@ async function login(app: ReturnType<typeof createApp>, loginName: string, passw
 }
 
 describe("fictional account bootstrap operator command", () => {
+  it("uses a preconfigured officer UUID on first seed and refuses an established ID mismatch", async () => {
+    const { pool, credentialDirectory, output } = await setup();
+    const configuredId = "9b000000-0000-4000-8000-000000000003";
+    const credentialPath = join(credentialDirectory, "configured-officer-seed.json");
+    await runBootstrapCommand(["seed", "--target", "local"], { pool, env: { ...env, FTC_OFFICER_USER_ID: configuredId }, credentialsPath: credentialPath, writeOutput: (line) => output.push(line) });
+    const credentials = JSON.parse(await readFile(credentialPath, "utf8")) as { FTC_OFFICER_USER_ID: string };
+    expect(credentials.FTC_OFFICER_USER_ID).toBe(configuredId);
+    expect((await pool.query("SELECT id,role FROM app_users WHERE login_name='officer-demo'")).rows[0]).toEqual({ id: configuredId, role: "officer" });
+    await expect(runBootstrapCommand(["seed", "--target", "local"], { pool, env: { ...env, FTC_OFFICER_USER_ID: "9b000000-0000-4000-8000-000000000004" }, credentialsPath: join(credentialDirectory, "mismatch.json") }))
+      .rejects.toThrow(/transaction was rolled back/);
+    await expect(access(join(credentialDirectory, "mismatch.json"))).rejects.toThrow();
+    expect((await pool.query("SELECT id FROM app_users WHERE login_name='officer-demo'")).rows[0]?.id).toBe(configuredId);
+  });
+
   it("requires a matching explicit target before it writes to the database", async () => {
     const { pool, run } = await setup();
     await expect(run(["seed"])).rejects.toThrow("explicit --target");
