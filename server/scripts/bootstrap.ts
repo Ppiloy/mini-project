@@ -79,6 +79,9 @@ function parseArguments(args: string[]): { action: OperatorAction; target: Targe
   if (action === "rotate" && (!loginName || !accounts.some((account) => account.loginName === loginName))) {
     throw new Error("Rotation requires --login with one of the three fictional demo accounts.");
   }
+  if (action === "rotate" && !operationId) {
+    throw new Error("Rotation requires an explicit --operation-id UUIDv4; reuse it to recover an ambiguous operation.");
+  }
   if (operationId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)) {
     throw new Error("--operation-id must be a UUIDv4.");
   }
@@ -291,7 +294,10 @@ async function rotateAccount(
         "SELECT id, role, active, password_hash FROM app_users WHERE login_name=$1 FOR UPDATE", [loginName],
       );
       const user = account.rows[0];
-      if (!user || !user.active || user.role !== "taxpayer") throw new Error(`Active demo taxpayer ${loginName} was not found; no password was changed.`);
+      const expectedRole = accounts.find((item) => item.loginName === loginName)?.role;
+      if (!user || !user.active || !expectedRole || user.role !== expectedRole) {
+        throw new Error(`Active seeded demo account ${loginName} has an unexpected or inactive identity; no password was changed.`);
+      }
       const prior = await client.query<{ user_id: string; environment_marker_id: string }>(
         "SELECT user_id, environment_marker_id FROM operator_credential_rotations WHERE operation_id=$1 FOR UPDATE", [operationId],
       );
@@ -332,7 +338,7 @@ export async function runBootstrapCommand(args: string[], dependencies: Operator
   if (marker.kind !== parsed.target) throw new Error("The database environment marker does not match the explicit target.");
   const writeOutput = dependencies.writeOutput ?? ((message: string) => process.stdout.write(`${message}\n`));
   const now = dependencies.now ?? (() => new Date());
-  const operationId = parsed.action === "rotate" ? parsed.operationId ?? randomUUID() : undefined;
+  const operationId = parsed.action === "rotate" ? parsed.operationId : undefined;
   const path = dependencies.credentialsPath ?? credentialsPathFor(parsed.action, parsed.target, parsed.loginName, operationId, now());
   if (parsed.action === "seed") {
     const result = await seedAccounts(pool, parsed.target, marker.id, path, now);

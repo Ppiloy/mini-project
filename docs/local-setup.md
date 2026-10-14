@@ -17,7 +17,7 @@ netlify dev:exec npm run demo:seed -- --target local
 
 The seed command requires the explicit target to match the trusted runtime environment marker. It creates two fictional taxpayers and one reviewing officer only when those accounts are absent. Repeat runs retain passwords and cases. New credentials are written to a private file under the operator's home directory; the command prints only its path and the officer identifier. Keep that file private and pass credentials to the presenter through an approved private channel.
 
-Set the server-only officer identifier from the seed summary as `FTC_OFFICER_USER_ID`. To rotate one demo account, run this explicitly in the same target environment:
+Set the server-only officer identifier from the seed summary as `FTC_OFFICER_USER_ID`. Rotate any of the three seeded demo accounts (including the officer) explicitly in the same target environment. The UUID operation ID is mandatory; keep it so the same command can recover an ambiguous commit:
 
 ```powershell
 $rotationId = [guid]::NewGuid().Guid

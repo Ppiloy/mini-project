@@ -129,6 +129,13 @@ describe("fictional account bootstrap operator command", () => {
     expect((await pool.query("SELECT count(*)::int AS count FROM app_users")).rows[0]?.count).toBe(0);
   });
 
+  it("requires an explicit rotation operation ID before marker or account mutation", async () => {
+    const { pool, run } = await setup();
+    await expect(run(["rotate", "--target", "local", "--login", "officer-demo"])).rejects.toThrow(/explicit --operation-id/i);
+    expect((await pool.query("SELECT count(*)::int AS count FROM app_users")).rows[0]?.count).toBe(0);
+    expect((await pool.query("SELECT count(*)::int AS count FROM hosting_environment_markers")).rows[0]?.count).toBe(0);
+  });
+
   it("seeds private scrypt credentials once, preserves password and case on rerun, and never prints secrets", async () => {
     const { app, pool, run, output, credentialDirectory } = await setup();
     const credentialFile = join(credentialDirectory, "seed.json");
@@ -186,6 +193,43 @@ describe("fictional account bootstrap operator command", () => {
     expect(output.join("\n")).not.toContain(newPassword);
     expect(output.join("\n")).not.toContain(oldPassword);
   });
+
+  it.each(["taxpayer-demo-a", "officer-demo"] as const)(
+    "rotates the seeded %s account through HTTP and replays the same operation safely",
+    async (loginName) => {
+      const { app, run, output, credentialDirectory } = await setup();
+      const seedPath = join(credentialDirectory, "seed.json");
+      await run(["seed", "--target", "local"], seedPath);
+      const seed = JSON.parse(await readFile(seedPath, "utf8")) as { credentials: Array<{ loginName: string; password: string }> };
+      const oldPassword = seed.credentials.find((credential) => credential.loginName === loginName)?.password ?? "";
+      const oldSession = await login(app, loginName, oldPassword);
+      expect(oldSession.response.status).toBe(200);
+      if (loginName === "officer-demo") expect(oldSession.response.body.data.user.role).toBe("officer");
+
+      const operationId = loginName === "officer-demo"
+        ? "d89d316c-f058-4f64-ad71-23878315a65f"
+        : "37f4fb5f-8141-43d1-b80d-bbcbded2d723";
+      const rotateArgs = ["rotate", "--target", "local", "--login", loginName, "--operation-id", operationId];
+      const rotationFile = join(credentialDirectory, `rotated-${loginName}.json`);
+      await run(rotateArgs, rotationFile);
+      const rotation = JSON.parse(await readFile(rotationFile, "utf8")) as {
+        operationId: string;
+        credentials: Array<{ loginName: string; password: string }>;
+      };
+      const newPassword = rotation.credentials[0]?.password ?? "";
+      expect(rotation.operationId).toBe(operationId);
+      expect(rotation.credentials[0]?.loginName).toBe(loginName);
+      expect(await oldSession.agent.get("/api/auth/session").set("Origin", origin).then((response) => response.status)).toBe(401);
+      expect((await login(app, loginName, oldPassword)).response.status).toBe(401);
+
+      const current = await login(app, loginName, newPassword);
+      expect(current.response.status).toBe(200);
+      await run(rotateArgs, rotationFile);
+      await expect(current.agent.get("/api/auth/session").set("Origin", origin).then((response) => response.status)).resolves.toBe(200);
+      expect(output.join("\n")).not.toContain(oldPassword);
+      expect(output.join("\n")).not.toContain(newPassword);
+    },
+  );
 
   it("retains a private recovery file when COMMIT succeeds but its acknowledgement is lost", async () => {
     const { app, pool, run, output, credentialDirectory } = await setup((database) => new LostCommitAcknowledgementPool(database, /INSERT INTO app_users/i));
