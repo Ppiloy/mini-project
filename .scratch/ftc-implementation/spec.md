@@ -8,7 +8,7 @@ Integration branch: `codex/ftc-integration`. Baseline: initial planning commit o
 
 All subagents must use GPT-6 Luna. Each implementation ticket uses an isolated branch/worktree, TDD at the plan's already authorized public calculation/API/browser seams, adversarial review after completion, then a merger subagent. Repeat review after fixes. Final review has separate standards and specification axes.
 
-Do not claim Netlify deployment, account eligibility, cross-device behavior, cold-start persistence or recovery has passed without actual evidence. Account access is pending; independent local work continues.
+Do not claim Netlify deployment, cross-device behavior, cold-start persistence or recovery has passed without actual evidence. Netlify CLI is authenticated and the project is linked. On 14 October the user confirmed a credit-based plan, available credits, and that current Database charges/backup retention were checked. Production Database provisioning and hosted acceptance have not yet run.
 
 ## Contract coordination
 
