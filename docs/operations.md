@@ -46,7 +46,7 @@ netlify dev:exec npm run demo:reset -- --target local --operation-id $resetId --
 netlify dev:exec npm run demo:reset -- --target local --operation-id $resetId --confirm <exact-manifest-id> --retention-cutoff <configured-cutoff> --backup <private-backup-path> --backup-sha256 <exact-sha256>
 ```
 
-The retention and backup arguments are required only when the manifest includes submitted cases. The cutoff must be supplied by the owner; do not invent or infer it. Exact target, marker, operation ID, and private files must remain unchanged across recovery.
+The verified complete backup path and SHA-256 are required for every reset. The retention cutoff and matching `--retention-cutoff` argument are required only when the manifest includes submitted cases; the cutoff must be supplied by the owner and must not be invented or inferred. Exact target, marker, operation ID, backup, and private credential file must remain unchanged across recovery.
 
 ## Release and smoke checks
 

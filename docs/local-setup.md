@@ -30,7 +30,7 @@ For hosted operator commands, install and authenticate the Netlify CLI, then lin
 
 Local evidence uses the Netlify Dev Blob sandbox. Its store name is derived from the trusted database identity, not a command-line option. A fresh database gets an isolated store. A mismatch with an existing marker fails closed. The connection identity contains a port; persistence across Netlify Dev restarts has not yet been verified and must not be assumed for an already initialized local marker.
 
-Run a dry-run before cleanup or reset. Cleanup never deletes ready evidence or unreferenced objects; reset is limited to the configured dedicated-demo marker and requires an exact manifest confirmation. If submitted demo cases exist, the explicit retention cutoff and verified complete backup are required.
+Run a dry-run before cleanup or reset. Cleanup never deletes ready evidence or unreferenced objects; reset is limited to the configured dedicated-demo marker and requires an exact manifest confirmation plus a fresh verified complete backup for every reset. If submitted demo cases exist, also pass the owner-configured retention cutoff exactly; draft-only resets do not require a cutoff.
 
 ```powershell
 netlify dev:exec npm run ops:cleanup -- --target local --dry-run
