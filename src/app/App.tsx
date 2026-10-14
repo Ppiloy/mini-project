@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createBrowserRouter, Navigate, Route, Routes, RouterProvider, useNavigate } from "react-router-dom";
 import type { ApiUser } from "../../shared/contracts.js";
 import type { AuthSession, LogoutConfirmationResult } from "../data/api.js";
 import { ApiClientError, apiFailureMessages, hostedApi, logoutAndConfirm } from "../data/api.js";
@@ -24,6 +24,9 @@ interface AppSession {
   sessionLookupStatus: "unverified" | "active" | null;
   refreshHostedSession: () => Promise<void>;
   checkingHostedSession: boolean;
+  getSessionIdentityGeneration: () => number;
+  hasUnsavedDraft: boolean;
+  setHasUnsavedDraft: (dirty: boolean) => void;
   setHosted: (session: AuthSession) => void;
   setDemo: (persona: DemoPersona) => Promise<LogoutConfirmationResult>;
   beginLogout: (accountId: string, expectedRole: ApiUser["role"], wrongRole?: boolean) => void;
@@ -81,6 +84,10 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
   const [sessionLookupError, setSessionLookupError] = useState<unknown | null>(null);
   const [sessionLookupStatus, setSessionLookupStatus] = useState<HostedSessionLookupStatus>(null);
   const [checkingHostedSession, setCheckingHostedSession] = useState(false);
+  const [hasUnsavedDraft, setUnsavedDraft] = useState(false);
+  const setHasUnsavedDraft = useCallback((dirty: boolean) => setUnsavedDraft(dirty), []);
+  const sessionIdentityGeneration = useRef(0);
+  const getSessionIdentityGeneration = useCallback(() => sessionIdentityGeneration.current, []);
   const sessionLookupGeneration = useRef(0);
   const invalidateSessionLookup = () => {
     sessionLookupGeneration.current += 1;
@@ -145,8 +152,12 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     sessionLookupError,
     sessionLookupStatus,
     checkingHostedSession,
+    hasUnsavedDraft,
+    setHasUnsavedDraft,
+    getSessionIdentityGeneration,
     setHosted: (session) => {
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
@@ -163,6 +174,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       if (!ready) {
         return { confirmed: false, errors: [new Error("กำลังตรวจสอบเซสชันออนไลน์ กรุณารอแล้วลองอีกครั้งก่อนเปิดโหมดสาธิต")] };
       }
+      const startingGeneration = sessionIdentityGeneration.current;
       let confirmedHostedLogout = false;
       if (user && csrfToken && !demo) {
         const intent = { accountId: user.id, expectedRole: user.role };
@@ -170,6 +182,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         setPendingLogout(intent);
         setPendingLogoutErrors([]);
         const result = await logoutAndConfirm(csrfToken);
+        if (sessionIdentityGeneration.current !== startingGeneration) return { confirmed: false, errors: [] };
         if (!result.confirmed) {
           setPendingLogoutErrors(result.errors);
           return result;
@@ -177,6 +190,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         confirmedHostedLogout = true;
       }
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
@@ -200,6 +214,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       setPendingLogoutErrors([]);
     },
     retryPendingLogout: async (fallback) => {
+      const startingGeneration = sessionIdentityGeneration.current;
       const storedIntent = pendingLogout ?? readLogoutIntent();
       const intent = fallback && storedIntent?.accountId === fallback.accountId ? storedIntent : fallback ?? storedIntent;
       if (!intent) return { confirmed: false, errors: [] };
@@ -208,12 +223,15 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       let activeSession: AuthSession | null;
       try { activeSession = await hostedApi.session(); }
       catch (error) {
+        if (sessionIdentityGeneration.current !== startingGeneration) return { confirmed: false, errors: [] };
         const result: LogoutConfirmationResult = { confirmed: false, errors: [error] };
         setPendingLogoutErrors(result.errors);
         return result;
       }
+      if (sessionIdentityGeneration.current !== startingGeneration) return { confirmed: false, errors: [] };
       if (!activeSession) {
         invalidateSessionLookup();
+        sessionIdentityGeneration.current += 1;
         persistLogoutIntent(null);
         clearPendingDrafts();
         setPendingLogout(null);
@@ -228,6 +246,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
       }
       if (activeSession.user.id !== intent.accountId) {
         invalidateSessionLookup();
+        sessionIdentityGeneration.current += 1;
         persistLogoutIntent(null);
         setPendingLogout(null);
         setPendingLogoutErrors([]);
@@ -239,17 +258,21 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         return { confirmed: true };
       }
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
+      const cleanupGeneration = sessionIdentityGeneration.current;
       sessionStorage.removeItem("ftc.demo.persona");
       clearPendingDrafts(activeSession.user.id);
       setIsDemo(false);
       setUser(activeSession.user);
       setCsrfToken(activeSession.csrfToken);
       const result = await logoutAndConfirm(activeSession.csrfToken);
+      if (sessionIdentityGeneration.current !== cleanupGeneration) return { confirmed: false, errors: [] };
       if (!result.confirmed) {
         setPendingLogoutErrors(result.errors);
         return result;
       }
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
       persistLogoutIntent(null);
       clearPendingDrafts();
       setPendingLogout(null);
@@ -264,6 +287,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     },
     clear: () => {
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
       persistLogoutIntent(null);
       setPendingLogout(null);
       setPendingLogoutErrors([]);
@@ -278,6 +302,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
     },
     clearDemo: () => {
       invalidateSessionLookup();
+      sessionIdentityGeneration.current += 1;
       sessionStorage.removeItem("ftc.demo.persona");
       setIsDemo(false);
       setUser(null);
@@ -307,7 +332,7 @@ function SessionProvider({ children }: { children: React.ReactNode }) {
         if (sessionLookupGeneration.current === generation) setCheckingHostedSession(false);
       }
     },
-  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError, sessionLookupStatus, checkingHostedSession]);
+  }), [user, csrfToken, demo, ready, pendingLogout, pendingLogoutErrors, sessionLookupError, sessionLookupStatus, checkingHostedSession, hasUnsavedDraft, setHasUnsavedDraft, getSessionIdentityGeneration]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
@@ -319,7 +344,7 @@ function hostedSessionNotice(status: HostedSessionLookupStatus, error: unknown |
 
 function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "demo" | "hosted"; children: React.ReactNode }) {
   const { user, demo, csrfToken, clear, clearDemo, beginLogout, pendingLogout, pendingLogoutErrors, ready,
-    sessionLookupError, sessionLookupStatus, refreshHostedSession, checkingHostedSession } = useAppSession();
+    sessionLookupError, sessionLookupStatus, refreshHostedSession, checkingHostedSession, hasUnsavedDraft, getSessionIdentityGeneration } = useAppSession();
   const navigate = useNavigate();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
@@ -333,6 +358,8 @@ function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "d
   }
   const signOut = async () => {
     if (signingOut) return;
+    if (hasUnsavedDraft && !window.confirm("มีข้อมูลที่ยังไม่ได้บันทึก ต้องการออกจากหน้านี้หรือไม่?")) return;
+    const identityGeneration = getSessionIdentityGeneration();
     setSigningOut(true);
     setSignOutError(null);
     try {
@@ -343,11 +370,13 @@ function RequireRole({ role, mode, children }: { role: ApiUser["role"]; mode: "d
           return;
         }
         const result = await logoutAndConfirm(csrfToken);
+        if (getSessionIdentityGeneration() !== identityGeneration) return;
         if (!result.confirmed) {
           setSignOutError(apiFailureMessages(result.errors, "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้ ระบบอาจยังเปิดเซสชันนี้อยู่ กรุณาลองออกจากระบบอีกครั้งก่อนปิดแท็บ"));
           return;
         }
       }
+      if (getSessionIdentityGeneration() !== identityGeneration) return;
       if (demo) clearDemo();
       else clear();
       navigate("/login", { replace: true });
@@ -412,8 +441,10 @@ function DemoEntryRoute() {
 }
 
 export function App() {
-  return <BrowserRouter><SessionProvider><AppRoutes /></SessionProvider></BrowserRouter>;
+  return <RouterProvider router={appRouter} />;
 }
+
+const appRouter = createBrowserRouter([{ path: "*", element: <SessionProvider><AppRoutes /></SessionProvider> }]);
 
 export function currentErrorMessage(error: unknown): string {
   if (error instanceof ApiClientError) return error.message;

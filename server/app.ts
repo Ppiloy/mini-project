@@ -590,14 +590,37 @@ export function createApp(options: CreateAppOptions): Express {
     if (options.trustedHttps) Object.defineProperty(request, "secure", { configurable: true, value: true });
     next();
   });
+  const sessionStore = new PG_SESSION({ pool: options.pool as never, tableName: "user_sessions", createTableIfMissing: false, pruneSessionInterval: false, ttl: SESSION_ABSOLUTE_MS / 1000 });
+  const newlyAuthenticatedSessions = new WeakSet<object>();
+  const authenticatedSessionWrites = new WeakMap<object, boolean>();
+  const insertSession = sessionStore.set.bind(sessionStore);
+  sessionStore.set = (sid, sessionData, callback) => {
+    if (newlyAuthenticatedSessions.has(sessionData)) {
+      newlyAuthenticatedSessions.delete(sessionData);
+      insertSession(sid, sessionData, callback);
+      return;
+    }
+
+    // connect-pg-simple's normal set is an upsert. A request that loaded a SID
+    // before logout or regeneration can finish later, so authenticated refreshes
+    // must update only a still-present row and must never recreate a revoked SID.
+    void options.pool.query<{ sid: string }>(
+      "UPDATE user_sessions SET sess=$1 WHERE sid=$2 AND expire >= NOW() RETURNING sid",
+      [sessionData, sid],
+    ).then(({ rows }) => {
+      authenticatedSessionWrites.set(sessionData, rows.length === 1);
+      callback?.();
+    }, (error: Error) => callback?.(error));
+  };
+
   const sessionMiddleware = session({
     name: cookieName,
-    store: new PG_SESSION({ pool: options.pool as never, tableName: "user_sessions", createTableIfMissing: false, pruneSessionInterval: false }),
+    store: sessionStore,
     secret: options.sessionSecret,
     resave: false,
     saveUninitialized: false,
-    rolling: true,
-    cookie: { httpOnly: true, secure: options.trustedHttps, sameSite: "lax", path: "/", maxAge: SESSION_IDLE_MS },
+    rolling: false,
+    cookie: { httpOnly: true, secure: options.trustedHttps, sameSite: "lax", path: "/", maxAge: SESSION_ABSOLUTE_MS },
   });
 
   app.use("/api", (request, response, next) => {
@@ -635,8 +658,20 @@ export function createApp(options: CreateAppOptions): Express {
         return;
       }
       sessionData.lastActiveAt = timestamp;
+      // Set the browser cookie only when a session is established. Late responses
+      // from an old session must not roll its SID over a newer regenerated login.
+      // Idle and absolute expiration remain enforced from server-side timestamps.
+      sessionData.cookie.expires = null;
       response.locals.user = toApiUser(user);
-      sessionData.save((error) => error ? next(error) : next());
+      sessionData.save((error) => {
+        if (error) { next(error); return; }
+        if (!authenticatedSessionWrites.get(sessionData)) {
+          apiError(response, 401, "unauthenticated", "กรุณาเข้าสู่ระบบอีกครั้ง");
+          return;
+        }
+        authenticatedSessionWrites.delete(sessionData);
+        next();
+      });
     } catch (error) {
       next(error);
     }
@@ -687,7 +722,8 @@ export function createApp(options: CreateAppOptions): Express {
       request.session.csrfToken = randomBytes(32).toString("hex");
       request.session.createdAt = sessionTimestamp;
       request.session.lastActiveAt = sessionTimestamp;
-      request.session.cookie.maxAge = SESSION_IDLE_MS;
+      request.session.cookie.maxAge = SESSION_ABSOLUTE_MS;
+      newlyAuthenticatedSessions.add(request.session);
       await new Promise<void>((resolve, reject) => request.session.save((error) => error ? reject(error) : resolve()));
       sendApiSuccess(response, apiSuccessSchemas.session, { user: toApiUser(user), csrfToken: request.session.csrfToken }, response.locals.requestId);
     } catch (error) {
@@ -702,7 +738,8 @@ export function createApp(options: CreateAppOptions): Express {
   app.post("/api/auth/logout", authenticated, csrf, async (request, response, next) => {
     try {
       await new Promise<void>((resolve, reject) => request.session.destroy((error) => error ? reject(error) : resolve()));
-      response.clearCookie(cookieName, { path: "/", httpOnly: true, secure: options.trustedHttps, sameSite: "lax" });
+      // The server-side SID is destroyed. Omitting a cookie deletion prevents a
+      // delayed logout response from erasing a newer login's regenerated cookie.
       sendApiSuccess(response, apiSuccessSchemas.logout, { loggedOut: true }, response.locals.requestId);
     } catch (error) {
       next(error);

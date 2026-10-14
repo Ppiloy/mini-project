@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import type { FtcCaseRecord } from "../../../shared/contracts.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
@@ -76,7 +77,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
       {mode === "demo" && <section className="fixture-launch card"><div><p className="eyebrow">WORKED EXAMPLES</p><h2>เริ่มจากข้อมูลคำนวณตัวอย่าง</h2><p>คัดลอกตัวอย่างลงในกรณีสมมติใหม่เพื่อสำรวจ D/E/F, การจัดสรรภาษี และความคลาดเคลื่อนต้นทาง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>ตัวอย่างนำเข้า 50% · G = 2,500</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>ตัวอย่างเวียดนามและจีน · 143,544.30</button></div></section>}
       <section className="content-section">
         <div className="section-heading"><div><p className="eyebrow">MY CASES</p><h2>กรณีคำนวณเครดิตภาษี</h2></div><button className="button button-quiet button-small" onClick={() => void load()}>รีเฟรชรายการ</button></div>
-        {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{mode === "hosted" && <a href="/login">เข้าสู่ระบบอีกครั้ง</a>}</div>}
+        {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{mode === "hosted" && <Link to="/login">เข้าสู่ระบบอีกครั้ง</Link>}</div>}
         {busy ? <div className="loading-card" role="status">กำลังโหลดรายการ…</div> : cases.length === 0 ? (
           <div className="empty-state card"><div className="empty-icon" aria-hidden="true">＋</div><h3>ยังไม่มีกรณีคำนวณ</h3><p>สร้างกรณีเพื่อเริ่มบันทึกรายได้และข้อมูลการนำเงินเข้าประเทศ</p><button className="button button-secondary" onClick={startCase} disabled={creating}>สร้างกรณีแรก</button></div>
         ) : (
@@ -97,7 +98,7 @@ function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
   return (
     <article className="case-card card">
       <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {record.draft.taxYear ? record.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${record.status === "submitted" ? "status-submitted" : "status-draft"}`}>{record.status === "submitted" ? "ส่งแล้ว · คิวจำลอง" : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {record.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p></div>
-      <div className="case-card-action"><a className="button button-secondary" href={destination}>{record.status === "submitted" ? "ดูผลและรายงาน" : "ทำร่างต่อ"}</a></div>
+      <div className="case-card-action"><Link className="button button-secondary" to={destination}>{record.status === "submitted" ? "ดูผลและรายงาน" : "ทำร่างต่อ"}</Link></div>
     </article>
   );
 }

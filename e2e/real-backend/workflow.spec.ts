@@ -484,15 +484,13 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
     let oldResponseFetched!: () => void;
     const fetched = new Promise<void>((resolve) => { oldResponseFetched = resolve; });
     const responseGate = new Promise<void>((resolve) => { releaseOldSession = resolve; });
+    let delayedResponseSetsCookie = false;
     await page.route("**/api/auth/session", async (route) => {
       const actualResponse = await route.fetch();
+      delayedResponseSetsCookie = Object.hasOwn(actualResponse.headers(), "set-cookie");
       oldResponseFetched();
       await responseGate;
-      // The API body/status are forwarded unchanged. Prevent this deliberately
-      // delayed response from rolling the browser cookie back over B's newer login.
-      const headers = actualResponse.headers();
-      delete headers["set-cookie"];
-      await route.fulfill({ response: actualResponse, headers });
+      await route.fulfill({ response: actualResponse });
     }, { times: 1 });
     const oldRefreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/session") && response.request().method() === "GET");
     await page.getByRole("button", { name: "ตรวจสอบสถานะออนไลน์" }).click();
@@ -515,7 +513,7 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
     await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
     const loginResponse = await loginResponsePromise;
     expect(loginResponse.status()).toBe(200);
-    const b = await loginResponse.json() as { data?: { user?: { id?: string } } };
+    const b = await loginResponse.json() as { data?: { user?: { id?: string; displayName?: string } } };
     expect(b.data?.user?.id).toBeTruthy();
     expect(b.data?.user?.id).not.toBe(a.userId);
     await expect(page).toHaveURL(/\/app$/);
@@ -523,6 +521,7 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
 
     releaseOldSession();
     expect((await oldRefreshResponse).status()).toBe(200);
+    expect(delayedResponseSetsCookie).toBe(false);
     await expect(page).toHaveURL(/\/app$/);
     expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
     expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.session.unverified"))).toBeNull();
@@ -549,6 +548,130 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
     await probeContext?.close();
     await signedInContext.close();
   }
+});
+
+test("a delayed confirmed logout cannot clear a newer hosted login", async ({ page }) => {
+  const seed = await operatorSeed();
+  const taxpayerA = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  const taxpayerB = seed.credentials.find((item) => item.loginName === "taxpayer-demo-b")!;
+  await login(page, taxpayerA);
+
+  let releaseLogout!: () => void;
+  let logoutResponseFetched!: () => void;
+  const responseGate = new Promise<void>((resolve) => { releaseLogout = resolve; });
+  const fetched = new Promise<void>((resolve) => { logoutResponseFetched = resolve; });
+  let delayedLogoutSetsCookie = false;
+  await page.route("**/api/auth/logout", async (route) => {
+    const actualResponse = await route.fetch();
+    delayedLogoutSetsCookie = Object.hasOwn(actualResponse.headers(), "set-cookie");
+    logoutResponseFetched();
+    await responseGate;
+    await route.fulfill({ response: actualResponse });
+  }, { times: 1 });
+  try {
+    const oldLogoutResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "ออกจากระบบ" }).click();
+    await fetched;
+    await page.evaluate(() => {
+      const browser = globalThis as unknown as {
+        history: { pushState: (data: object, unused: string, url?: string) => void };
+        dispatchEvent: (event: object) => boolean;
+        PopStateEvent: new (type: string, init: { state: null }) => object;
+      };
+      browser.history.pushState({}, "", "/login");
+      browser.dispatchEvent(new browser.PopStateEvent("popstate", { state: null }));
+    });
+    await expect(page.getByRole("heading", { name: "เข้าสู่ระบบผู้เสียภาษี" })).toBeVisible();
+    const loginResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST");
+    await page.getByLabel("ชื่อผู้ใช้").fill(taxpayerB.loginName);
+    await page.getByLabel("รหัสผ่าน").fill(taxpayerB.password);
+    await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
+    const loginResponse = await loginResponsePromise;
+    expect(loginResponse.status()).toBe(200);
+    const b = await loginResponse.json() as { data?: { user?: { id?: string; displayName?: string } } };
+    expect(b.data?.user?.id).toBeTruthy();
+    await expect(page).toHaveURL(/\/app$/);
+    const currentSession = await browserApi(page, "/api/auth/session");
+    expect(currentSession.status).toBe(200);
+    expect((currentSession.json as { data: { user: { id: string } } }).data.user.id).toBe(b.data?.user?.id);
+
+    releaseLogout();
+    expect((await oldLogoutResponse).status()).toBe(200);
+    expect(delayedLogoutSetsCookie).toBe(false);
+    await expect(page).toHaveURL(/\/app$/);
+    const afterLateLogout = await browserApi(page, "/api/auth/session");
+    expect(afterLateLogout.status).toBe(200);
+    expect((afterLateLogout.json as { data: { user: { id: string } } }).data.user.id).toBe(b.data?.user?.id);
+    await expect(page.getByRole("banner").getByText(b.data?.user?.displayName ?? "", { exact: true })).toBeVisible();
+  } finally {
+    releaseLogout?.();
+  }
+});
+
+test("hosted editor guards Back/Forward and sign-out while preserving dirty values until confirmed", async ({ page }) => {
+  const seed = await operatorSeed();
+  const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
+  await login(page, credential);
+  await createCase(page);
+  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/app\/cases\/[0-9a-f-]+\/edit$/i);
+  const taxYear = page.getByLabel("ปีภาษี (พ.ศ.)");
+  await taxYear.selectOption("2567");
+
+  const forwardPrompt = page.waitForEvent("dialog");
+  const forwardNavigation = page.goForward();
+  const forwardDialog = await forwardPrompt;
+  expect(forwardDialog.message()).toContain("มีข้อมูลที่ยังไม่ได้บันทึก");
+  await forwardDialog.dismiss();
+  await forwardNavigation;
+  await expect(page).toHaveURL(/\/app\/cases\/[0-9a-f-]+\/edit$/i);
+  await expect(taxYear).toHaveValue("2567");
+
+  const backPrompt = page.waitForEvent("dialog");
+  const backNavigation = page.goBack();
+  const backDialog = await backPrompt;
+  expect(backDialog.message()).toContain("มีข้อมูลที่ยังไม่ได้บันทึก");
+  await backDialog.dismiss();
+  await backNavigation;
+  await expect(page).toHaveURL(/\/app\/cases\/[0-9a-f-]+\/edit$/i);
+  await expect(taxYear).toHaveValue("2567");
+
+  const acceptedBackPrompt = page.waitForEvent("dialog");
+  const acceptedBack = page.goBack();
+  const acceptedBackDialog = await acceptedBackPrompt;
+  await acceptedBackDialog.accept();
+  await acceptedBack;
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/app\/cases\/[0-9a-f-]+\/edit$/i);
+  await expect(page.getByLabel("ปีภาษี (พ.ศ.)")).toHaveValue("");
+
+  await taxYear.selectOption("2567");
+  let logoutRequests = 0;
+  page.on("request", (request) => { if (request.url().endsWith("/api/auth/logout")) logoutRequests += 1; });
+  let signOutMessage = "";
+  const dismissDirtySignOut = (dialog: import("@playwright/test").Dialog) => {
+    signOutMessage = dialog.message();
+    void dialog.dismiss();
+  };
+  page.on("dialog", dismissDirtySignOut);
+  await page.getByRole("button", { name: "ออกจากระบบ" }).click();
+  page.off("dialog", dismissDirtySignOut);
+  expect(signOutMessage).toContain("มีข้อมูลที่ยังไม่ได้บันทึก");
+  expect(logoutRequests).toBe(0);
+  expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
+  await expect(page.getByLabel("ปีภาษี (พ.ศ.)")).toHaveValue("2567");
+
+  const skipDialog = page.waitForEvent("dialog", { timeout: 250 }).catch(() => null);
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  const skipLink = page.getByRole("link", { name: "ข้ามไปยังเนื้อหาหลัก" });
+  await expect(skipLink).toBeFocused();
+  await page.keyboard.press("Enter");
+  expect(await skipDialog).toBeNull();
+  await expect(page).toHaveURL(/#main-content$/);
 });
 
 test("fixture mode switch keeps the hosted session visible after a real logout rejection and retries safely across reload", async ({ page }) => {

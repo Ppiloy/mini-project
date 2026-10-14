@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useBlocker, useNavigate, useParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, EvidenceKind, FtcCaseDraft, FtcCaseRecord, FrozenEvidenceReference } from "../../../shared/contracts.js";
 import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, sourceEligibilityFingerprint, stripStaleConfirmations, taxInputFingerprint } from "../../../shared/confirmations.js";
 import { draftSchema } from "../../../shared/draft.js";
@@ -18,7 +18,7 @@ const stepLabels = ["ปีภาษี", "เงินได้", "นำเข
 export function CaseEditorPage({ mode }: { mode: Mode }) {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const { csrfToken } = useAppSession();
+  const { csrfToken, setHasUnsavedDraft } = useAppSession();
   const [record, setRecord] = useState<FtcCaseRecord | null>(null);
   const [draft, setDraft] = useState<FtcCaseDraft | null>(null);
   const [savedJson, setSavedJson] = useState("");
@@ -35,6 +35,10 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
   const saveRequest = useRef<{ caseId: string; revision: number; contentKey: string; requestId: string } | null>(null);
 
   const isDirty = draft !== null && JSON.stringify(draft) !== savedJson;
+  const blocker = useBlocker(isDirty ? ({ currentLocation, nextLocation }) =>
+    currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search
+    : false);
+  const handledBlockedLocation = useRef<string | null>(null);
   const loadCase = useCallback(async () => {
     setLoading(true);
     setProblem(null);
@@ -79,22 +83,25 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
 
   useEffect(() => { void loadCase(); }, [loadCase]);
   useEffect(() => {
+    setHasUnsavedDraft(isDirty);
+    return () => setHasUnsavedDraft(false);
+  }, [isDirty, setHasUnsavedDraft]);
+  useEffect(() => {
+    if (blocker.state !== "blocked") {
+      handledBlockedLocation.current = null;
+      return;
+    }
+    if (handledBlockedLocation.current === blocker.location.key) return;
+    handledBlockedLocation.current = blocker.location.key;
+    if (window.confirm("มีข้อมูลที่ยังไม่ได้บันทึก ต้องการออกจากหน้านี้หรือไม่?")) blocker.proceed();
+    else blocker.reset();
+  }, [blocker]);
+  useEffect(() => {
     if (!isDirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    const catchLink = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      const link = target.closest("a[href]") as HTMLAnchorElement | null;
-      if (!link || link.target === "_blank" || link.origin !== window.location.origin) return;
-      if (window.confirm("มีข้อมูลที่ยังไม่ได้บันทึก ต้องการออกจากหน้านี้หรือไม่?")) return;
-      event.preventDefault();
-      event.stopPropagation();
-    };
     window.addEventListener("beforeunload", warn);
-    document.addEventListener("click", catchLink, true);
     return () => {
       window.removeEventListener("beforeunload", warn);
-      document.removeEventListener("click", catchLink, true);
     };
   }, [isDirty]);
 
@@ -350,8 +357,8 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
   };
 
   if (loading) return <div className="loading-card" role="status">กำลังโหลดร่าง…</div>;
-  if (!record || !draft) return <section className="card error-page"><h1>เปิดร่างไม่ได้</h1><div className="alert alert-error" role="alert">{problem ?? "ไม่พบกรณีนี้"}</div><a className="button button-secondary" href={mode === "demo" ? "/demo/app" : "/app"}>กลับรายการกรณี</a></section>;
-  if (record.status !== "draft") return <div className="card"><p>กรณีนี้ส่งแล้วและเปิดได้แบบอ่านอย่างเดียว</p><a href={`${mode === "demo" ? "/demo" : "/app"}/cases/${record.id}/result`}>ดูผลที่บันทึก</a></div>;
+  if (!record || !draft) return <section className="card error-page"><h1>เปิดร่างไม่ได้</h1><div className="alert alert-error" role="alert">{problem ?? "ไม่พบกรณีนี้"}</div><Link className="button button-secondary" to={mode === "demo" ? "/demo/app" : "/app"}>กลับรายการกรณี</Link></section>;
+  if (record.status !== "draft") return <div className="card"><p>กรณีนี้ส่งแล้วและเปิดได้แบบอ่านอย่างเดียว</p><Link to={`${mode === "demo" ? "/demo" : "/app"}/cases/${record.id}/result`}>ดูผลที่บันทึก</Link></div>;
 
   const stepProps = { draft, onChange: updateDraft, attachments, onUpload: upload, onDeleteAttachment: deleteAttachment, onDownloadAttachment: downloadAttachment, busy: uploading };
   const taxCurrent = isThaiTaxConfirmationCurrent(draft);
@@ -370,7 +377,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     <nav className="stepper" aria-label="ขั้นตอนแบบฟอร์ม">
       {stepLabels.map((label, index) => <div key={label} className={`stepper-item ${step === index ? "is-current" : step > index ? "is-done" : ""}`} aria-current={step === index ? "step" : undefined}><span className="step-number">{step > index ? "✓" : index + 1}</span><span>{label}</span></div>)}
     </nav>
-    {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{problem.includes("เซสชันหมดอายุ") && mode === "hosted" && <a href={`/login?returnTo=${encodeURIComponent(`/app/cases/${record.id}/edit`)}`}>เข้าสู่ระบบอีกครั้งในบัญชีเดิม</a>}{failedUpload && <button className="button button-secondary button-small" disabled={uploading} onClick={() => void sendUpload(failedUpload)}>ลองแนบไฟล์เดิมอีกครั้ง</button>}{fieldErrors.length > 0 && <ul>{fieldErrors.map((item, index) => <li key={index}><a href="#step-title">{item.message}{item.path?.length ? ` · ${item.path.join(" › ")}` : ""}</a></li>)}</ul>}</div>}
+    {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{problem.includes("เซสชันหมดอายุ") && mode === "hosted" && <Link to={`/login?returnTo=${encodeURIComponent(`/app/cases/${record.id}/edit`)}`}>เข้าสู่ระบบอีกครั้งในบัญชีเดิม</Link>}{failedUpload && <button className="button button-secondary button-small" disabled={uploading} onClick={() => void sendUpload(failedUpload)}>ลองแนบไฟล์เดิมอีกครั้ง</button>}{fieldErrors.length > 0 && <ul>{fieldErrors.map((item, index) => <li key={index}><Link to="#step-title">{item.message}{item.path?.length ? ` · ${item.path.join(" › ")}` : ""}</Link></li>)}</ul>}</div>}
     {conflictLatest && <div className="conflict-panel"><strong>ไม่บันทึกทับข้อมูลล่าสุดโดยอัตโนมัติ</strong><p>ฉบับบนเซิร์ฟเวอร์เป็นรุ่น {conflictLatest.draft.revision}; ข้อความที่คุณกำลังแก้ยังอยู่ในหน้านี้.</p><div><button className="button button-secondary button-small" onClick={() => void reloadLatest(false)}>โหลดฉบับล่าสุดและละทิ้งการแก้ไข</button><button className="button button-primary button-small" onClick={() => void reloadLatest(true)}>นำการแก้ไขปัจจุบันไปใช้ต่อ</button></div></div>}
     {savedMessage && <div className="alert alert-success" role="status">{savedMessage}</div>}
     <div className="form-workspace card">{stepContent}
