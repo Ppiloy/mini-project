@@ -75,6 +75,60 @@ test("an unavailable session check keeps logout visibly unresolved", async ({ pa
   await expect(page.getByRole("button", { name: "ลองออกจากระบบอีกครั้ง" })).toBeEnabled();
 });
 
+test("an unresolved logout survives unavailable status on reload and can be recovered later", async ({ page }) => {
+  let authenticated = true;
+  let sessionCalls = 0;
+  let logoutCalls = 0;
+  await page.route("**/api/auth/session", (route) => {
+    sessionCalls += 1;
+    if (sessionCalls <= 1 || sessionCalls >= 4 && authenticated) return route.fulfill({ json: { data: session, requestId: `session-${sessionCalls}` } });
+    if (!authenticated) return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: `session-${sessionCalls}` } } });
+    return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Status unavailable", requestId: `session-${sessionCalls}` } } });
+  });
+  await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "cases" } }));
+  await page.route("**/api/auth/logout", async (route) => {
+    logoutCalls += 1;
+    if (logoutCalls === 1) return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Logout unavailable", requestId: "logout-503" } } });
+    authenticated = false;
+    return route.fulfill({ json: { data: { loggedOut: true }, requestId: "logout-retry" } });
+  });
+
+  await page.goto("/app");
+  await page.getByRole("button", { name: "ออกจากระบบ" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "ระบบอาจยังเปิดเซสชันนี้อยู่" })).toBeVisible();
+  const intent = await page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"));
+  expect(intent).toContain(user.id);
+  expect(intent).not.toContain("csrf");
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({ hasText: "เซิร์ฟเวอร์ยังยืนยันการสิ้นสุดเซสชันไม่ได้" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" })).toBeEnabled();
+
+  await page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"))).toBe(null);
+  expect(logoutCalls).toBe(2);
+  await page.goto("/app");
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toHaveCount(0);
+});
+
+test("a pending logout intent never signs out a different account", async ({ page }) => {
+  const otherUser = { ...user, id: "taxpayer-new-account", loginName: "other-taxpayer", displayName: "ผู้เสียภาษีบัญชีใหม่" };
+  let logoutCalls = 0;
+  await page.addInitScript(() => sessionStorage.setItem("ftc.hosted.logout.pending", JSON.stringify({ accountId: "taxpayer-previous-account", expectedRole: "taxpayer" })));
+  await page.route("**/api/auth/session", (route) => route.fulfill({ json: { data: { user: otherUser, csrfToken: "csrf-new-account" }, requestId: "new-account-session" } }));
+  await page.route("**/api/cases", (route) => route.fulfill({ json: { data: { cases: [] }, requestId: "new-account-cases" } }));
+  await page.route("**/api/auth/logout", (route) => { logoutCalls += 1; return route.fulfill({ json: { data: { loggedOut: true }, requestId: "unexpected-logout" } }); });
+
+  await page.goto("/app");
+  await expect(page.getByRole("banner").getByText("ผู้เสียภาษีบัญชีใหม่")).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem("ftc.hosted.logout.pending"))).toBe(null);
+  expect(logoutCalls).toBe(0);
+});
+
 test("retry confirms logout, clears pending browser state, and denies private access after reload", async ({ page }) => {
   let authenticated = true;
   let logoutCalls = 0;
@@ -119,6 +173,8 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   const taxpayer = { id: "owner-a", loginName: "user-a", displayName: "ผู้เสียภาษี A", role: "taxpayer", maskedReference: null };
   const officer = { id: "officer-a", loginName: "officer-a", displayName: "เจ้าหน้าที่ A", role: "officer", maskedReference: null };
   let activeUser: typeof taxpayer | typeof officer | null = taxpayer;
+  let logoutAttempted = false;
+  let postLogoutSessionCalls = 0;
   let logoutCalls = 0;
   await page.addInitScript(() => {
     if (sessionStorage.getItem("ftc.test.wrong-role-seeded")) return;
@@ -126,9 +182,13 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
     sessionStorage.setItem("ftc.hosted.pending.owner-a.case-1", JSON.stringify({ ownerId: "owner-a", caseId: "case-1", draft: { id: "case-1", secret: "typed draft" } }));
     sessionStorage.setItem("ftc.submit.pending.owner-a.case-1.snapshot-1", "request-id");
   });
-  await page.route("**/api/auth/session", (route) => activeUser
-    ? route.fulfill({ json: { data: { user: activeUser, csrfToken: wrongRoleCsrf }, requestId: "session" } })
-    : route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "anonymous" } } }));
+  await page.route("**/api/auth/session", (route) => {
+    if (!activeUser) return route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "Session ended", requestId: "anonymous" } } });
+    if (!logoutAttempted) return route.fulfill({ json: { data: { user: activeUser, csrfToken: wrongRoleCsrf }, requestId: "session-active" } });
+    postLogoutSessionCalls += 1;
+    if (postLogoutSessionCalls <= 2) return route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Status unavailable", requestId: `session-${postLogoutSessionCalls}` } } });
+    return route.fulfill({ json: { data: { user: activeUser, csrfToken: wrongRoleCsrf }, requestId: "session-recovered" } });
+  });
   await page.route("**/api/auth/login", async (route) => {
     activeUser = officer;
     await route.fulfill({ json: { data: { user: officer, csrfToken: wrongRoleCsrf }, requestId: "login-officer" } });
@@ -136,6 +196,7 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   await page.route("**/api/auth/logout", async (route) => {
     logoutCalls += 1;
     if (logoutCalls === 1) {
+      logoutAttempted = true;
       await route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Cleanup unavailable", requestId: "cleanup-503" } } });
     } else {
       activeUser = null;
@@ -159,14 +220,15 @@ test("wrong-role login replaces the old account, clears its cache, and keeps cle
   await page.evaluate("{ history.pushState({}, '', '/app'); window.dispatchEvent(new PopStateEvent('popstate')); }");
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByText("ผู้เสียภาษี A")).toHaveCount(0);
-  await page.goto("/app");
+  await page.reload();
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("alert").filter({ hasText: "กรุณาใช้บัญชีผู้เสียภาษีที่กำหนดไว้" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ลองปิดเซสชันอีกครั้ง" })).toBeVisible();
-  expect(await page.evaluate("Object.keys(sessionStorage).filter((key) => key.includes('owner-a')).length")).toBe(0);
+  await expect(page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" })).toBeVisible();
+  await expect(page.getByText("ผู้เสียภาษี A")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "ลองปิดเซสชันอีกครั้ง" }).click();
+  await page.getByRole("button", { name: "ตรวจสอบเซสชันและลองออกจากระบบอีกครั้ง" }).click();
   await expect(page).toHaveURL(/\/login$/);
+  await expect.poll(() => logoutCalls).toBe(2);
   expect(logoutCalls).toBe(2);
   expect(activeUser).toBe(null);
 });
