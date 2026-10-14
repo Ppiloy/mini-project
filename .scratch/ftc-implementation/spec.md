@@ -10,6 +10,8 @@ All subagents must use GPT-6 Luna. Each implementation ticket uses an isolated b
 
 Do not claim Netlify deployment, cross-device behavior, cold-start persistence or recovery has passed without actual evidence. Netlify CLI is authenticated and the project is linked. On 14 October the user confirmed a credit-based plan, available credits, and that current Database charges/backup retention were checked. Production Database provisioning and hosted acceptance have not yet run.
 
+On 15 October, after the supported API rejected Functions-only variable scope, the user explicitly approved the current plan's default site-variable scopes. This overrides the plan's narrower scope selection: private runtime configuration is available to builds and Functions under the default scopes, with separate production/preview secrets, no client-prefixed variables, and no values in Git/frontend artifacts. No plan upgrade or purchase is authorized.
+
 ## Contract coordination
 
 - Shared domain implementation owns `shared/` and `src/fixtures/`.
