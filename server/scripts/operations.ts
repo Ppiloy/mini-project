@@ -556,6 +556,9 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
     output(`Preview initialization replay verified for operation ${operationId}; private credentials remain at ${credentialPath}.`);
     return { status: "replayed", manifestId, manifest, credentialPath, markerId: marker.id };
   }
+  if (state.operation_id === operationId && state.credential_file_sha256 && state.credential_file_sha256 !== recovery?.sha256) {
+    throw new Error("Pending preview initialization requires the original unchanged private recovery file; no rotation was attempted.");
+  }
   if (recovery && (recovery.file.markerId !== marker.id || recovery.file.operationId !== operationId)) {
     throw new Error("The existing private file belongs to another preview initialization; no account changes were made.");
   }
@@ -577,16 +580,18 @@ export async function runPreviewInitializationCommand(args: string[], dependenci
     recovery = await readPreviewFile(credentialPath);
     if (!recovery || recovery.file.markerId !== marker.id || recovery.file.operationId !== operationId) throw new Error("Could not create a recoverable private preview credential file.");
   }
+  const recoverySha256 = recovery.sha256;
   const passwordHashes = await Promise.all(recovery.file.credentials.map(async (credential) => ({ ...credential, passwordHash: await hashPassword(credential.password) })));
   await withOperatorTransaction(pool, async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtext('ftc-preview-initialization'))");
-    const locked = await client.query<{ status: string; operation_id: string | null }>(
-      "SELECT status,operation_id FROM preview_environment_initialization WHERE environment_marker_id=$1 FOR UPDATE", [marker.id]);
-    if (!locked.rows[0] || locked.rows[0].operation_id && locked.rows[0].operation_id !== operationId || locked.rows[0].status === "ready") {
+    const locked = await client.query<{ status: string; operation_id: string | null; credential_file_sha256: string | null }>(
+      "SELECT status,operation_id,credential_file_sha256 FROM preview_environment_initialization WHERE environment_marker_id=$1 FOR UPDATE", [marker.id]);
+    if (!locked.rows[0] || locked.rows[0].operation_id && locked.rows[0].operation_id !== operationId || locked.rows[0].status === "ready" ||
+      locked.rows[0].credential_file_sha256 && locked.rows[0].credential_file_sha256 !== recoverySha256) {
       throw new Error("Preview initialization state changed; no new rotation was applied.");
     }
     await client.query("UPDATE preview_environment_initialization SET operation_id=$2,credential_file_sha256=$3,updated_at=now() WHERE environment_marker_id=$1",
-      [marker.id, operationId, recovery!.sha256]);
+      [marker.id, operationId, recoverySha256]);
     for (const account of previewAccounts) {
       const user = await client.query<{ id: string; role: string; active: boolean }>("SELECT id,role,active FROM app_users WHERE login_name=$1 FOR UPDATE", [account.loginName]);
       if (!user.rows[0] || user.rows[0].role !== account.role || !user.rows[0].active) throw new Error("A seeded preview account changed during initialization.");

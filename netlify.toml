@@ -17,3 +17,6 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+[functions."preview-operator"]
+  included_files = ["server/fixtures/fictional-preview-evidence.pdf"]

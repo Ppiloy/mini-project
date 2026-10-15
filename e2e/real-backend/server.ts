@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import { lstat, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -51,34 +51,35 @@ class MemoryBlobIO implements BlobIO {
 function safeRunPaths() {
   const directory = process.env.FTC_REAL_BROWSER_RUN_DIRECTORY;
   const credentialsFile = process.env.FTC_REAL_BROWSER_CREDENTIALS_FILE;
+  const runToken = process.env.FTC_REAL_BROWSER_RUN_TOKEN;
   const expectedTemporaryRoot = resolve(tmpdir()) + sep;
   if (!directory || !isAbsolute(directory) || resolve(dirname(credentialsFile ?? "")) !== resolve(directory) ||
       basename(directory) !== basename(resolve(directory)) || !/^ftc-real-backend-browser-\d+$/.test(basename(directory)) ||
-      !resolve(directory).startsWith(expectedTemporaryRoot) || credentialsFile !== join(directory, "credentials.json")) {
+      !resolve(directory).startsWith(expectedTemporaryRoot) || credentialsFile !== join(directory, "credentials.json") ||
+      !runToken || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runToken)) {
     throw new Error("The real-backend acceptance requires its exact private temporary credential path.");
   }
-  return { directory, credentialsFile };
+  return { directory, credentialsFile, runToken };
 }
 
-async function preparePrivateRunDirectory(directory: string) {
-  try {
-    const info = await lstat(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) throw new Error("The acceptance temp path is not a private directory.");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await rm(directory, { recursive: true, force: true });
+async function preparePrivateRunDirectory(directory: string, runToken: string) {
   await mkdir(directory, { recursive: false, mode: 0o700 });
+  try {
+    await writeFile(join(directory, ".ftc-run-owner"), runToken, { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function main() {
-  const { directory, credentialsFile } = safeRunPaths();
+  const { directory, credentialsFile, runToken } = safeRunPaths();
   const port = Number(process.env.PORT);
   const webOrigin = process.env.FTC_REAL_WEB_ORIGIN;
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || !webOrigin || new URL(webOrigin).hostname !== "127.0.0.1") {
     throw new Error("The real-backend acceptance server needs its local API and browser origins.");
   }
-  await preparePrivateRunDirectory(directory);
+  await preparePrivateRunDirectory(directory, runToken);
   const database = new PGlite();
   const pool = new PGlitePool(database);
   const env: NodeJS.ProcessEnv = {

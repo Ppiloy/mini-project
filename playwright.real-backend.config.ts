@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,7 +14,10 @@ const webPort = Number(process.env.FTC_REAL_WEB_PORT ?? 15191);
 // The config is re-evaluated in worker processes. Preserve the runner's path
 // through inherited env so workers never point at a per-worker credential file.
 const runDirectory = process.env.FTC_REAL_BROWSER_RUN_DIRECTORY ?? join(tmpdir(), `ftc-real-backend-browser-${process.pid}`);
+const runToken = process.env.TEST_WORKER_INDEX === undefined ? randomUUID() : process.env.FTC_REAL_BROWSER_RUN_TOKEN;
+if (!runToken) throw new Error("The browser worker did not inherit its run ownership token.");
 process.env.FTC_REAL_BROWSER_RUN_DIRECTORY = runDirectory;
+process.env.FTC_REAL_BROWSER_RUN_TOKEN = runToken;
 process.env.FTC_REAL_BROWSER_CREDENTIALS_FILE = join(runDirectory, "credentials.json");
 
 if (!Number.isInteger(apiPort) || apiPort < 1024 || apiPort > 65535 ||
@@ -44,6 +48,7 @@ export default defineConfig({
       env: {
         PORT: String(apiPort),
         FTC_REAL_BROWSER_RUN_DIRECTORY: runDirectory,
+        FTC_REAL_BROWSER_RUN_TOKEN: runToken,
         FTC_REAL_BROWSER_CREDENTIALS_FILE: join(runDirectory, "credentials.json"),
         FTC_REAL_WEB_ORIGIN: `http://127.0.0.1:${webPort}`,
       },
