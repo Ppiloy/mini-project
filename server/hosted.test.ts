@@ -12,8 +12,10 @@ import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
 import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
 import {
+  createPreviewEnvironmentDiagnostics,
   createPreviewEnvironmentProof,
   FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_DIAGNOSTICS_HEADER,
   FTC_ENVIRONMENT_PROOF_HEADER,
 } from "./runtime/preview-environment-proof.js";
 
@@ -382,12 +384,23 @@ describe("hosted authentication and durable draft API", () => {
 
     const first = await requestHealth(firstEnvironment, secret, nonce, true);
     const firstProof = first.headers.get(FTC_ENVIRONMENT_PROOF_HEADER);
+    const firstDiagnosticsHeader = first.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER);
+    const firstDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, secret);
     expect(first.status).toBe(200);
     expect(firstProof).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(firstDiagnostics).toEqual({
+      key: expect.stringMatching(/^[a-f0-9]{64}$/),
+      database: expect.stringMatching(/^[a-f0-9]{64}$/),
+      store: expect.stringMatching(/^[a-f0-9]{64}$/),
+      region: expect.stringMatching(/^[a-f0-9]{64}$/),
+      context: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(firstDiagnosticsHeader).toBe(JSON.stringify(firstDiagnostics));
     const healthBody = await first.json();
     expect(healthBody).toMatchObject({ data: { status: "ok" } });
     expect(JSON.stringify(healthBody)).not.toContain(firstEnvironment.databaseFingerprint);
     expect(firstProof).toBe(createPreviewEnvironmentProof(nonce, firstEnvironment, secret));
+    expect(firstDiagnosticsHeader).not.toContain(firstEnvironment.databaseFingerprint);
 
     // Reusing a challenge is safe for comparison: the same branch is stable,
     // while another preview branch receives a different proof for that nonce.
@@ -397,19 +410,60 @@ describe("hosted authentication and durable draft API", () => {
     const otherBranch = await requestHealth(secondEnvironment);
     expect(repeated.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(firstProof);
     expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(firstDiagnosticsHeader);
+    const freshDiagnostics = createPreviewEnvironmentDiagnostics(freshNonce, firstEnvironment, secret);
+    const otherBranchDiagnostics = createPreviewEnvironmentDiagnostics(nonce, secondEnvironment, secret);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDiagnostics));
+    expect(freshDiagnostics).not.toEqual(firstDiagnostics);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(freshDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDiagnostics));
+    expect(otherBranchDiagnostics?.key).toBe(firstDiagnostics?.key);
+    expect(otherBranchDiagnostics?.database).not.toBe(firstDiagnostics?.database);
+    expect(otherBranchDiagnostics?.store).not.toBe(firstDiagnostics?.store);
+    expect(otherBranchDiagnostics?.region).toBe(firstDiagnostics?.region);
+    expect(otherBranchDiagnostics?.context).toBe(firstDiagnostics?.context);
     expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(
       createPreviewEnvironmentProof(freshNonce, firstEnvironment, secret),
     );
     expect(otherBranch.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
     const wrongSecret = await requestHealth(firstEnvironment, `${secret}-wrong`);
     expect(wrongSecret.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecretDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, `${secret}-wrong`);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(wrongSecretDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDiagnostics));
 
     const invalidNonce = await requestHealth(firstEnvironment, secret, "not-a-challenge");
     expect(invalidNonce.status).toBe(200);
     expect(invalidNonce.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
     const noChallenge = await requestHealth(firstEnvironment, secret, null);
     expect(noChallenge.status).toBe(200);
     expect(noChallenge.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+
+    const fieldChanges: Array<[
+      "databaseFingerprint" | "storageStore" | "storageRegion" | "deploymentContext",
+      string,
+      "database" | "store" | "region" | "context",
+    ]> = [
+      ["databaseFingerprint", "a".repeat(64), "database"],
+      ["storageStore", `${firstEnvironment.storageStore}-changed`, "store"],
+      ["storageRegion", "eu-central-1", "region"],
+      ["deploymentContext", "branch-deploy", "context"],
+    ];
+    for (const [property, changedValue, diagnosticField] of fieldChanges) {
+      const changedEnvironment = { ...firstEnvironment, [property]: changedValue };
+      const changedDiagnostics = createPreviewEnvironmentDiagnostics(nonce, changedEnvironment, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDiagnostics) throw new Error("Expected eligible preview diagnostics");
+      for (const field of ["key", "database", "store", "region", "context"] as const) {
+        expect(changedDiagnostics[field] === firstDiagnostics[field]).toBe(field !== diagnosticField);
+      }
+    }
   });
 
   it("never emits environment proofs for production, local, or unavailable health", async () => {
@@ -458,11 +512,13 @@ describe("hosted authentication and durable draft API", () => {
       const response = await requestHealth(environment);
       expect(response.status).toBe(200);
       expect(response.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
     }
     const unavailable = await requestHealth(previewEnvironment, true);
     expect(unavailable.status).toBe(503);
     expect(unavailable.headers.get("cache-control")).toContain("no-store");
     expect(unavailable.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
   });
 
   it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {

@@ -20,8 +20,10 @@ import { ApiFailure } from "./api-failure.js";
 import { sendApiSuccess } from "./api-success.js";
 import { ensureEnvironmentMarker, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "./runtime/environment.js";
 import {
+  createPreviewEnvironmentDiagnostics,
   createPreviewEnvironmentProof,
   FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_DIAGNOSTICS_HEADER,
   FTC_ENVIRONMENT_PROOF_HEADER,
 } from "./runtime/preview-environment-proof.js";
 import { registerWorkflowRoutes } from "./workflow/routes.js";
@@ -658,8 +660,11 @@ export function createApp(options: CreateAppOptions): Express {
 
   app.get("/api/health", async (request, response) => {
     await options.pool.query("SELECT 1");
-    const proof = createPreviewEnvironmentProof(request.get(FTC_ENVIRONMENT_CHALLENGE_HEADER) ?? "", environment, options.sessionSecret);
+    const challenge = request.get(FTC_ENVIRONMENT_CHALLENGE_HEADER) ?? "";
+    const proof = createPreviewEnvironmentProof(challenge, environment, options.sessionSecret);
     if (proof) response.setHeader(FTC_ENVIRONMENT_PROOF_HEADER, proof);
+    const diagnostics = createPreviewEnvironmentDiagnostics(challenge, environment, options.sessionSecret);
+    if (diagnostics) response.setHeader(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER, JSON.stringify(diagnostics));
     sendApiSuccess(response, apiSuccessSchemas.health, { status: "ok" }, response.locals.requestId);
   });
   app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
