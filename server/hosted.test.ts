@@ -11,6 +11,11 @@ import { hashPasswordForTest } from "./passwords.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
 import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
+import {
+  createPreviewEnvironmentProof,
+  FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_PROOF_HEADER,
+} from "./runtime/preview-environment-proof.js";
 
 class PGlitePool implements PgPoolLike {
   constructor(private readonly database: PGlite) {}
@@ -69,7 +74,12 @@ afterEach(async () => {
   while (afterEachCallbacks.length) await afterEachCallbacks.pop()?.();
 });
 
-async function setup(trustedHttps = false, clock?: () => number) {
+async function setup(
+  trustedHttps = false,
+  clock?: () => number,
+  environment?: ReturnType<typeof resolveRuntimeEnvironmentConfig>,
+  sessionSecret = "test-only-session-secret-with-sufficient-entropy",
+) {
   const database = new PGlite();
   afterEachCallbacks.push(() => database.close());
   const migrations = (await readdir("netlify/database/migrations"))
@@ -88,7 +98,7 @@ async function setup(trustedHttps = false, clock?: () => number) {
     ["00000000-0000-4000-8000-000000000001", passwordHash, "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"],
   );
   await pool.query("INSERT INTO user_profiles(user_id, masked_reference) VALUES ($1, '***-01'), ($2, '***-02')", ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]);
-  const app = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps, clock });
+  const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps, clock, environment });
   return { app, pool };
 }
 
@@ -338,6 +348,121 @@ describe("hosted authentication and durable draft API", () => {
     expect(unavailable.body.error.code).toBe("service_unavailable");
     expect(unavailable.body.error.requestId).toEqual(expect.any(String));
     expect(unavailable.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("returns a nonce-bound preview environment proof only after modern health succeeds", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "9f0b3d2c7a6e5f401122334455667788";
+    const previewEnvironment = (branch: string) => resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: `postgresql://ftc_role:fixture@preview-db.example.test/${branch}`,
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const firstEnvironment = previewEnvironment("branch-a");
+    const secondEnvironment = previewEnvironment("branch-b");
+    const secret = "test-only-session-secret-with-sufficient-entropy";
+    const { pool } = await setup(false, undefined, firstEnvironment, secret);
+    const healthHandler = (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret) => {
+      const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment });
+      return createModernFunctionHandler(() => app);
+    };
+    const requestHealth = async (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret, challenge: string | null = nonce, verifyExpressRoute = false) => {
+      const handler = healthHandler(environment, sessionSecret);
+      if (verifyExpressRoute) {
+        const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment });
+        const direct = await request(app).get("/api/health").set(FTC_ENVIRONMENT_CHALLENGE_HEADER, challenge ?? "");
+        expect(direct.status).toBe(200);
+        expect(direct.headers[FTC_ENVIRONMENT_PROOF_HEADER]).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+      }
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: challenge === null ? {} : { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: challenge },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    const first = await requestHealth(firstEnvironment, secret, nonce, true);
+    const firstProof = first.headers.get(FTC_ENVIRONMENT_PROOF_HEADER);
+    expect(first.status).toBe(200);
+    expect(firstProof).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    const healthBody = await first.json();
+    expect(healthBody).toMatchObject({ data: { status: "ok" } });
+    expect(JSON.stringify(healthBody)).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(firstProof).toBe(createPreviewEnvironmentProof(nonce, firstEnvironment, secret));
+
+    // Reusing a challenge is safe for comparison: the same branch is stable,
+    // while another preview branch receives a different proof for that nonce.
+    const repeated = await requestHealth(firstEnvironment);
+    const freshNonce = "0123456789abcdef0123456789abcdef";
+    const freshChallenge = await requestHealth(firstEnvironment, secret, freshNonce);
+    const otherBranch = await requestHealth(secondEnvironment);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(firstProof);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(
+      createPreviewEnvironmentProof(freshNonce, firstEnvironment, secret),
+    );
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecret = await requestHealth(firstEnvironment, `${secret}-wrong`);
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+
+    const invalidNonce = await requestHealth(firstEnvironment, secret, "not-a-challenge");
+    expect(invalidNonce.status).toBe(200);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    const noChallenge = await requestHealth(firstEnvironment, secret, null);
+    expect(noChallenge.status).toBe(200);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+  });
+
+  it("never emits environment proofs for production, local, or unavailable health", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "11223344556677889900aabbccddeeff";
+    const productionEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "production",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@prod-db.example.test/production",
+      SITE_ID: "preview-proof-fixture",
+    } as NodeJS.ProcessEnv);
+    const localEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "dev",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@127.0.0.1:5432/local",
+    } as NodeJS.ProcessEnv);
+    const previewEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@preview-db.example.test/preview",
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const { pool } = await setup(false, undefined, productionEnvironment);
+    const requestHealth = async (environment: ReturnType<typeof resolveRuntimeEnvironmentConfig>, failing = false) => {
+      const app = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment });
+      if (!failing) {
+        const handler = createModernFunctionHandler(() => app);
+        return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+          headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+        }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+      }
+      const failingPool: PgPoolLike = {
+        query: (text, values, callback) => text === "SELECT 1"
+          ? Promise.reject(new Error("synthetic database outage"))
+          : pool.query(text, values, callback),
+        connect: () => pool.connect(),
+      };
+      const failingApp = createApp({ pool: failingPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment });
+      const handler = createModernFunctionHandler(() => failingApp);
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    for (const environment of [productionEnvironment, localEnvironment]) {
+      const response = await requestHealth(environment);
+      expect(response.status).toBe(200);
+      expect(response.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    }
+    const unavailable = await requestHealth(previewEnvironment, true);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toContain("no-store");
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
   });
 
   it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {
