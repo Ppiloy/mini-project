@@ -12,8 +12,10 @@ import type { PgPoolLike, PgQueryable } from "./postgres.js";
 import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
 import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
 import {
+  createPreviewDatabaseIdentityDiagnostics,
   createPreviewEnvironmentDiagnostics,
   createPreviewEnvironmentProof,
+  FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER,
   FTC_ENVIRONMENT_CHALLENGE_HEADER,
   FTC_ENVIRONMENT_DIAGNOSTICS_HEADER,
   FTC_ENVIRONMENT_PROOF_HEADER,
@@ -365,17 +367,29 @@ describe("hosted authentication and durable draft API", () => {
     const secondEnvironment = previewEnvironment("branch-b");
     const secret = "test-only-session-secret-with-sufficient-entropy";
     const { pool } = await setup(false, undefined, firstEnvironment, secret);
+    const databaseUrl = (environment: ReturnType<typeof previewEnvironment>) => environment === secondEnvironment
+      ? "postgresql://ftc_role:fixture@preview-db.example.test/branch-b"
+      : "postgresql://ftc_role:fixture@preview-db.example.test/branch-a";
     const healthHandler = (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret) => {
-      const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment });
+      const connectionString = databaseUrl(environment);
+      const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+        previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+          challenge, environment, connectionString, sessionSecret,
+        ) });
       return createModernFunctionHandler(() => app);
     };
     const requestHealth = async (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret, challenge: string | null = nonce, verifyExpressRoute = false) => {
       const handler = healthHandler(environment, sessionSecret);
       if (verifyExpressRoute) {
-        const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment });
+        const connectionString = databaseUrl(environment);
+        const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+          previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+            challenge, environment, connectionString, sessionSecret,
+          ) });
         const direct = await request(app).get("/api/health").set(FTC_ENVIRONMENT_CHALLENGE_HEADER, challenge ?? "");
         expect(direct.status).toBe(200);
         expect(direct.headers[FTC_ENVIRONMENT_PROOF_HEADER]).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+        expect(direct.headers[FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER]).toEqual(expect.any(String));
       }
       return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
         headers: challenge === null ? {} : { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: challenge },
@@ -386,6 +400,7 @@ describe("hosted authentication and durable draft API", () => {
     const firstProof = first.headers.get(FTC_ENVIRONMENT_PROOF_HEADER);
     const firstDiagnosticsHeader = first.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER);
     const firstDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, secret);
+    const firstDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
     expect(first.status).toBe(200);
     expect(firstProof).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
     expect(firstDiagnostics).toEqual({
@@ -401,6 +416,9 @@ describe("hosted authentication and durable draft API", () => {
     expect(JSON.stringify(healthBody)).not.toContain(firstEnvironment.databaseFingerprint);
     expect(firstProof).toBe(createPreviewEnvironmentProof(nonce, firstEnvironment, secret));
     expect(firstDiagnosticsHeader).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(firstDatabaseDiagnostics));
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("preview-db.example.test");
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("ftc_role");
 
     // Reusing a challenge is safe for comparison: the same branch is stable,
     // while another preview branch receives a different proof for that nonce.
@@ -413,6 +431,8 @@ describe("hosted authentication and durable draft API", () => {
     expect(repeated.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(firstDiagnosticsHeader);
     const freshDiagnostics = createPreviewEnvironmentDiagnostics(freshNonce, firstEnvironment, secret);
     const otherBranchDiagnostics = createPreviewEnvironmentDiagnostics(nonce, secondEnvironment, secret);
+    const freshDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(freshNonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
+    const otherBranchDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, secondEnvironment, databaseUrl(secondEnvironment), secret);
     expect(freshChallenge.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDiagnostics));
     expect(freshDiagnostics).not.toEqual(firstDiagnostics);
     for (const field of ["key", "database", "store", "region", "context"] as const) {
@@ -424,6 +444,17 @@ describe("hosted authentication and durable draft API", () => {
     expect(otherBranchDiagnostics?.store).not.toBe(firstDiagnostics?.store);
     expect(otherBranchDiagnostics?.region).toBe(firstDiagnostics?.region);
     expect(otherBranchDiagnostics?.context).toBe(firstDiagnostics?.context);
+    expect(otherBranch.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDatabaseDiagnostics));
+    expect(otherBranchDatabaseDiagnostics?.protocol).toBe(firstDatabaseDiagnostics?.protocol);
+    expect(otherBranchDatabaseDiagnostics?.role).toBe(firstDatabaseDiagnostics?.role);
+    expect(otherBranchDatabaseDiagnostics?.host).toBe(firstDatabaseDiagnostics?.host);
+    expect(otherBranchDatabaseDiagnostics?.port).toBe(firstDatabaseDiagnostics?.port);
+    expect(otherBranchDatabaseDiagnostics?.path).not.toBe(firstDatabaseDiagnostics?.path);
+    expect(otherBranchDatabaseDiagnostics?.routing).toBe(firstDatabaseDiagnostics?.routing);
+    expect(freshChallenge.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDatabaseDiagnostics));
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(freshDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
     expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(
       createPreviewEnvironmentProof(freshNonce, firstEnvironment, secret),
     );
@@ -435,15 +466,22 @@ describe("hosted authentication and durable draft API", () => {
       expect(wrongSecretDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
     }
     expect(wrongSecret.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDiagnostics));
+    const wrongSecretDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), `${secret}-wrong`);
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(wrongSecretDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDatabaseDiagnostics));
 
     const invalidNonce = await requestHealth(firstEnvironment, secret, "not-a-challenge");
     expect(invalidNonce.status).toBe(200);
     expect(invalidNonce.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
     expect(invalidNonce.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
     const noChallenge = await requestHealth(firstEnvironment, secret, null);
     expect(noChallenge.status).toBe(200);
     expect(noChallenge.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
     expect(noChallenge.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
 
     const fieldChanges: Array<[
       "databaseFingerprint" | "storageStore" | "storageRegion" | "deploymentContext",
@@ -464,6 +502,28 @@ describe("hosted authentication and durable draft API", () => {
         expect(changedDiagnostics[field] === firstDiagnostics[field]).toBe(field !== diagnosticField);
       }
     }
+
+    const urlChanges: Array<[string, keyof NonNullable<typeof firstDatabaseDiagnostics>]> = [
+      ["postgres://ftc_role:fixture@preview-db.example.test/branch-a", "protocol"],
+      ["postgresql://other_role:fixture@preview-db.example.test/branch-a", "role"],
+      ["postgresql://ftc_role:fixture@other-db.example.test/branch-a", "host"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test:6543/branch-a", "port"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-b", "path"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-a?application_name=ftc", "routing"],
+    ];
+    for (const [changedUrl, changedField] of urlChanges) {
+      const changedDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, changedUrl, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDatabaseDiagnostics) throw new Error("Expected eligible database diagnostics");
+      for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+        expect(changedDiagnostics[field] === firstDatabaseDiagnostics[field]).toBe(field !== changedField);
+      }
+    }
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:another-password@preview-db.example.test/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:fixture@preview-db.example.test:5432/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, "not a URL", secret)).toBeNull();
   });
 
   it("never emits environment proofs for production, local, or unavailable health", async () => {
@@ -486,8 +546,16 @@ describe("hosted authentication and durable draft API", () => {
     } as NodeJS.ProcessEnv);
     const { pool } = await setup(false, undefined, productionEnvironment);
     const requestHealth = async (environment: ReturnType<typeof resolveRuntimeEnvironmentConfig>, failing = false) => {
+      const connectionString = environment.kind === "preview"
+        ? "postgresql://ftc_role:fixture@preview-db.example.test/preview"
+        : environment.kind === "production"
+          ? "postgresql://ftc_role:fixture@prod-db.example.test/production"
+          : "postgresql://ftc_role:fixture@127.0.0.1:5432/local";
+      const previewDatabaseIdentityDiagnostics = (challenge: string) => createPreviewDatabaseIdentityDiagnostics(
+        challenge, environment, connectionString, "test-only-session-secret-with-sufficient-entropy",
+      );
       const app = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
-        allowedOrigin: origin, trustedHttps: false, environment });
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
       if (!failing) {
         const handler = createModernFunctionHandler(() => app);
         return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
@@ -501,7 +569,7 @@ describe("hosted authentication and durable draft API", () => {
         connect: () => pool.connect(),
       };
       const failingApp = createApp({ pool: failingPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
-        allowedOrigin: origin, trustedHttps: false, environment });
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
       const handler = createModernFunctionHandler(() => failingApp);
       return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
         headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
@@ -513,12 +581,14 @@ describe("hosted authentication and durable draft API", () => {
       expect(response.status).toBe(200);
       expect(response.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
       expect(response.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
     }
     const unavailable = await requestHealth(previewEnvironment, true);
     expect(unavailable.status).toBe(503);
     expect(unavailable.headers.get("cache-control")).toContain("no-store");
     expect(unavailable.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
     expect(unavailable.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
   });
 
   it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {

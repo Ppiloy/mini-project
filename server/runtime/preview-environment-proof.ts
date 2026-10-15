@@ -4,6 +4,7 @@ import type { RuntimeEnvironmentConfig } from "./environment.js";
 export const FTC_ENVIRONMENT_CHALLENGE_HEADER = "x-ftc-environment-challenge";
 export const FTC_ENVIRONMENT_PROOF_HEADER = "x-ftc-environment-proof";
 export const FTC_ENVIRONMENT_DIAGNOSTICS_HEADER = "x-ftc-environment-diagnostics";
+export const FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER = "x-ftc-database-identity-diagnostics";
 
 export interface PreviewEnvironmentDiagnostics {
   key: string;
@@ -11,6 +12,15 @@ export interface PreviewEnvironmentDiagnostics {
   store: string;
   region: string;
   context: string;
+}
+
+export interface PreviewDatabaseIdentityDiagnostics {
+  protocol: string;
+  role: string;
+  host: string;
+  port: string;
+  path: string;
+  routing: string;
 }
 
 const challengePattern = /^[a-f0-9]{32}$/;
@@ -72,5 +82,39 @@ export function createPreviewEnvironmentDiagnostics(
     store: attest("store", environment.storageStore),
     region: attest("region", environment.storageRegion),
     context: attest("context", environment.deploymentContext),
+  };
+}
+
+/** Create opaque component attestations using the same URL parts as databaseIdentity. */
+export function createPreviewDatabaseIdentityDiagnostics(
+  challenge: string,
+  environment: RuntimeEnvironmentConfig,
+  connectionString: string,
+  sessionSecret: string,
+): PreviewDatabaseIdentityDiagnostics | null {
+  if (!isEligibleProof(challenge, environment, sessionSecret)) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(connectionString);
+  } catch {
+    return null;
+  }
+  if (!(parsed.protocol === "postgres:" || parsed.protocol === "postgresql:") || !parsed.username) return null;
+
+  const routing = [...parsed.searchParams.entries()].sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`).join("&");
+  const key = deriveProofKey(sessionSecret);
+  const attest = (field: keyof PreviewDatabaseIdentityDiagnostics, value: string): string => createHmac("sha256", key)
+    .update(JSON.stringify(["ftc-preview-database-identity-diagnostics-v1", field, challenge, value]), "utf8")
+    .digest("hex");
+
+  return {
+    protocol: attest("protocol", parsed.protocol),
+    role: attest("role", parsed.username),
+    host: attest("host", parsed.hostname.toLowerCase()),
+    port: attest("port", parsed.port || "5432"),
+    path: attest("path", parsed.pathname),
+    routing: attest("routing", routing),
   };
 }

@@ -6,6 +6,7 @@ import type { Express } from "express";
 import { createApp, type CreateAppOptions } from "../../server/app.js";
 import { makeRuntimePool } from "../../server/app.js";
 import { resolveRuntimeEnvironmentConfig } from "../../server/runtime/environment.js";
+import { createPreviewDatabaseIdentityDiagnostics } from "../../server/runtime/preview-environment-proof.js";
 import { netlifyBlobIO } from "../../server/storage/blob-io.js";
 
 type NetlifyLambdaEvent = Record<string, unknown> & {
@@ -34,6 +35,7 @@ function createRuntimeApp(
   pool: ReturnType<typeof makeRuntimePool>,
   apps: Map<boolean, Express>,
   environment: NodeJS.ProcessEnv,
+  connectionString: string,
 ): Express {
   const cached = apps.get(trustedHttps);
   if (cached) return cached;
@@ -42,8 +44,13 @@ function createRuntimeApp(
   if (!environment.NETLIFY_DB_URL || !sessionSecret || sessionSecret.length < 32 || !allowedOrigin) {
     throw new Error("Hosted API environment is incomplete.");
   }
+  const runtimeEnvironment = resolveRuntimeEnvironmentConfig(environment);
   const options: CreateAppOptions = { pool, sessionSecret, allowedOrigin, trustedHttps,
-    environment: resolveRuntimeEnvironmentConfig(environment), blobIO: netlifyBlobIO,
+    environment: runtimeEnvironment,
+    previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+      challenge, runtimeEnvironment, connectionString, sessionSecret,
+    ),
+    blobIO: netlifyBlobIO,
     officerUserId: environment.FTC_OFFICER_USER_ID };
   const app = createApp(options);
   apps.set(trustedHttps, app);
@@ -59,7 +66,7 @@ function platformRuntimeApp(trustedHttps: boolean): Express {
     // getDatabase() without passing this value back to the SDK.
     NETLIFY_DB_URL: connectionString,
   };
-  return createRuntimeApp(trustedHttps, platformRuntimePool, platformRuntimeApps, environment);
+  return createRuntimeApp(trustedHttps, platformRuntimePool, platformRuntimeApps, environment, connectionString);
 }
 
 function eventRequestUrl(event: NetlifyLambdaEvent): URL | null {

@@ -20,6 +20,8 @@ import { ApiFailure } from "./api-failure.js";
 import { sendApiSuccess } from "./api-success.js";
 import { ensureEnvironmentMarker, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "./runtime/environment.js";
 import {
+  FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER,
+  type PreviewDatabaseIdentityDiagnostics,
   createPreviewEnvironmentDiagnostics,
   createPreviewEnvironmentProof,
   FTC_ENVIRONMENT_CHALLENGE_HEADER,
@@ -84,6 +86,7 @@ export interface CreateAppOptions {
   sessionCookieName?: string;
   clock?: () => number;
   environment?: RuntimeEnvironmentConfig;
+  previewDatabaseIdentityDiagnostics?: (challenge: string) => PreviewDatabaseIdentityDiagnostics | null;
   blobIO?: BlobIO;
   officerUserId?: string;
 }
@@ -665,6 +668,8 @@ export function createApp(options: CreateAppOptions): Express {
     if (proof) response.setHeader(FTC_ENVIRONMENT_PROOF_HEADER, proof);
     const diagnostics = createPreviewEnvironmentDiagnostics(challenge, environment, options.sessionSecret);
     if (diagnostics) response.setHeader(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER, JSON.stringify(diagnostics));
+    const databaseDiagnostics = options.previewDatabaseIdentityDiagnostics?.(challenge);
+    if (databaseDiagnostics) response.setHeader(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER, JSON.stringify(databaseDiagnostics));
     sendApiSuccess(response, apiSuccessSchemas.health, { status: "ok" }, response.locals.requestId);
   });
   app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
