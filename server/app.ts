@@ -19,6 +19,11 @@ import { hashPassword, verifyPassword } from "./passwords.js";
 import { ApiFailure } from "./api-failure.js";
 import { sendApiSuccess } from "./api-success.js";
 import { ensureEnvironmentMarker, type EnvironmentMarker, type RuntimeEnvironmentConfig } from "./runtime/environment.js";
+import {
+  createPreviewEnvironmentProof,
+  FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_PROOF_HEADER,
+} from "./runtime/preview-environment-proof.js";
 import { registerWorkflowRoutes } from "./workflow/routes.js";
 import type { BlobIO } from "./storage/blob-io.js";
 
@@ -651,8 +656,10 @@ export function createApp(options: CreateAppOptions): Express {
     next();
   });
 
-  app.get("/api/health", async (_request, response) => {
+  app.get("/api/health", async (request, response) => {
     await options.pool.query("SELECT 1");
+    const proof = createPreviewEnvironmentProof(request.get(FTC_ENVIRONMENT_CHALLENGE_HEADER) ?? "", environment, options.sessionSecret);
+    if (proof) response.setHeader(FTC_ENVIRONMENT_PROOF_HEADER, proof);
     sendApiSuccess(response, apiSuccessSchemas.health, { status: "ok" }, response.locals.requestId);
   });
   app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
