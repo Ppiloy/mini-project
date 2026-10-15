@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { connectLambda } from "@netlify/blobs";
+import { getConnectionString } from "@netlify/database";
+import { withLambda } from "@netlify/aws-lambda-compat";
 import serverless from "serverless-http";
 import type { Express } from "express";
 import { createApp, type CreateAppOptions } from "../../server/app.js";
@@ -16,37 +17,49 @@ type NetlifyLambdaEvent = Record<string, unknown> & {
   requestContext?: Record<string, unknown>;
 };
 
-interface BlobsLambdaEvent {
-  blobs: string;
-  headers: Record<string, string>;
-}
-
 interface FunctionResponse {
   statusCode: number;
-  headers: Record<string, string | string[]>;
+  headers: Record<string, string>;
   multiValueHeaders?: Record<string, string[]>;
   cookies?: string[];
   body: string;
   isBase64Encoded?: boolean;
 }
 
-const runtimePool = makeRuntimePool();
-const runtimeApps = new Map<boolean, Express>();
+const platformRuntimePool = makeRuntimePool({ usePlatformContext: true });
+const platformRuntimeApps = new Map<boolean, Express>();
 
-function runtimeApp(trustedHttps: boolean): Express {
-  const cached = runtimeApps.get(trustedHttps);
+function createRuntimeApp(
+  trustedHttps: boolean,
+  pool: ReturnType<typeof makeRuntimePool>,
+  apps: Map<boolean, Express>,
+  environment: NodeJS.ProcessEnv,
+): Express {
+  const cached = apps.get(trustedHttps);
   if (cached) return cached;
-  const sessionSecret = process.env.SESSION_SECRET;
-  const allowedOrigin = process.env.FTC_ALLOWED_ORIGIN;
-  if (!process.env.NETLIFY_DB_URL || !sessionSecret || sessionSecret.length < 32 || !allowedOrigin) {
+  const sessionSecret = environment.SESSION_SECRET;
+  const allowedOrigin = environment.FTC_ALLOWED_ORIGIN;
+  if (!environment.NETLIFY_DB_URL || !sessionSecret || sessionSecret.length < 32 || !allowedOrigin) {
     throw new Error("Hosted API environment is incomplete.");
   }
-  const options: CreateAppOptions = { pool: runtimePool, sessionSecret, allowedOrigin, trustedHttps,
-    environment: resolveRuntimeEnvironmentConfig(process.env), blobIO: netlifyBlobIO,
-    officerUserId: process.env.FTC_OFFICER_USER_ID };
+  const options: CreateAppOptions = { pool, sessionSecret, allowedOrigin, trustedHttps,
+    environment: resolveRuntimeEnvironmentConfig(environment), blobIO: netlifyBlobIO,
+    officerUserId: environment.FTC_OFFICER_USER_ID };
   const app = createApp(options);
-  runtimeApps.set(trustedHttps, app);
+  apps.set(trustedHttps, app);
   return app;
+}
+
+/** Modern Netlify Functions provide the active branch through the platform SDK. */
+function platformRuntimeApp(trustedHttps: boolean): Express {
+  const connectionString = getConnectionString();
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    // Used only in memory for environment identity; database connections use
+    // getDatabase() without passing this value back to the SDK.
+    NETLIFY_DB_URL: connectionString,
+  };
+  return createRuntimeApp(trustedHttps, platformRuntimePool, platformRuntimeApps, environment);
 }
 
 function eventRequestUrl(event: NetlifyLambdaEvent): URL | null {
@@ -114,20 +127,12 @@ function insecureHostedFailure() {
   };
 }
 
-/** Lambda compatibility mode requires this per invocation before using Blobs. */
-function initializeBlobsFromEvent(event: NetlifyLambdaEvent): void {
-  if (typeof event.blobs === "string" && event.headers && typeof event.headers === "object") {
-    connectLambda(event as unknown as BlobsLambdaEvent);
-  }
-}
-
 export function createFunctionHandler(appForRequest: (trustedHttps: boolean) => Express) {
   const wrapped = new Map<boolean, ReturnType<typeof serverless>>();
   return async (input: unknown, context: unknown = {}): Promise<FunctionResponse> => {
     try {
       if (!input || typeof input !== "object") throw new Error("Invalid function event.");
       const event = input as NetlifyLambdaEvent;
-      initializeBlobsFromEvent(event);
       const configuredOrigin = process.env.FTC_ALLOWED_ORIGIN;
       if (configuredOrigin?.startsWith("https://") && !trustedHttpsFromEvent(event)) {
         return insecureHostedFailure();
@@ -155,5 +160,19 @@ export function createFunctionHandler(appForRequest: (trustedHttps: boolean) => 
   };
 }
 
-/** App and store initialization is deferred until the first Function invocation. */
-export const handler = createFunctionHandler(runtimeApp);
+/** Public modern Request/Response seam used by Netlify's current Function runtime. */
+export function createModernFunctionHandler(appForRequest: (trustedHttps: boolean) => Express) {
+  const lambdaHandler = createFunctionHandler(appForRequest);
+  return withLambda(async (event, context) => {
+    const result = await lambdaHandler(event, context);
+    if ([204, 205, 304].includes(result.statusCode)) {
+      const { body: _body, isBase64Encoded: _isBase64Encoded, ...bodylessResponse } = result;
+      return bodylessResponse;
+    }
+    return result;
+  });
+}
+
+/** App and store initialization is deferred until the first modern Function invocation. */
+const modernHandler = createModernFunctionHandler(platformRuntimeApp);
+export default modernHandler;

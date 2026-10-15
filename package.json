@@ -30,6 +30,7 @@
   "dependencies": {
     "@fontsource/noto-sans-thai": "^5.2.8",
     "@hookform/resolvers": "^5.9.1",
+    "@netlify/aws-lambda-compat": "2.0.2",
     "@netlify/blobs": "^11.1.4",
     "@netlify/database": "^1.0.0",
     "@netlify/functions": "^6.0.2",

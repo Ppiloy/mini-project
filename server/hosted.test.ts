@@ -2,13 +2,14 @@ import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import express from "express";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
 import { createEmptySource } from "../shared/draft.js";
 import type { ForeignIncomeSourceDraft } from "../shared/contracts.js";
 import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
-import { createFunctionHandler } from "../netlify/functions/api.js";
+import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
 import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
 
 class PGlitePool implements PgPoolLike {
@@ -203,6 +204,88 @@ describe("hosted authentication and durable draft API", () => {
     }
   });
 
+  it("serves the same API through the modern Request handler without losing multipart bytes, binary responses, or repeated cookies", async () => {
+    const app = express();
+    app.post("/api/upload", express.raw({ type: "multipart/form-data" }), (req, res) => {
+      const bytes = req.body as Buffer;
+      res.json({ bytes: [...bytes] });
+    });
+    app.get("/api/file", (_req, res) => {
+      res.append("Set-Cookie", "download=ready; Path=/; HttpOnly");
+      res.type("application/pdf").send(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]));
+    });
+    app.get("/api/cookies", (_req, res) => {
+      res.append("Set-Cookie", "first=one; Path=/; HttpOnly");
+      res.append("Set-Cookie", "second=two; Path=/; HttpOnly");
+      res.status(200).end();
+    });
+    app.get("/api/no-content", (_req, res) => {
+      res.append("Set-Cookie", "no-content=kept; Path=/; HttpOnly");
+      res.status(204).end();
+    });
+    const handler = createModernFunctionHandler(() => app);
+
+    const multipartBytes = Buffer.from([45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 13, 10, 255, 0, 13, 10, 45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 45, 45]);
+    const runtimeContext = { requestId: "modern-handler-test" } as Parameters<typeof handler>[1];
+    const uploaded = await handler(new Request(`${origin}/.netlify/functions/api/upload`, {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=boundary" },
+      body: multipartBytes,
+    }), runtimeContext);
+    expect(uploaded.status).toBe(200);
+    const uploadedBody = await uploaded.json() as { bytes: number[] };
+    expect(uploadedBody.bytes).toEqual([...multipartBytes]);
+
+    const file = await handler(new Request(`${origin}/.netlify/functions/api/file`), runtimeContext);
+    expect(file.status).toBe(200);
+    expect(file.headers.get("content-type")).toContain("application/pdf");
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]);
+    const etag = file.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const conditionalFile = await handler(new Request(`${origin}/.netlify/functions/api/file`, {
+      headers: { "if-none-match": etag! },
+    }), runtimeContext);
+    expect(conditionalFile.status).toBe(304);
+    expect(conditionalFile.headers.get("etag")).toBe(etag);
+    expect(conditionalFile.headers.getSetCookie()).toContain("download=ready; Path=/; HttpOnly");
+
+    const noContent = await handler(new Request(`${origin}/.netlify/functions/api/no-content`), runtimeContext);
+    expect(noContent.status).toBe(204);
+    expect(noContent.headers.getSetCookie()).toContain("no-content=kept; Path=/; HttpOnly");
+
+    const cookies = await handler(new Request(`${origin}/.netlify/functions/api/cookies`), runtimeContext);
+    expect(cookies.status).toBe(200);
+    expect(cookies.headers.getSetCookie()).toEqual([
+      "first=one; Path=/; HttpOnly",
+      "second=two; Path=/; HttpOnly",
+    ]);
+  });
+
+  it("preserves the hosted origin and regenerated Secure session cookie through the modern handler", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const { app } = await setup(true);
+    const handler = createModernFunctionHandler(() => app);
+    const context = { requestId: "modern-login-test" } as Parameters<typeof handler>[1];
+    const loginResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/login`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ loginName: "taxpayer-a", password: "demo-password-1" }),
+    }), context);
+    expect(loginResponse.status).toBe(200);
+    const cookie = loginResponse.headers.getSetCookie()[0] ?? "";
+    expect(cookie).toContain("ftc.sid=");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+
+    const sessionResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/session`, {
+      headers: { origin, cookie: cookie.split(";")[0] ?? "" },
+    }), context);
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = await sessionResponse.json() as { data: { user: { loginName: string } } };
+    expect(sessionBody.data.user.loginName).toBe("taxpayer-a");
+  });
+
   it("fails closed through the Lambda boundary when deployment context and platform markers are absent", async () => {
     vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
     vi.stubEnv("SESSION_SECRET", "test-only-session-secret-with-sufficient-entropy");
@@ -226,6 +309,31 @@ describe("hosted authentication and durable draft API", () => {
     expect(JSON.parse(String(response.body)).error.code).toBe("service_unavailable");
     expect(String(response.headers["cache-control"])).toContain("no-store");
     expect(appWasBuilt).toBe(false);
+  });
+
+  it("proves database readiness with SELECT 1 and returns a safe unavailable response on query failure", async () => {
+    const { app, pool } = await setup();
+    const ready = await request(app).get("/api/health");
+    expect(ready.status).toBe(200);
+    expect(ready.body.data).toEqual({ status: "ok" });
+
+    const failingPool: PgPoolLike = {
+      query: (text, values, callback) => text === "SELECT 1"
+        ? Promise.reject(new Error("synthetic database outage"))
+        : pool.query(text, values, callback),
+      connect: () => pool.connect(),
+    };
+    const failingApp = createApp({
+      pool: failingPool,
+      sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+      allowedOrigin: origin,
+      trustedHttps: false,
+    });
+    const unavailable = await request(failingApp).get("/api/health");
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body.error.code).toBe("service_unavailable");
+    expect(unavailable.body.error.requestId).toEqual(expect.any(String));
+    expect(unavailable.headers["cache-control"]).toContain("no-store");
   });
 
   it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {
