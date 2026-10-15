@@ -26,6 +26,7 @@ export const previewCredentialFileSchema = recoverySchema;
 
 const pins = { siteId: z.string().min(1).max(128), deployId: z.string().min(1).max(128), branch: z.string().min(1).max(256),
   origin: z.string().url(), operationId: uuidV4, timestamp: z.number().int() };
+const approvedPreviewBranch = "codex/ftc-integration";
 const prepareSchema = z.object({ action: z.literal("prepare"), ...pins }).strict();
 const inspectSchema = z.object({ action: z.literal("inspect"), ...pins, nonce: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
 const applySchema = z.object({ action: z.literal("apply"), ...pins, manifestId: z.string().regex(/^[a-f0-9]{64}$/i), credentialsContents: z.string().max(12_000) }).strict();
@@ -52,7 +53,7 @@ export function createPreviewCredentialProof(connectionString: string, nonce: st
 
 export interface PreviewOperatorRuntime { pool: PgPoolLike; env: NodeJS.ProcessEnv; blobs: OperatorBlobIO; }
 export interface PreviewOperatorHandlerOptions { runtime: () => Promise<PreviewOperatorRuntime> | PreviewOperatorRuntime; now?: () => number; }
-export interface PreviewOperatorContext { site?: { id?: string }; deploy?: { id?: string; branch?: string; context?: string; published?: boolean }; }
+export interface PreviewOperatorContext { site?: { id?: string }; deploy?: { id?: string; context?: string; published?: boolean }; }
 
 const responseHeaders = { "content-type": "application/json; charset=utf-8", "cache-control": "private, no-store", pragma: "no-cache" };
 function json(status: number, body: unknown): Response { return new Response(JSON.stringify(body), { status, headers: responseHeaders }); }
@@ -62,11 +63,11 @@ function contextMatches(context: PreviewOperatorContext, body: z.infer<typeof re
   const configuredOrigin = env.FTC_ALLOWED_ORIGIN;
   let origin: string;
   try { origin = new URL(request.url).origin; } catch { return false; }
-  return Boolean(siteId && deploy && deploy.id && deploy.branch && deploy.context === "deploy-preview" && !deploy.published &&
+  return Boolean(siteId && deploy && deploy.id && deploy.context === "deploy-preview" && !deploy.published &&
     context.deploy?.context === "deploy-preview" && env.FTC_DEPLOYMENT_CONTEXT === "deploy-preview" &&
     env.SITE_ID === siteId && configuredOrigin && origin === configuredOrigin && body.origin === configuredOrigin &&
     origin.startsWith("https://") && body.origin.startsWith("https://") && deploy.published === false &&
-    body.siteId === siteId && body.deployId === deploy.id && body.branch === deploy.branch);
+    body.siteId === siteId && body.deployId === deploy.id && body.branch === approvedPreviewBranch);
 }
 
 export function createPreviewOperatorHandler(options: PreviewOperatorHandlerOptions) {

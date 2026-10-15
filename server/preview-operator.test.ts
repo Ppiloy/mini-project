@@ -39,9 +39,10 @@ const databases: PGlite[] = [];
 afterEach(async () => { while (databases.length) await databases.pop()?.close(); vi.unstubAllEnvs(); });
 
 const secret = "preview-operator-test-secret-with-more-than-32-characters";
+const approvedBranch = "codex/ftc-integration";
 const requestBody = (timestamp = Date.now()) => JSON.stringify({ action: "prepare", timestamp, siteId: "site-test", deployId: "deploy-test",
-  branch: "feature/demo", origin: "https://preview.example.test", operationId: "61000000-0000-4000-8000-000000000001" });
-const context = { site: { id: "site-test" }, deploy: { id: "deploy-test", branch: "feature/demo", context: "deploy-preview", published: false } };
+  branch: approvedBranch, origin: "https://preview.example.test", operationId: "61000000-0000-4000-8000-000000000001" });
+const context = { site: { id: "site-test" }, deploy: { id: "deploy-test", context: "deploy-preview", published: false } };
 
 function signedRequest(body: string, signature = signPreviewOperatorRequest(body, secret)): Request {
   return new Request("https://preview.example.test/.netlify/functions/preview-operator", { method: "POST", body,
@@ -89,6 +90,22 @@ describe("preview operator authentication boundary", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([
+    ["wrong signed branch", requestBody().replace(approvedBranch, "other-branch"), context],
+    ["wrong actual deploy", requestBody(), { ...context, deploy: { ...context.deploy, id: "other-deploy" } }],
+    ["wrong actual site", requestBody(), { ...context, site: { id: "other-site" } }],
+  ])("rejects %s before resolving the runtime", async (_name, body, suppliedContext) => {
+    vi.stubEnv("SESSION_SECRET", secret);
+    vi.stubEnv("FTC_DEPLOYMENT_CONTEXT", "deploy-preview");
+    vi.stubEnv("SITE_ID", "site-test");
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", "https://preview.example.test");
+    const runtime = vi.fn(() => { throw new Error("must not initialize runtime"); });
+    const response = await createPreviewOperatorHandler({ runtime })(signedRequest(body), suppliedContext);
+    expect(response.status).toBe(403);
+    expect(runtime).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
   it("rejects stale signed requests", async () => {
     vi.stubEnv("SESSION_SECRET", secret);
     vi.stubEnv("FTC_DEPLOYMENT_CONTEXT", "deploy-preview");
@@ -119,7 +136,7 @@ describe("preview operator initialization flow", () => {
       environment: resolveRuntimeEnvironmentConfig(env), officerUserId: officerId });
     const runtime = () => ({ pool, env, blobs });
     const handler = createPreviewOperatorHandler({ runtime });
-    const siteContext = { site: { id: "site-test" }, deploy: { id: "deploy-test", branch: "feature/demo", context: "deploy-preview", published: false } };
+    const siteContext = { site: { id: "site-test" }, deploy: { id: "deploy-test", context: "deploy-preview", published: false } };
     const operationId = "61000000-0000-4000-8000-000000000001";
     const makeCall = async (payload: Record<string, unknown>) => {
       const body = JSON.stringify(payload);
@@ -127,7 +144,7 @@ describe("preview operator initialization flow", () => {
       const responseBody: unknown = await response.json();
       return { response, body: responseBody };
     };
-    const pins = { timestamp: Date.now(), siteId: "site-test", deployId: "deploy-test", branch: "feature/demo", origin: "https://preview.example.test", operationId };
+    const pins = { timestamp: Date.now(), siteId: "site-test", deployId: "deploy-test", branch: approvedBranch, origin: "https://preview.example.test", operationId };
     const nonce = "a".repeat(32);
     const inspected = await makeCall({ action: "inspect", ...pins, nonce });
     expect(inspected.response.status).toBe(200);
@@ -176,7 +193,7 @@ describe("preview operator initialization flow", () => {
     const app = createApp({ pool, blobIO: blobs, sessionSecret: secret, allowedOrigin: env.FTC_ALLOWED_ORIGIN, trustedHttps: true,
       environment: resolveRuntimeEnvironmentConfig(env), officerUserId: officerId });
     const handler = createPreviewOperatorHandler({ runtime: () => ({ pool, env, blobs }) });
-    const pins = { timestamp: Date.now(), siteId: "site-test", deployId: "deploy-test", branch: "feature/demo", origin: "https://preview.example.test", operationId: "61000000-0000-4000-8000-000000000002" };
+    const pins = { timestamp: Date.now(), siteId: "site-test", deployId: "deploy-test", branch: approvedBranch, origin: "https://preview.example.test", operationId: "61000000-0000-4000-8000-000000000002" };
     const planBody = JSON.stringify({ action: "prepare", ...pins });
     const planResponse = await handler(signedRequest(planBody), context);
     const plan = z.object({ data: previewOperatorPlanSchema }).parse(await planResponse.json());
