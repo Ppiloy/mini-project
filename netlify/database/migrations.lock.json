@@ -1,0 +1,32 @@
+{
+  "files": [
+    {
+      "name": "20261014000100_hosted_foundation.sql",
+      "sha256": "56d403ad0481878f46628d2350bb75be0b27f84b646252671e60ed681e3d7ff0"
+    },
+    {
+      "name": "20261014000200_login_attempt_reservations.sql",
+      "sha256": "262798b00be3ede89ec62dee73ce835e8adf3e71918981b6658bf60da1faca9a"
+    },
+    {
+      "name": "20261014000300_workflow_environment.sql",
+      "sha256": "e624dda869b0a9099d7c22ef65cd431104039c349fd684e5998c8b9f695ebe87"
+    },
+    {
+      "name": "20261014000400_operator_credential_rotations.sql",
+      "sha256": "a6de4037793e1ab169e90476b00fe2c03b028a3267bb00afe1a76de8e74fdbd1"
+    },
+    {
+      "name": "20261014000500_operator_operations.sql",
+      "sha256": "9911dde7e7c3de9996dc64d4179f0f4419c99d32c72adbd51280e45f2c74a8d5"
+    },
+    {
+      "name": "20261014000600_demo_reset_authorization.sql",
+      "sha256": "184396ebddb7e887ff1ca123b12caa508fdb05771839a61b2ecd0af42096c8e2"
+    },
+    {
+      "name": "20261014000700_restore_initialization_gate.sql",
+      "sha256": "cdffb602f835fa1ec7eb7a7abfa911a9672f150e91a6771aaf66082843815e2d"
+    }
+  ]
+}

@@ -1,0 +1,885 @@
+import { readdir, readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+import request from "supertest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
+import { createEmptySource } from "../shared/draft.js";
+import type { ForeignIncomeSourceDraft } from "../shared/contracts.js";
+import { createApp } from "./app.js";
+import { hashPasswordForTest } from "./passwords.js";
+import type { PgPoolLike, PgQueryable } from "./postgres.js";
+import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
+import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
+import {
+  createPreviewDatabaseIdentityDiagnostics,
+  createPreviewEnvironmentDiagnostics,
+  createPreviewEnvironmentProof,
+  FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER,
+  FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_DIAGNOSTICS_HEADER,
+  FTC_ENVIRONMENT_PROOF_HEADER,
+} from "./runtime/preview-environment-proof.js";
+
+class PGlitePool implements PgPoolLike {
+  constructor(private readonly database: PGlite) {}
+
+  query<Row = Record<string, unknown>>(text: string, values?: unknown[], callback?: (error: Error | null, result?: { rows: Row[]; rowCount: number }) => void) {
+    const operation = this.database.query<Row>(text, values).then(({ rows, affectedRows }) => ({ rows, rowCount: affectedRows ?? rows.length }));
+    if (callback) {
+      operation.then((result) => callback(null, result), (error: Error) => callback(error));
+    }
+    return operation;
+  }
+
+  async connect(): Promise<PgQueryable> {
+    return {
+      query: (text, values, callback) => this.query(text, values, callback),
+      release: () => undefined,
+    };
+  }
+}
+
+class DelayedUserLookupPool implements PgPoolLike {
+  private releaseLookup!: () => void;
+  private lookupStarted!: () => void;
+  readonly lookupReady = new Promise<void>((resolve) => { this.lookupStarted = resolve; });
+  private readonly lookupGate = new Promise<void>((resolve) => { this.releaseLookup = resolve; });
+
+  constructor(private readonly pool: PgPoolLike) {}
+
+  release() { this.releaseLookup(); }
+
+  async query<Row = Record<string, unknown>>(text: string, values?: unknown[], callback?: (error: Error | null, result?: { rows: Row[]; rowCount: number }) => void) {
+    const operation = (async () => {
+      const result = await this.pool.query<Row>(text, values);
+      if (/^\s*SELECT users\.id, users\.login_name, users\.display_name, profiles\.masked_reference, users\.role, users\.active/i.test(text)) {
+        this.lookupStarted();
+        await this.lookupGate;
+      }
+      return result;
+    })();
+    if (callback) operation.then((result) => callback(null, result), (error: Error) => callback(error));
+    return operation;
+  }
+
+  async connect(): Promise<PgQueryable> {
+    return {
+      query: (text, values, callback) => this.query(text, values, callback),
+      release: () => undefined,
+    };
+  }
+}
+
+const origin = "https://ftc.example.test";
+const afterEachCallbacks: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  while (afterEachCallbacks.length) await afterEachCallbacks.pop()?.();
+});
+
+async function setup(
+  trustedHttps = false,
+  clock?: () => number,
+  environment?: ReturnType<typeof resolveRuntimeEnvironmentConfig>,
+  sessionSecret = "test-only-session-secret-with-sufficient-entropy",
+) {
+  const database = new PGlite();
+  afterEachCallbacks.push(() => database.close());
+  const migrations = (await readdir("netlify/database/migrations"))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const migrationName of migrations) {
+    await database.exec(await readFile(`netlify/database/migrations/${migrationName}`, "utf8"));
+  }
+  const pool = new PGlitePool(database);
+  const passwordHash = await hashPasswordForTest("demo-password-1");
+  await pool.query(
+    `INSERT INTO app_users (id, login_name, display_name, password_hash, role)
+     VALUES ($1, 'taxpayer-a', 'Taxpayer A', $2, 'taxpayer'),
+            ($3, 'taxpayer-b', 'Taxpayer B', $2, 'taxpayer'),
+            ($4, 'officer-a', 'Officer A', $2, 'officer')`,
+    ["00000000-0000-4000-8000-000000000001", passwordHash, "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"],
+  );
+  await pool.query("INSERT INTO user_profiles(user_id, masked_reference) VALUES ($1, '***-01'), ($2, '***-02')", ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]);
+  const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps, clock, environment });
+  return { app, pool };
+}
+
+async function login(app: ReturnType<typeof createApp>, loginName: string) {
+  const agent = request.agent(app);
+  const response = await agent.post("/api/auth/login").set("Origin", origin).send({ loginName, password: "demo-password-1" });
+  expect(response.status).toBe(200);
+  return { agent, csrfToken: response.body.data.csrfToken as string, user: response.body.data.user, cookie: String(response.headers["set-cookie"]?.[0] ?? "") };
+}
+
+describe("hosted authentication and durable draft API", () => {
+  it("restores a server identity from the regenerated secure session and destroys it on logout", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken, user, cookie } = await login(app, "taxpayer-a");
+
+    expect(user).toEqual({ id: "00000000-0000-4000-8000-000000000001", loginName: "taxpayer-a", displayName: "Taxpayer A", role: "taxpayer", maskedReference: "***-01" });
+    expect(JSON.stringify(user)).not.toContain("password");
+    expect(cookie).toContain("ftc.sid=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Domain=");
+
+    const restored = await agent.get("/api/auth/session").set("Origin", origin);
+    expect(restored.status).toBe(200);
+    expect(restored.body.data.user).toEqual(user);
+    expect(restored.headers["set-cookie"]).toBeUndefined();
+    const cases = await agent.get("/api/cases").set("Origin", origin);
+    expect(cases.status).toBe(200);
+    expect(cases.headers["set-cookie"]).toBeUndefined();
+
+    const logout = await agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", csrfToken);
+    expect(logout.status).toBe(200);
+    expect(logout.headers["set-cookie"]).toBeUndefined();
+    expect((await agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+  });
+
+  it("does not resurrect a session when an authenticated lookup finishes after logout", async () => {
+    const { app, pool } = await setup();
+    const loggedIn = await login(app, "taxpayer-a");
+    const delayedPool = new DelayedUserLookupPool(pool);
+    const delayedApp = createApp({ pool: delayedPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps: false });
+    const lateRequest = request(delayedApp).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    const pendingResponse = lateRequest.then((response) => response);
+
+    await delayedPool.lookupReady;
+    const logout = await loggedIn.agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", loggedIn.csrfToken);
+    expect(logout.status).toBe(200);
+    delayedPool.release();
+    const lateResponse = await pendingResponse;
+    expect(lateResponse.status).toBe(401);
+    expect(lateResponse.headers["set-cookie"]).toBeUndefined();
+
+    const afterLateResponse = await request(app).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    expect(afterLateResponse.status).toBe(401);
+  });
+
+  it("sets a Secure host-only cookie when the trusted adapter marks hosted HTTPS", async () => {
+    const { app } = await setup(true);
+    const response = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1" });
+    const cookie = String(response.headers["set-cookie"]?.[0] ?? "");
+    expect(response.status).toBe(200);
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Domain=");
+  });
+
+  it("serves the public API through the Netlify Lambda wrapper and normalizes direct function URLs", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const { app } = await setup(true);
+    const handler = createFunctionHandler(() => app);
+    const response = await handler({
+      httpMethod: "POST",
+      path: "/.netlify/functions/api/auth/login",
+      rawUrl: `${origin}/.netlify/functions/api/auth/login`,
+      headers: {
+        host: "ftc.example.test",
+        origin,
+        "content-type": "application/json",
+        "x-forwarded-proto": "http",
+        "x-forwarded-host": "attacker.example",
+      },
+      requestContext: { identity: { sourceIp: "127.0.0.1" }, requestId: "netlify-test-request" },
+      body: JSON.stringify({ loginName: "taxpayer-a", password: "demo-password-1" }),
+      isBase64Encoded: false,
+    }, {});
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(String(response.body)).data.user.loginName).toBe("taxpayer-a");
+    const cookie = response.multiValueHeaders?.["set-cookie"]?.join("; ") ?? response.cookies?.join("; ") ?? "";
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+
+    const health = await handler({
+      httpMethod: "GET",
+      path: "/.netlify/functions/api/api/health",
+      rawUrl: `${origin}/.netlify/functions/api/api/health`,
+      headers: { host: "ftc.example.test", "x-forwarded-proto": "http" },
+      requestContext: { identity: { sourceIp: "127.0.0.1" } }, body: "", isBase64Encoded: false,
+    }, {});
+    expect(health.statusCode).toBe(200);
+    expect(JSON.parse(String(health.body)).data.status).toBe("ok");
+    expect(String(health.headers["cache-control"])).toContain("no-store");
+
+    for (const rawUrl of [undefined, "http://ftc.example.test/api/health", "https://attacker.example/api/health"]) {
+      const insecure = await handler({
+        httpMethod: "GET", path: "/api/health", ...(rawUrl ? { rawUrl } : {}),
+        headers: { host: "ftc.example.test", "x-forwarded-proto": "https" },
+        requestContext: { identity: { sourceIp: "127.0.0.1" } }, body: "", isBase64Encoded: false,
+      }, {});
+      expect(insecure.statusCode).toBe(403);
+      expect(JSON.parse(String(insecure.body)).error.code).toBe("forbidden");
+      expect(String(insecure.headers["cache-control"])).toContain("no-store");
+    }
+  });
+
+  it("serves the same API through the modern Request handler without losing multipart bytes, binary responses, or repeated cookies", async () => {
+    // Netlify build contexts inject FTC_ALLOWED_ORIGIN. This adapter fixture
+    // owns its configured origin so preview/production build variables cannot
+    // turn its intentionally local Request URLs into hosted-origin failures.
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const app = express();
+    app.post("/api/upload", express.raw({ type: "multipart/form-data" }), (req, res) => {
+      const bytes = req.body as Buffer;
+      res.json({ bytes: [...bytes] });
+    });
+    app.get("/api/file", (_req, res) => {
+      res.append("Set-Cookie", "download=ready; Path=/; HttpOnly");
+      res.type("application/pdf").send(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]));
+    });
+    app.get("/api/cookies", (_req, res) => {
+      res.append("Set-Cookie", "first=one; Path=/; HttpOnly");
+      res.append("Set-Cookie", "second=two; Path=/; HttpOnly");
+      res.status(200).end();
+    });
+    app.get("/api/no-content", (_req, res) => {
+      res.append("Set-Cookie", "no-content=kept; Path=/; HttpOnly");
+      res.status(204).end();
+    });
+    const handler = createModernFunctionHandler(() => app);
+
+    const multipartBytes = Buffer.from([45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 13, 10, 255, 0, 13, 10, 45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 45, 45]);
+    const runtimeContext = { requestId: "modern-handler-test" } as Parameters<typeof handler>[1];
+    const uploaded = await handler(new Request(`${origin}/.netlify/functions/api/upload`, {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=boundary" },
+      body: multipartBytes,
+    }), runtimeContext);
+    expect(uploaded.status).toBe(200);
+    const uploadedBody = await uploaded.json() as { bytes: number[] };
+    expect(uploadedBody.bytes).toEqual([...multipartBytes]);
+
+    const file = await handler(new Request(`${origin}/.netlify/functions/api/file`), runtimeContext);
+    expect(file.status).toBe(200);
+    expect(file.headers.get("content-type")).toContain("application/pdf");
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]);
+    const etag = file.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const conditionalFile = await handler(new Request(`${origin}/.netlify/functions/api/file`, {
+      headers: { "if-none-match": etag! },
+    }), runtimeContext);
+    expect(conditionalFile.status).toBe(304);
+    expect(conditionalFile.headers.get("etag")).toBe(etag);
+    expect(conditionalFile.headers.getSetCookie()).toContain("download=ready; Path=/; HttpOnly");
+
+    const noContent = await handler(new Request(`${origin}/.netlify/functions/api/no-content`), runtimeContext);
+    expect(noContent.status).toBe(204);
+    expect(noContent.headers.getSetCookie()).toContain("no-content=kept; Path=/; HttpOnly");
+
+    const cookies = await handler(new Request(`${origin}/.netlify/functions/api/cookies`), runtimeContext);
+    expect(cookies.status).toBe(200);
+    expect(cookies.headers.getSetCookie()).toEqual([
+      "first=one; Path=/; HttpOnly",
+      "second=two; Path=/; HttpOnly",
+    ]);
+  });
+
+  it("preserves the hosted origin and regenerated Secure session cookie through the modern handler", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const { app } = await setup(true);
+    const handler = createModernFunctionHandler(() => app);
+    const context = { requestId: "modern-login-test" } as Parameters<typeof handler>[1];
+    const loginResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/login`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ loginName: "taxpayer-a", password: "demo-password-1" }),
+    }), context);
+    expect(loginResponse.status).toBe(200);
+    const cookie = loginResponse.headers.getSetCookie()[0] ?? "";
+    expect(cookie).toContain("ftc.sid=");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+
+    const sessionResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/session`, {
+      headers: { origin, cookie: cookie.split(";")[0] ?? "" },
+    }), context);
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = await sessionResponse.json() as { data: { user: { loginName: string } } };
+    expect(sessionBody.data.user.loginName).toBe("taxpayer-a");
+  });
+
+  it("fails closed through the Lambda boundary when deployment context and platform markers are absent", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    vi.stubEnv("SESSION_SECRET", "test-only-session-secret-with-sufficient-entropy");
+    const { app } = await setup(true);
+    const functionEnvironment = {
+      NETLIFY_DB_URL: "postgres://ftc_role:synthetic-secret@db.example.test/production",
+      FTC_ALLOWED_ORIGIN: origin,
+      SESSION_SECRET: "test-only-session-secret-with-sufficient-entropy",
+    } as NodeJS.ProcessEnv;
+    let appWasBuilt = false;
+    const handler = createFunctionHandler(() => {
+      resolveRuntimeEnvironmentConfig(functionEnvironment);
+      appWasBuilt = true;
+      return app;
+    });
+    const response = await handler({
+      httpMethod: "GET", path: "/api/health", rawUrl: `${origin}/api/health`,
+      headers: { host: "ftc.example.test" }, body: "", isBase64Encoded: false,
+    }, {});
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(String(response.body)).error.code).toBe("service_unavailable");
+    expect(String(response.headers["cache-control"])).toContain("no-store");
+    expect(appWasBuilt).toBe(false);
+  });
+
+  it("proves database readiness with SELECT 1 and returns a safe unavailable response on query failure", async () => {
+    const { app, pool } = await setup();
+    const ready = await request(app).get("/api/health");
+    expect(ready.status).toBe(200);
+    expect(ready.body.data).toEqual({ status: "ok" });
+
+    const failingPool: PgPoolLike = {
+      query: (text, values, callback) => text === "SELECT 1"
+        ? Promise.reject(new Error("synthetic database outage"))
+        : pool.query(text, values, callback),
+      connect: () => pool.connect(),
+    };
+    const failingApp = createApp({
+      pool: failingPool,
+      sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+      allowedOrigin: origin,
+      trustedHttps: false,
+    });
+    const unavailable = await request(failingApp).get("/api/health");
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body.error.code).toBe("service_unavailable");
+    expect(unavailable.body.error.requestId).toEqual(expect.any(String));
+    expect(unavailable.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("returns a nonce-bound preview environment proof only after modern health succeeds", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "9f0b3d2c7a6e5f401122334455667788";
+    const previewEnvironment = (branch: string) => resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: `postgresql://ftc_role:fixture@preview-db.example.test/${branch}`,
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const firstEnvironment = previewEnvironment("branch-a");
+    const secondEnvironment = previewEnvironment("branch-b");
+    const secret = "test-only-session-secret-with-sufficient-entropy";
+    const { pool } = await setup(false, undefined, firstEnvironment, secret);
+    const databaseUrl = (environment: ReturnType<typeof previewEnvironment>) => environment === secondEnvironment
+      ? "postgresql://ftc_role:fixture@preview-db.example.test/branch-b"
+      : "postgresql://ftc_role:fixture@preview-db.example.test/branch-a";
+    const healthHandler = (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret) => {
+      const connectionString = databaseUrl(environment);
+      const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+        previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+          challenge, environment, connectionString, sessionSecret,
+        ) });
+      return createModernFunctionHandler(() => app);
+    };
+    const requestHealth = async (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret, challenge: string | null = nonce, verifyExpressRoute = false) => {
+      const handler = healthHandler(environment, sessionSecret);
+      if (verifyExpressRoute) {
+        const connectionString = databaseUrl(environment);
+        const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+          previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+            challenge, environment, connectionString, sessionSecret,
+          ) });
+        const direct = await request(app).get("/api/health").set(FTC_ENVIRONMENT_CHALLENGE_HEADER, challenge ?? "");
+        expect(direct.status).toBe(200);
+        expect(direct.headers[FTC_ENVIRONMENT_PROOF_HEADER]).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+        expect(direct.headers[FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER]).toEqual(expect.any(String));
+      }
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: challenge === null ? {} : { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: challenge },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    const first = await requestHealth(firstEnvironment, secret, nonce, true);
+    const firstProof = first.headers.get(FTC_ENVIRONMENT_PROOF_HEADER);
+    const firstDiagnosticsHeader = first.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER);
+    const firstDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, secret);
+    const firstDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
+    expect(first.status).toBe(200);
+    expect(firstProof).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(firstDiagnostics).toEqual({
+      key: expect.stringMatching(/^[a-f0-9]{64}$/),
+      database: expect.stringMatching(/^[a-f0-9]{64}$/),
+      store: expect.stringMatching(/^[a-f0-9]{64}$/),
+      region: expect.stringMatching(/^[a-f0-9]{64}$/),
+      context: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(firstDiagnosticsHeader).toBe(JSON.stringify(firstDiagnostics));
+    const healthBody = await first.json();
+    expect(healthBody).toMatchObject({ data: { status: "ok" } });
+    expect(JSON.stringify(healthBody)).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(firstProof).toBe(createPreviewEnvironmentProof(nonce, firstEnvironment, secret));
+    expect(firstDiagnosticsHeader).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(firstDatabaseDiagnostics));
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("preview-db.example.test");
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("ftc_role");
+
+    // Reusing a challenge is safe for comparison: the same branch is stable,
+    // while another preview branch receives a different proof for that nonce.
+    const repeated = await requestHealth(firstEnvironment);
+    const freshNonce = "0123456789abcdef0123456789abcdef";
+    const freshChallenge = await requestHealth(firstEnvironment, secret, freshNonce);
+    const otherBranch = await requestHealth(secondEnvironment);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(firstProof);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(firstDiagnosticsHeader);
+    const freshDiagnostics = createPreviewEnvironmentDiagnostics(freshNonce, firstEnvironment, secret);
+    const otherBranchDiagnostics = createPreviewEnvironmentDiagnostics(nonce, secondEnvironment, secret);
+    const freshDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(freshNonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
+    const otherBranchDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, secondEnvironment, databaseUrl(secondEnvironment), secret);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDiagnostics));
+    expect(freshDiagnostics).not.toEqual(firstDiagnostics);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(freshDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDiagnostics));
+    expect(otherBranchDiagnostics?.key).toBe(firstDiagnostics?.key);
+    expect(otherBranchDiagnostics?.database).not.toBe(firstDiagnostics?.database);
+    expect(otherBranchDiagnostics?.store).not.toBe(firstDiagnostics?.store);
+    expect(otherBranchDiagnostics?.region).toBe(firstDiagnostics?.region);
+    expect(otherBranchDiagnostics?.context).toBe(firstDiagnostics?.context);
+    expect(otherBranch.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDatabaseDiagnostics));
+    expect(otherBranchDatabaseDiagnostics?.protocol).toBe(firstDatabaseDiagnostics?.protocol);
+    expect(otherBranchDatabaseDiagnostics?.role).toBe(firstDatabaseDiagnostics?.role);
+    expect(otherBranchDatabaseDiagnostics?.host).toBe(firstDatabaseDiagnostics?.host);
+    expect(otherBranchDatabaseDiagnostics?.port).toBe(firstDatabaseDiagnostics?.port);
+    expect(otherBranchDatabaseDiagnostics?.path).not.toBe(firstDatabaseDiagnostics?.path);
+    expect(otherBranchDatabaseDiagnostics?.routing).toBe(firstDatabaseDiagnostics?.routing);
+    expect(freshChallenge.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDatabaseDiagnostics));
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(freshDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(
+      createPreviewEnvironmentProof(freshNonce, firstEnvironment, secret),
+    );
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecret = await requestHealth(firstEnvironment, `${secret}-wrong`);
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecretDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, `${secret}-wrong`);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(wrongSecretDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDiagnostics));
+    const wrongSecretDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), `${secret}-wrong`);
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(wrongSecretDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDatabaseDiagnostics));
+
+    const invalidNonce = await requestHealth(firstEnvironment, secret, "not-a-challenge");
+    expect(invalidNonce.status).toBe(200);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+    const noChallenge = await requestHealth(firstEnvironment, secret, null);
+    expect(noChallenge.status).toBe(200);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+
+    const fieldChanges: Array<[
+      "databaseFingerprint" | "storageStore" | "storageRegion" | "deploymentContext",
+      string,
+      "database" | "store" | "region" | "context",
+    ]> = [
+      ["databaseFingerprint", "a".repeat(64), "database"],
+      ["storageStore", `${firstEnvironment.storageStore}-changed`, "store"],
+      ["storageRegion", "eu-central-1", "region"],
+      ["deploymentContext", "branch-deploy", "context"],
+    ];
+    for (const [property, changedValue, diagnosticField] of fieldChanges) {
+      const changedEnvironment = { ...firstEnvironment, [property]: changedValue };
+      const changedDiagnostics = createPreviewEnvironmentDiagnostics(nonce, changedEnvironment, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDiagnostics) throw new Error("Expected eligible preview diagnostics");
+      for (const field of ["key", "database", "store", "region", "context"] as const) {
+        expect(changedDiagnostics[field] === firstDiagnostics[field]).toBe(field !== diagnosticField);
+      }
+    }
+
+    const urlChanges: Array<[string, keyof NonNullable<typeof firstDatabaseDiagnostics>]> = [
+      ["postgres://ftc_role:fixture@preview-db.example.test/branch-a", "protocol"],
+      ["postgresql://other_role:fixture@preview-db.example.test/branch-a", "role"],
+      ["postgresql://ftc_role:fixture@other-db.example.test/branch-a", "host"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test:6543/branch-a", "port"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-b", "path"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-a?application_name=ftc", "routing"],
+    ];
+    for (const [changedUrl, changedField] of urlChanges) {
+      const changedDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, changedUrl, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDatabaseDiagnostics) throw new Error("Expected eligible database diagnostics");
+      for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+        expect(changedDiagnostics[field] === firstDatabaseDiagnostics[field]).toBe(field !== changedField);
+      }
+    }
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:another-password@preview-db.example.test/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:fixture@preview-db.example.test:5432/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, "not a URL", secret)).toBeNull();
+  });
+
+  it("never emits environment proofs for production, local, or unavailable health", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "11223344556677889900aabbccddeeff";
+    const productionEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "production",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@prod-db.example.test/production",
+      SITE_ID: "preview-proof-fixture",
+    } as NodeJS.ProcessEnv);
+    const localEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "dev",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@127.0.0.1:5432/local",
+    } as NodeJS.ProcessEnv);
+    const previewEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@preview-db.example.test/preview",
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const { pool } = await setup(false, undefined, productionEnvironment);
+    const requestHealth = async (environment: ReturnType<typeof resolveRuntimeEnvironmentConfig>, failing = false) => {
+      const connectionString = environment.kind === "preview"
+        ? "postgresql://ftc_role:fixture@preview-db.example.test/preview"
+        : environment.kind === "production"
+          ? "postgresql://ftc_role:fixture@prod-db.example.test/production"
+          : "postgresql://ftc_role:fixture@127.0.0.1:5432/local";
+      const previewDatabaseIdentityDiagnostics = (challenge: string) => createPreviewDatabaseIdentityDiagnostics(
+        challenge, environment, connectionString, "test-only-session-secret-with-sufficient-entropy",
+      );
+      const app = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
+      if (!failing) {
+        const handler = createModernFunctionHandler(() => app);
+        return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+          headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+        }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+      }
+      const failingPool: PgPoolLike = {
+        query: (text, values, callback) => text === "SELECT 1"
+          ? Promise.reject(new Error("synthetic database outage"))
+          : pool.query(text, values, callback),
+        connect: () => pool.connect(),
+      };
+      const failingApp = createApp({ pool: failingPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
+      const handler = createModernFunctionHandler(() => failingApp);
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    for (const environment of [productionEnvironment, localEnvironment]) {
+      const response = await requestHealth(environment);
+      expect(response.status).toBe(200);
+      expect(response.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+    }
+    const unavailable = await requestHealth(previewEnvironment, true);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toContain("no-store");
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+  });
+
+  it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {
+    const { app, pool } = await setup();
+    const { cookie, user } = await login(app, "taxpayer-a");
+    const otherInstance = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps: false });
+    const persisted = await request(otherInstance).get("/api/auth/session").set("Origin", origin).set("Cookie", cookie.split(";")[0] ?? "");
+    expect(persisted.status).toBe(200);
+    expect(persisted.body.data.user).toEqual(user);
+  });
+
+  it("expires sessions at the 30-minute idle limit and eight-hour absolute limit", async () => {
+    let currentTime = Date.now();
+    const { app } = await setup(false, () => currentTime);
+    const idleLogin = await login(app, "taxpayer-a");
+    currentTime += 30 * 60 * 1000 + 1;
+    expect((await idleLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+
+    currentTime = Date.now();
+    const absoluteLogin = await login(app, "taxpayer-b");
+    for (let interval = 0; interval < 17; interval += 1) {
+      currentTime += 25 * 60 * 1000;
+      expect((await absoluteLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(200);
+    }
+    currentTime += 60 * 60 * 1000 + 1;
+    expect((await absoluteLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+  });
+
+  it("requires allowed origin and the session CSRF token for authenticated writes", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+
+    expect((await agent.post("/api/cases").set("Origin", "https://attacker.test").send({ requestId: "create-1" })).status).toBe(403);
+    expect((await agent.post("/api/cases").set("Origin", origin).send({ requestId: "create-1" })).status).toBe(403);
+    expect((await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "create-1" })).status).toBe(201);
+  });
+
+  it("maps shared-boundary NUL rejection to a private structured 422 response", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "nul-case-1" });
+    const draft = created.body.data.case.draft;
+    draft.thaiTax.provenance = "invalid\u0000text";
+    const response = await agent.put(`/api/cases/${created.body.data.case.id}/draft`)
+      .set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "nul-save-1", data: draft });
+    expect(response.status).toBe(422);
+    expect(response.body.error.code).toBe("invalid_input");
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body.error.fields).toEqual(expect.arrayContaining([expect.objectContaining({ path: ["thaiTax", "provenance"] })]));
+  });
+
+  it("rejects NUL characters in login names and persisted request identifiers as client errors", async () => {
+    const { app } = await setup();
+    const badLogin = await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer\u0000-a", password: "demo-password-1" });
+    expect(badLogin.status).toBe(400);
+    expect(badLogin.body.error.code).toBe("invalid_input");
+
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const badRequestId = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ requestId: "case\u0000id" });
+    expect(badRequestId.status).toBe(400);
+    expect(badRequestId.body.error.code).toBe("invalid_input");
+    expect(badRequestId.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("keeps cases owner-scoped, makes create retries idempotent, and rejects stale draft revisions", async () => {
+    const { app } = await setup();
+    const taxpayerA = await login(app, "taxpayer-a");
+    const taxpayerB = await login(app, "taxpayer-b");
+
+    const created = await taxpayerA.agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ requestId: "create-retry-1" });
+    const retried = await taxpayerA.agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ requestId: "create-retry-1" });
+    expect(created.status).toBe(201);
+    expect(retried.status).toBe(200);
+    expect(retried.body.data.case.id).toBe(created.body.data.case.id);
+
+    const id = created.body.data.case.id as string;
+    expect((await taxpayerB.agent.get(`/api/cases/${id}`).set("Origin", origin)).status).toBe(404);
+    const current = await taxpayerA.agent.get(`/api/cases/${id}`).set("Origin", origin);
+    expect(current.body.data.case.draft.revision).toBe(0);
+    expect(current.body.data.case.draft.domesticAssessableIncome).toBeNull();
+
+    const body = { expectedRevision: 0, requestId: "save-1", data: current.body.data.case.draft };
+    const crossOwnerWrite = await taxpayerB.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerB.csrfToken).send({ ...body, requestId: "steal-case" });
+    expect(crossOwnerWrite.status).toBe(404);
+    const saved = await taxpayerA.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send(body);
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.case.draft.revision).toBe(1);
+    const stale = await taxpayerA.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ ...body, requestId: "save-stale-1" });
+    expect(stale.status).toBe(409);
+    expect((await taxpayerA.agent.get(`/api/cases/${id}`).set("Origin", origin)).body.data.case.draft.revision).toBe(1);
+  });
+
+  it("rejects client role escalation, saves exact nullable monetary facts, and enforces the ten-case owner quota", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const elevated = await agent.post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1", role: "officer" });
+    expect(elevated.status).toBe(400);
+
+    const first = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "quota-0" });
+    const caseId = first.body.data.case.id as string;
+    const draft = first.body.data.case.draft;
+    draft.domesticAssessableIncome = "123456.78";
+    draft.thaiTax.amountBeforeFtc = null;
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ expectedRevision: 0, requestId: "save-exact", data: draft });
+    expect(saved.status).toBe(200);
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.domesticAssessableIncome).toBe("123456.78");
+    expect(reloaded.body.data.case.draft.thaiTax.amountBeforeFtc).toBeNull();
+
+    for (let index = 1; index < 10; index += 1) {
+      expect((await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: `quota-${index}` })).status).toBe(201);
+    }
+    const overQuota = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "quota-10" });
+    expect(overQuota.status).toBe(429);
+    expect((await agent.get(`/api/cases/${caseId}`).set("Origin", origin)).body.data.case.draft.domesticAssessableIncome).toBe("123456.78");
+  });
+
+  it("persists relational date/decimal facts and stamps confirmations only from explicit server-side intent", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "confirm-case-1" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    draft.taxYear = 2025;
+    draft.domesticAssessableIncome = "100000.12";
+    draft.thaiTax.amountBeforeFtc = "125.12";
+    draft.thaiTax.provenance = "Tax statement supplied by taxpayer";
+    draft.thaiTax.confirmedAt = "1999-01-01T00:00:00.000Z";
+    draft.thaiTax.confirmedInputFingerprint = "forged";
+    const source: ForeignIncomeSourceDraft = {
+      id: null, countryCode: null, countryName: null, incomeType: null, subtype: null,
+      earnedTaxYear: null, earnedDate: null, residenceDaysInEarnedYear: null, inputMode: null,
+      grossIncomeAmount: null, currencyCode: null, grossIncomeThb: null,
+      actualForeignTaxPaid: null, actualForeignTaxPaidThb: null, eligibleForeignTax: null, eligibleForeignTaxThb: null,
+      eligibilityRationale: null, eligibilityConfirmedAt: null, eligibilityConfirmedInputFingerprint: null,
+      remittance: null, remittedIncomeAmount: null, remittedIncomeThb: null, fxReference: null,
+      unsupportedClassification: null, unsupportedExplanation: null, evidenceChecklist: [],
+    };
+    source.countryCode = "US";
+    source.countryName = "United States";
+    source.incomeType = "salary_40_1";
+    source.earnedTaxYear = 2025;
+    source.earnedDate = "2025-01-15";
+    source.residenceDaysInEarnedYear = 365;
+    source.inputMode = "original_currency";
+    source.grossIncomeAmount = "98765.43";
+    source.currencyCode = "USD";
+    source.grossIncomeThb = "999999999.99";
+    source.actualForeignTaxPaid = "1234.56";
+    source.eligibleForeignTax = "1234.56";
+    source.eligibilityRationale = "Explicit educational assumption";
+    source.eligibilityConfirmedAt = "1999-01-01T00:00:00.000Z";
+    source.eligibilityConfirmedInputFingerprint = "forged";
+    source.remittance = { remittanceDate: "2025-02-28", transferTotalAmount: "98765.43", transferCurrencyCode: "USD", transferTotalThb: "999999999999999999.999999999999", classification: "income_only", classificationNote: null };
+    source.remittedIncomeAmount = "98765.43";
+    source.fxReference = { currencyCode: "USD", thbRate: "35.12345678", baseUnits: 1, effectiveDate: "2025-02-28", rateType: "manual", sourceKind: "user_supplied", sourceLabel: "User quote", sourceUrl: null, educationalAssumption: "Synthetic for persistence test" };
+    const secondSource = structuredClone(source);
+    secondSource.countryCode = "CA";
+    secondSource.countryName = "Canada";
+    secondSource.grossIncomeAmount = "1.25";
+    draft.sources = [source, secondSource];
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0, requestId: "confirm-save-1", data: draft,
+      confirmations: { thaiTax: true, eligibleSourceIndexes: [0] },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.case.draft.thaiTax.confirmedAt).not.toBe("1999-01-01T00:00:00.000Z");
+    expect(saved.body.data.case.draft.thaiTax.confirmedInputFingerprint).toBe(taxInputFingerprint(saved.body.data.case.draft));
+    expect(saved.body.data.case.draft.sources[0].eligibilityConfirmedAt).not.toBe("1999-01-01T00:00:00.000Z");
+    expect(saved.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBe(sourceEligibilityFingerprint(saved.body.data.case.draft.sources[0]));
+
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    const roundTripped = reloaded.body.data.case.draft;
+    expect(roundTripped.domesticAssessableIncome).toBe("100000.12");
+    expect(roundTripped.sources[0].grossIncomeAmount).toBe("98765.43");
+    expect(roundTripped.sources[0].countryCode).toBe("US");
+    expect(roundTripped.sources[1].countryCode).toBe("CA");
+    expect(roundTripped.sources[0].grossIncomeThb).toBe("3468983.3119631154");
+    expect(roundTripped.sources[0].earnedDate).toBe("2025-01-15");
+    expect(roundTripped.sources[0].remittance.remittanceDate).toBe("2025-02-28");
+    expect(roundTripped.sources[0].remittance.transferTotalThb).toBe("3468983.3119631154");
+    expect(roundTripped.sources[0].fxReference.effectiveDate).toBe("2025-02-28");
+
+    roundTripped.domesticAssessableIncome = "100001";
+    roundTripped.sources[0].grossIncomeAmount = "98766";
+    const changed = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 1, requestId: "confirm-save-2", data: roundTripped,
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.body.data.case.draft.thaiTax.confirmedAt).toBeNull();
+    expect(changed.body.data.case.draft.thaiTax.confirmedInputFingerprint).toBeNull();
+    expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedAt).toBeNull();
+    expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBeNull();
+  });
+
+  it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "duplicate-source-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const unsupported = createEmptySource();
+    unsupported.id = "a1111111-1111-4111-8111-111111111111";
+    unsupported.unsupportedClassification = "other";
+    const otherwiseSupported = createEmptySource();
+    otherwiseSupported.id = "a1111111-1111-4111-8111-111111111111".toUpperCase();
+    draft.sources = [unsupported, otherwiseSupported];
+
+    const duplicateSave = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "duplicate-source-save", data: draft });
+    expect(duplicateSave.status).toBe(400);
+    expect(duplicateSave.body.error.code).toBe("invalid_input");
+    const afterDuplicate = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(afterDuplicate.body.data.case.draft.sources).toEqual([]);
+    expect(afterDuplicate.body.data.case.draft.revision).toBe(0);
+
+    draft.sources = [otherwiseSupported];
+    const unownedId = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "caller-source-id", data: draft });
+    expect(unownedId.status).toBe(409);
+    expect((await agent.get(`/api/cases/${caseId}`).set("Origin", origin)).body.data.case.draft.sources).toEqual([]);
+  });
+
+  it("returns a conflict before clearing or removing remittances referenced by evidence", async () => {
+    const { app, pool } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "remittance-evidence-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const source = createEmptySource();
+    source.remittance = {
+      remittanceDate: "2025-02-01", transferTotalAmount: "100", transferCurrencyCode: "USD", transferTotalThb: null,
+      classification: "income_only", classificationNote: null,
+    };
+    draft.sources = [source];
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "remittance-evidence-save", data: draft });
+    expect(saved.status).toBe(200);
+    const persistedSource = saved.body.data.case.draft.sources[0] as ForeignIncomeSourceDraft;
+    const remittance = await pool.query<{ id: string }>("SELECT id FROM remittances WHERE source_id=$1", [persistedSource.id]);
+    expect(remittance.rows).toHaveLength(1);
+    await pool.query(
+      `INSERT INTO attachments(case_id, source_id, remittance_id, storage_environment, storage_store, storage_region,
+         storage_key, display_name, media_type, byte_size, sha256, kind, status)
+       VALUES ($1, NULL, $2, 'production', 'test-store', 'us-east-2', 'test/remittance-evidence', 'proof.pdf',
+         'application/pdf', 1, 'test-digest', 'remittance', 'ready')`,
+      [caseId, remittance.rows[0]!.id],
+    );
+
+    const cleared = structuredClone(saved.body.data.case.draft);
+    cleared.sources[0].remittance = null;
+    const clearResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "clear-linked-remittance", data: cleared });
+    expect(clearResponse.status).toBe(409);
+    expect(clearResponse.body.error.code).toBe("conflict");
+    expect(clearResponse.body.error.message).toContain("หลักฐาน");
+
+    const removed = structuredClone(saved.body.data.case.draft);
+    removed.sources = [];
+    const removeResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "remove-linked-remittance", data: removed });
+    expect(removeResponse.status).toBe(409);
+    expect(removeResponse.body.error.code).toBe("conflict");
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.revision).toBe(1);
+    expect(reloaded.body.data.case.draft.sources[0].id).toBe(persistedSource.id);
+    expect(reloaded.body.data.case.draft.sources[0].remittance).not.toBeNull();
+  });
+
+  it("blocks repeated bad passwords using persistent account-level limits", async () => {
+    const { app } = await setup();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const failed = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "wrong" });
+      expect(failed.status).toBe(401);
+    }
+    const limited = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1" });
+    expect(limited.status).toBe(429);
+  });
+
+  it("reserves login attempt capacity before password work under a concurrent wrong-password burst", async () => {
+    const { app } = await setup();
+    const attempts = await Promise.all(Array.from({ length: 20 }, () => request(app)
+      .post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "wrong" })));
+    expect(attempts.filter((attempt) => attempt.status === 401)).toHaveLength(10);
+    expect(attempts.filter((attempt) => attempt.status === 429)).toHaveLength(10);
+    expect(attempts.every((attempt) => [401, 429].includes(attempt.status))).toBe(true);
+    expect((await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer-a", password: "demo-password-1" })).status).toBe(429);
+  });
+});

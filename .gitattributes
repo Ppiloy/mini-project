@@ -1,0 +1,4 @@
+/.gitattributes text eol=lf
+netlify/database/migrations/*.sql text eol=lf
+netlify/database/migrations.lock.json text eol=lf
+*.pdf binary
