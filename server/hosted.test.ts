@@ -205,6 +205,10 @@ describe("hosted authentication and durable draft API", () => {
   });
 
   it("serves the same API through the modern Request handler without losing multipart bytes, binary responses, or repeated cookies", async () => {
+    // Netlify build contexts inject FTC_ALLOWED_ORIGIN. This adapter fixture
+    // owns its configured origin so preview/production build variables cannot
+    // turn its intentionally local Request URLs into hosted-origin failures.
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
     const app = express();
     app.post("/api/upload", express.raw({ type: "multipart/form-data" }), (req, res) => {
       const bytes = req.body as Buffer;
