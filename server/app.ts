@@ -81,15 +81,15 @@ export interface CreateAppOptions {
   officerUserId?: string;
 }
 
-export function makeRuntimePool(): PgPoolLike {
+export function makeRuntimePool(options: { usePlatformContext?: boolean } = {}): PgPoolLike {
   let databasePool: PgPoolLike | undefined;
   const getPool = (): PgPoolLike => {
     if (databasePool) return databasePool;
     const connectionString = process.env.NETLIFY_DB_URL;
-    if (!connectionString) throw new Error("NETLIFY_DB_URL is required for the hosted API runtime.");
+    if (!options.usePlatformContext && !connectionString) throw new Error("NETLIFY_DB_URL is required for the hosted API runtime.");
     if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) throw new Error("SESSION_SECRET must contain at least 32 characters.");
     if (!process.env.FTC_ALLOWED_ORIGIN) throw new Error("FTC_ALLOWED_ORIGIN is required for the hosted API runtime.");
-    const database = getDatabase({ connectionString });
+    const database = options.usePlatformContext ? getDatabase() : getDatabase({ connectionString });
     databasePool = database.pool as unknown as PgPoolLike;
     return databasePool;
   };
@@ -651,7 +651,8 @@ export function createApp(options: CreateAppOptions): Express {
     next();
   });
 
-  app.get("/api/health", (_request, response) => {
+  app.get("/api/health", async (_request, response) => {
+    await options.pool.query("SELECT 1");
     sendApiSuccess(response, apiSuccessSchemas.health, { status: "ok" }, response.locals.requestId);
   });
   app.use(["/api/auth/login", "/api/auth/session", "/api/auth/logout", "/api/cases", "/api/cases/:id", "/api/cases/:id/draft", "/api/attachments", "/api/officer", "/api/snapshots"], sessionMiddleware);
