@@ -121,6 +121,34 @@ describe("FTC calculator", () => {
     expect(result.countries[0]?.attributableForeignTax).toBe("2500");
   });
 
+  it("calculates from D/E/F and remittance date when legacy transfer-summary facts are absent", () => {
+    const source = partialRemittanceFixture.draft.sources[0]!;
+    const draft = withSource(partialRemittanceFixture.draft, 0, {
+      remittance: {
+        ...source.remittance!,
+        transferTotalAmount: null,
+        transferCurrencyCode: null,
+        classification: null,
+        classificationNote: null,
+      },
+    });
+
+    const result = calculateFTC(draft);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_F")?.value).toBe("25000");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(result.allowableCredit).toBe("2500.00");
+
+    const missingDate = withSource(partialRemittanceFixture.draft, 0, {
+      remittance: { ...source.remittance!, remittanceDate: null, transferTotalAmount: null, transferCurrencyCode: null, classification: null, classificationNote: null },
+    });
+    const missingDateResult = calculateFTC(missingDate);
+    expect(missingDateResult.outcome).toBe("incomplete");
+    expect(missingDateResult.validationMessages.some(({ code, path }) =>
+      code === "input.required" && path?.join(".") === "sources.0.remittance.remittanceDate")).toBe(true);
+  });
+
   it("caps each country independently below and above its Thai limit", () => {
     const below = calculateFTC(countryLimitBelowFixture.draft);
     const above = calculateFTC(countryLimitAboveFixture.draft);
@@ -265,18 +293,22 @@ describe("FTC calculator", () => {
     expect(calculateFTC(missingSource).validationMessages.map(({ code }) => code)).toContain("fx.manual_provenance_missing");
   });
 
-  it("blocks contradictory transfer-total facts instead of trusting a free-text note", () => {
+  it("does not let retired transfer-summary facts override the D/E/F allocation", () => {
     const draft = withSource(partialRemittanceFixture.draft, 0, {
-      remittance: { ...partialRemittanceFixture.draft.sources[0]!.remittance!, transferTotalAmount: "30000.00", classificationNote: "F is income only." },
+      remittance: {
+        ...partialRemittanceFixture.draft.sources[0]!.remittance!,
+        transferTotalAmount: "30000.00",
+        transferCurrencyCode: "USD",
+        classification: "mixed_principal_and_income",
+        classificationNote: "F is income only.",
+      },
     });
     const result = calculateFTC(draft);
-    expect(result.outcome).toBe("needs_review");
-    expect(result.allowableCredit).toBeNull();
-    expect(result.validationMessages.map(({ code }) => code)).toContain("source.transfer_total_mismatch");
-
-    const internallyConsistent = calculateFTC(partialRemittanceFixture.draft);
-    expect(internallyConsistent.lines.find(({ code }) => code === "source_F")?.value).toBe("25000");
-    expect(internallyConsistent.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(result.outcome).toBe("ready");
+    expect(result.validationMessages).toEqual([]);
+    expect(result.lines.find(({ code }) => code === "source_F")?.value).toBe("25000");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(result.allowableCredit).toBe("2500.00");
   });
 
   it("rejects inherited country keys from a custom policy", () => {

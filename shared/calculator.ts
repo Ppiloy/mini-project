@@ -135,17 +135,6 @@ function assessSource(
     if (remittance.remittanceDate.slice(0, 4) !== String(policy.taxYear)) addReview(msg("source.cross_year_remittance", "วันที่นำเข้าไทยต้องอยู่ในปี 2025 สำหรับตัวอย่างนี้", [...path("remittance"), "remittanceDate"]));
     if (source.earnedDate !== null && remittance.remittanceDate < source.earnedDate) addReview(msg("source.remittance_before_earned", "วันที่นำเข้าไทยต้องไม่ก่อนวันที่เกิดเงินได้", [...path("remittance"), "remittanceDate"]));
   }
-  if (remittance.transferTotalAmount === null) addIncomplete(required([...path("remittance"), "transferTotalAmount"]));
-  if (remittance.transferCurrencyCode === null) addIncomplete(required([...path("remittance"), "transferCurrencyCode"]));
-  if (source.currencyCode !== null && remittance.transferCurrencyCode !== null && source.currencyCode !== remittance.transferCurrencyCode) {
-    addReview(msg("source.cross_currency_remittance", "ต้นแบบยังไม่รองรับการแปลงคนละสกุลเงินระหว่างเงินได้กับการโอน", [...path("remittance"), "transferCurrencyCode"]));
-  }
-  if (remittance.classification === null) addIncomplete(required([...path("remittance"), "classification"]));
-  else if (remittance.classification !== "income_only") addReview(msg("source.unsupported_remittance_classification", remittance.classificationNote ?? "การโอนรวมเงินต้นหรือรายการกำกวมต้องตรวจสอบเพิ่มเติม", [...path("remittance"), "classification"]));
-  else if (remittance.transferTotalAmount !== null && source.remittedIncomeAmount !== null
-    && new CalcDecimal(remittance.transferTotalAmount).cmp(source.remittedIncomeAmount) !== 0) {
-    addReview(msg("source.transfer_total_mismatch", "ยอดโอนรวมไม่ตรงกับเงินได้ที่ระบุว่าเป็นรายได้ล้วน จึงอาจมีเงินต้นหรือรายการอื่นปะปน", [...path("remittance"), "transferTotalAmount"]));
-  }
 }
 
 function assessFx(

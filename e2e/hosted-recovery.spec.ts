@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { createCalculationSnapshot } from "../shared/snapshot.js";
+import { partialRemittanceFixture } from "../src/fixtures/index.js";
 
 const caseId = "case-review-recovery";
 const user = { id: "taxpayer-review", loginName: "taxpayer", displayName: "ผู้เสียภาษีทดสอบ", role: "taxpayer", maskedReference: null } as const;
@@ -7,11 +9,8 @@ const csrfToken = "csrf-test-token";
 function record(revision: number) {
   const now = "2026-10-14T00:00:00.000Z";
   const draft = {
+    ...structuredClone(partialRemittanceFixture.draft),
     id: caseId,
-    taxYear: 2025,
-    domesticAssessableIncome: "100.00",
-    thaiTax: { amountBeforeFtc: "10.00", provenance: "ตัวอย่างทดสอบ", confirmedAt: now, confirmedInputFingerprint: "test-fingerprint" },
-    sources: [],
     revision,
     createdAt: now,
     updatedAt: now,
@@ -56,6 +55,14 @@ test("a failed same-name evidence upload stays failed and retries the same opera
   let uploadAttempts = 0;
   let committedUpload: ReturnType<typeof attachment> | null = null;
   const uploadBodies: string[] = [];
+  let releaseUpload!: () => void;
+  let uploadArrived!: () => void;
+  const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+  const uploadRequest = new Promise<void>((resolve) => { uploadArrived = resolve; });
+  let releaseDelete!: () => void;
+  let deleteArrived!: () => void;
+  const deleteGate = new Promise<void>((resolve) => { releaseDelete = resolve; });
+  const deleteRequest = new Promise<void>((resolve) => { deleteArrived = resolve; });
 
   await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({ json: { data: { case: current, attachments: files, currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: "case" } }));
   await page.route(`**/api/cases/${caseId}/draft`, async (route) => {
@@ -70,19 +77,31 @@ test("a failed same-name evidence upload stays failed and retries the same opera
       committedUpload = { ...attachment("new-file", "sha256-new-bytes"), byteSize: 13 };
       files = [committedUpload, ...files];
       current = { ...current, draft: { ...current.draft, revision: current.draft.revision + 1 } };
+      uploadArrived();
+      await uploadGate;
       await route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Upload response failed", requestId: "upload-failed" } } });
       return;
     }
     const uploaded = committedUpload!;
     await route.fulfill({ json: { data: { attachment: uploaded, case: current, revision: current.draft.revision }, requestId: "upload-acknowledged" } });
   });
+  await page.route("**/api/attachments/new-file", async (route) => {
+    deleteArrived();
+    await deleteGate;
+    files = files.filter((file) => file.id !== "new-file");
+    current = { ...current, draft: { ...current.draft, revision: current.draft.revision + 1 } };
+    await route.fulfill({ json: { data: { deleted: true, revision: current.draft.revision }, requestId: "delete-acknowledged" } });
+  });
 
   await page.goto(`/app/cases/${caseId}/edit`);
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
-  await expect(page.getByText("โหมดระบบที่เชื่อมต่อเซิร์ฟเวอร์")).toBeVisible();
   await expect(page.getByText("ข้อมูลจำลองเท่านั้น")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
   await page.getByLabel("แนบหลักฐานภาษีไทย").setInputFiles({ name: "same.pdf", mimeType: "application/pdf", buffer: Buffer.from("new bytes") });
 
+  await uploadRequest;
+  await expect(page.getByRole("status").filter({ hasText: "กำลังแนบไฟล์…" })).toBeVisible();
+  releaseUpload();
   await expect(page.getByRole("alert").filter({ hasText: "Upload response failed" })).toBeVisible();
   await expect(page.getByText("แนบรายการไฟล์แล้ว")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ลองแนบไฟล์เดิมอีกครั้ง" })).toBeVisible();
@@ -96,7 +115,15 @@ test("a failed same-name evidence upload stays failed and retries the same opera
   expect(fieldValue(uploadBodies[1]!, "expectedRevision")).toBe(fieldValue(uploadBodies[0]!, "expectedRevision"));
   expect(uploadBodies[0]).toContain("new bytes");
   expect(uploadBodies[1]).toContain("new bytes");
-  await expect(page.getByText("same.pdf")).toHaveCount(2);
+  await expect(page.locator(".file-list li")).toHaveCount(2);
+
+  const uploadedFile = page.locator(".file-list li").filter({ hasText: "same.pdf" }).first();
+  await uploadedFile.getByRole("button", { name: "ลบ", exact: true }).click();
+  await deleteRequest;
+  await expect(page.getByRole("status").filter({ hasText: "กำลังลบไฟล์…" })).toBeVisible();
+  releaseDelete();
+  await expect(page.getByRole("status").filter({ hasText: "ลบรายการไฟล์แล้ว" })).toBeVisible();
+  await expect(page.locator(".file-list li")).toHaveCount(1);
 });
 
 test("a submit conflict loads the newer draft and disables the stale preview", async ({ page }) => {
@@ -142,13 +169,133 @@ test("a submit conflict loads the newer draft and disables the stale preview", a
   });
 
   await page.goto(`/app/cases/${caseId}/result?preview=snapshot-revision-1`);
-  const submit = page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" });
+  const submit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(page.getByText(/ร่างปัจจุบันเป็นรุ่น 2 แต่ผลคำนวณเป็นรุ่น 1/)).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง" })).toBeVisible();
   await expect(submit).toBeDisabled();
   expect(detailCalls).toBe(2);
   expect(submitCalls).toBe(1);
+});
+
+test("editing during a delayed draft save survives the server acknowledgement", async ({ page }) => {
+  await installHostedSession(page);
+  let current = record(0);
+  const now = "2026-10-14T00:00:00.000Z";
+  await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({
+    json: { data: { case: current, attachments: [], currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: "case" },
+  }));
+
+  let releaseSave!: () => void;
+  let acknowledgeRequest!: () => void;
+  const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+  const saveArrived = new Promise<void>((resolve) => { acknowledgeRequest = resolve; });
+  await page.route(`**/api/cases/${caseId}/draft`, async (route) => {
+    const payload = route.request().postDataJSON() as { data: ReturnType<typeof record>["draft"] };
+    acknowledgeRequest();
+    await saveGate;
+    current = {
+      ...current,
+      draft: { ...payload.data, id: caseId, revision: current.draft.revision + 1, createdAt: now, updatedAt: now },
+      updatedAt: now,
+    };
+    await route.fulfill({ json: { data: { case: current }, requestId: "delayed-save" } });
+  });
+
+  await page.goto(`/app/cases/${caseId}/edit`);
+  const year = page.getByLabel("ปีภาษี (พ.ศ.)");
+  await year.selectOption("2567");
+  const responsePromise = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`));
+  await page.getByRole("button", { name: "บันทึกร่าง" }).click();
+  await saveArrived;
+
+  const editBlocked = await year.isDisabled();
+  releaseSave();
+  await responsePromise;
+
+  expect(editBlocked).toBe(true);
+  await expect(year).toHaveValue("2567");
+  await expect(year).toBeEnabled();
+  await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
+});
+
+test("a failed delayed save never reports success and Next keeps the edited form in place", async ({ page }) => {
+  await installHostedSession(page);
+  let current = record(0);
+  await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({
+    json: { data: { case: current, attachments: [], currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: "case" },
+  }));
+
+  let releaseFirstSave!: () => void;
+  let firstSaveArrived!: () => void;
+  const firstSaveGate = new Promise<void>((resolve) => { releaseFirstSave = resolve; });
+  const firstSaveRequest = new Promise<void>((resolve) => { firstSaveArrived = resolve; });
+  let saveAttempts = 0;
+  await page.route(`**/api/cases/${caseId}/draft`, async (route) => {
+    saveAttempts += 1;
+    if (saveAttempts === 1) {
+      firstSaveArrived();
+      await firstSaveGate;
+    }
+    await route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "Draft save failed", requestId: `save-${saveAttempts}` } } });
+  });
+
+  await page.goto(`/app/cases/${caseId}/edit`);
+  const year = page.getByLabel("ปีภาษี (พ.ศ.)");
+  const firstResponse = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`));
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await firstSaveRequest;
+  await expect(year).toBeDisabled();
+  releaseFirstSave();
+  await firstResponse;
+  await expect(page.getByRole("heading", { name: "ปีภาษีและขอบเขตกรณี" })).toBeVisible();
+  await expect(year).toHaveValue("2568");
+  await expect(page.getByRole("status").filter({ hasText: "บันทึกไม่สำเร็จ" })).toHaveText("บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง");
+  await expect(page.getByRole("alert").filter({ hasText: "Draft save failed" })).toBeVisible();
+
+  await year.selectOption("2567");
+  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await expect(page.getByRole("heading", { name: "ปีภาษีและขอบเขตกรณี" })).toBeVisible();
+  await expect(year).toHaveValue("2567");
+  await expect(page.getByRole("status").filter({ hasText: "บันทึกไม่สำเร็จ" })).toHaveText("บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง");
+  expect(saveAttempts).toBe(2);
+});
+
+test("review controls stay locked until the hosted calculation request finishes", async ({ page }) => {
+  await installHostedSession(page);
+  const now = "2026-10-14T00:00:00.000Z";
+  let current = { ...record(0), draft: { ...partialRemittanceFixture.draft, id: caseId, revision: 0 } };
+  let releaseCalculation!: () => void;
+  let calculationArrived!: () => void;
+  const calculationGate = new Promise<void>((resolve) => { releaseCalculation = resolve; });
+  const calculateRequest = new Promise<void>((resolve) => { calculationArrived = resolve; });
+  let snapshot: ReturnType<typeof createCalculationSnapshot> | null = null;
+
+  await page.route(`**/api/cases/${caseId}`, (route) => route.fulfill({
+    json: { data: { case: current, attachments: [], currentPreview: null, snapshotSummaries: [], auditEvents: [] }, requestId: "case" },
+  }));
+  await page.route(`**/api/cases/${caseId}/draft`, async (route) => {
+    const payload = route.request().postDataJSON() as { data: typeof current.draft };
+    current = { ...current, draft: { ...payload.data, id: caseId, revision: current.draft.revision + 1, createdAt: now, updatedAt: now }, updatedAt: now };
+    await route.fulfill({ json: { data: { case: current }, requestId: "save" } });
+  });
+  await page.route(`**/api/cases/${caseId}/calculate`, async (route) => {
+    calculationArrived();
+    await calculationGate;
+    snapshot = createCalculationSnapshot({ id: "delayed-preview", caseId, revision: current.draft.revision, kind: "preview", inputs: current.draft, evidence: [], createdAt: now });
+    await route.fulfill({ json: { data: { snapshot }, requestId: "calculate" } });
+  });
+  await page.route("**/api/snapshots/delayed-preview", (route) => route.fulfill({ json: { data: { snapshot }, requestId: "snapshot" } }));
+
+  await page.goto(`/app/cases/${caseId}/edit`);
+  for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  const confirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย L" });
+  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await calculateRequest;
+  await expect(confirmation).toBeDisabled();
+  await expect(page.getByRole("button", { name: "ย้อนกลับ" })).toBeDisabled();
+  releaseCalculation();
+  await expect(page).toHaveURL(/\/app\/cases\/case-review-recovery\/result\?preview=delayed-preview$/);
 });
 
 test("Thai font assets remain loaded locally for offline print", async ({ page, context }) => {
