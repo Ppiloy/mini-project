@@ -7,9 +7,11 @@ import type {
   AttachmentUploadResult,
   CaseWorkflowDetail,
   CalculationSnapshot,
+  DraftDeletionResult,
   FtcCaseDraft,
   FtcCaseRecord,
   OfficerCaseDetail as SharedOfficerCaseDetail,
+  PendingCaseDeletion,
 } from "../../shared/contracts.js";
 
 export class ApiClientError extends Error {
@@ -134,7 +136,7 @@ export const hostedApi = {
   logout(csrfToken: string): Promise<{ loggedOut: true }> {
     return request("/api/auth/logout", { method: "POST" }, csrfToken, logoutSuccessEnvelopeSchema);
   },
-  listCases(): Promise<{ cases: FtcCaseRecord[] }> {
+  listCases(): Promise<{ cases: FtcCaseRecord[]; pendingDeletions?: PendingCaseDeletion[] }> {
     return request("/api/cases", {}, undefined, apiSuccessSchemas.cases);
   },
   getCase(id: string): Promise<CaseDetail> {
@@ -142,6 +144,11 @@ export const hostedApi = {
   },
   async createCase(csrfToken: string, requestId = crypto.randomUUID()): Promise<{ case: FtcCaseRecord }> {
     return request("/api/cases", { method: "POST", body: JSON.stringify({ requestId }) }, csrfToken, apiSuccessSchemas.case);
+  },
+  deleteDraftCase(id: string, expectedRevision: number, csrfToken: string, requestId: string = crypto.randomUUID()): Promise<DraftDeletionResult> {
+    return request(`/api/cases/${encodeURIComponent(id)}`, {
+      method: "DELETE", body: JSON.stringify({ expectedRevision, requestId }),
+    }, csrfToken, apiSuccessSchemas.caseDelete);
   },
   saveDraft(id: string, payload: CaseDraftSave, csrfToken: string): Promise<{ case: FtcCaseRecord }> {
     return request(`/api/cases/${encodeURIComponent(id)}/draft`, { method: "PUT", body: JSON.stringify(payload) }, csrfToken, apiSuccessSchemas.case);

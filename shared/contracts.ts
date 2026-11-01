@@ -352,7 +352,10 @@ export const apiSuccessSchemas = {
   health: apiSuccessSchema(z.object({ status: z.literal("ok") }).strict()),
   session: apiSuccessSchema(z.object({ user: apiUserSchema, csrfToken: z.string() }).strict()),
   logout: apiSuccessSchema(z.object({ loggedOut: z.literal(true) }).strict()),
-  cases: apiSuccessSchema(z.object({ cases: z.array(caseRecordSchema) }).strict()),
+  cases: apiSuccessSchema(z.object({
+    cases: z.array(caseRecordSchema),
+    pendingDeletions: z.array(z.object({ caseId: z.string().min(1), requestId: z.string().min(1).max(128) }).strict()).optional(),
+  }).strict()),
   case: apiSuccessSchema(z.object({ case: caseRecordSchema }).strict()),
   caseDetail: apiSuccessSchema(caseWorkflowDetailSchema),
   snapshot: apiSuccessSchema(z.object({ snapshot: calculationSnapshotSchema }).strict()),
@@ -360,6 +363,7 @@ export const apiSuccessSchemas = {
   officerCaseDetail: apiSuccessSchema(officerCaseDetailSchema),
   attachmentUpload: apiSuccessSchema(z.object({ attachment: attachmentMetadataSchema, case: caseRecordSchema, revision: z.number().int().nonnegative() }).strict()),
   attachmentDelete: apiSuccessSchema(z.object({ deleted: z.literal(true), revision: z.number().int().nonnegative() }).strict()),
+  caseDelete: apiSuccessSchema(z.object({ deleted: z.boolean(), cleanupPending: z.boolean(), revision: z.number().int().nonnegative() }).strict()),
 } as const;
 
 /** JSON success responses carry an explicit request ID for support and retries. */
@@ -379,6 +383,17 @@ export interface AttachmentUploadMetadata {
 
 export interface DeleteAttachmentRequest {
   expectedRevision: number;
+  requestId: RequestId;
+}
+
+export interface DraftDeletionResult {
+  deleted: boolean;
+  cleanupPending: boolean;
+  revision: number;
+}
+
+export interface PendingCaseDeletion {
+  caseId: string;
   requestId: RequestId;
 }
 

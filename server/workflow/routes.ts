@@ -9,7 +9,7 @@ import { createCalculationSnapshot } from "../../shared/snapshot.js";
 import type { PgPoolLike, PgQueryable } from "../postgres.js";
 import { ApiFailure } from "../api-failure.js";
 import { sendApiSuccess } from "../api-success.js";
-import { digest, inTransaction, loadCaseRecord, type CaseRow } from "../app.js";
+import { assertCaseNotDeleting, caseDeletionMarker, digest, inTransaction, loadCaseRecord, type CaseRow } from "../app.js";
 import type { BlobIO } from "../storage/blob-io.js";
 import type { EnvironmentMarker } from "../runtime/environment.js";
 import { appendAudit, attachmentMetadata, getAttachments, getAuditSummaries, getLatestCurrentPreview, incrementCaseRevision, loadWorkflowCase, snapshotRecord, type AttachmentRow, type SnapshotRow } from "./repository.js";
@@ -126,6 +126,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       const detail = await inTransaction(options.pool,async (client) => {
         const result = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 AND environment_marker_id=$3 FOR SHARE", [id, user.id, marker.id]);
         if (!result.rows[0]) notFound();
+        if (await caseDeletionMarker(client, result.rows[0].id)) notFound();
         return loadWorkflowCase(client,result.rows[0],marker.id);
       });
       sendApiSuccess(response, apiSuccessSchemas.caseDetail, detail, response.locals.requestId);
@@ -141,6 +142,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       const bodyDigest = digest({ expectedRevision });
       const result = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, caseId, user.id, marker);
+        await assertCaseNotDeleting(client, row.id);
         const replay = await priorMutation(client, row.id, "calculate", id, bodyDigest);
         if (replay) return { snapshot: (replay as { snapshot: CalculationSnapshot }).snapshot, replayed: true };
         if (row.status !== "draft") conflict("ส่งรายการแล้ว ไม่สามารถคำนวณตัวอย่างใหม่ได้");
@@ -177,6 +179,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       const user = response.locals.user as ApiUser; const marker = options.environmentMarker(response);
       const reservation = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, caseId, user.id, marker);
+        await assertCaseNotDeleting(client, row.id);
         const prior = await client.query<{ request_digest: string; response: { attachmentId?: string; state?: string; data?: unknown } }>(
           "SELECT request_digest,response FROM api_mutation_requests WHERE case_id=$1 AND operation='upload' AND request_id=$2", [row.id, id]);
         if (prior.rows[0]) {
@@ -239,6 +242,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
           if (!owner.rows[0]) return;
           const caseResult = await client.query<{ id: string; status: string }>("SELECT id,status FROM ftc_cases WHERE id=$1 AND environment_marker_id=$2 FOR UPDATE", [owner.rows[0].case_id,marker.id]);
           if (!caseResult.rows[0]) return;
+          await assertCaseNotDeleting(client, owner.rows[0].case_id);
           const locked = await client.query<{ case_id: string; status: string }>("SELECT case_id,status FROM attachments WHERE id=$1 AND environment_marker_id=$2 FOR UPDATE", [reservation.attachmentId,marker.id]);
           const item = locked.rows[0];
           if (item?.status === "pending") {
@@ -251,6 +255,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       }
       const completed = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, caseId, user.id, marker);
+        await assertCaseNotDeleting(client, row.id);
         if (row.status !== "draft") conflict("รายการเปลี่ยนสถานะระหว่างอัปโหลด");
         const attachment = await client.query<AttachmentRow>("SELECT * FROM attachments WHERE id=$1 AND case_id=$2 AND environment_marker_id=$3 FOR UPDATE", [reservation.attachmentId,row.id,marker.id]);
         const item = attachment.rows[0]; if (!item) notFound();
@@ -293,6 +298,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       if (!preflight.rows[0]) notFound();
       const result = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, preflight.rows[0]!.case_id, user.id, marker);
+        await assertCaseNotDeleting(client, row.id);
         const bodyDigest = digest({ attachmentId, expectedRevision });
         const replay = await priorMutation(client, row.id, "delete-attachment", id, bodyDigest);
         if (replay) return { response: replay as { deleted: true; revision: number }, key: null as string | null };
@@ -328,6 +334,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
            EXISTS(SELECT 1 FROM officer_case_assignments assignment WHERE assignment.case_id=c.id AND assignment.officer_id=$6 AND assignment.active) AS active_assignment
          FROM attachments a JOIN ftc_cases c ON c.id=a.case_id
          WHERE a.id=$1 AND a.environment_marker_id=$2 AND c.environment_marker_id=$2
+           AND NOT EXISTS (SELECT 1 FROM api_mutation_requests deletion WHERE deletion.case_id=c.id AND deletion.operation='delete-case')
            AND a.storage_environment=$3 AND a.storage_store=$4 AND a.storage_region=$5`,
         [attachmentId,marker.id,marker.kind,marker.storageStore,marker.storageRegion,user.id]);
       const item = metadata.rows[0]; if (!item) notFound();
@@ -372,6 +379,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
       const digestValue = digest({ expectedRevision, previewSnapshotId: previewId });
       const submitted = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, caseId, user.id, marker);
+        await assertCaseNotDeleting(client, row.id);
         const replay = await priorMutation(client, row.id, "submit", id, digestValue);
         if (replay) return replay as { case: FtcCaseRecord; snapshot: CalculationSnapshot };
         if (row.status !== "draft") conflict("รายการนี้ส่งไปแล้ว");
@@ -468,7 +476,9 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         `SELECT c.id AS case_id,c.owner_id,c.assigned_officer_id,c.status,
            EXISTS(SELECT 1 FROM officer_case_assignments assignment WHERE assignment.case_id=c.id AND assignment.officer_id=$3 AND assignment.active) AS active_assignment
          FROM calculation_snapshots s JOIN ftc_cases c ON c.id=s.case_id
-         WHERE s.id=$1 AND c.environment_marker_id=$2`, [snapshotId,marker.id,user.id]);
+         WHERE s.id=$1 AND c.environment_marker_id=$2
+           AND NOT EXISTS (SELECT 1 FROM api_mutation_requests deletion WHERE deletion.case_id=c.id AND deletion.operation='delete-case')`,
+        [snapshotId,marker.id,user.id]);
       const row = access.rows[0]; if (!row) notFound();
       const isOwner = user.role === "taxpayer" && row.owner_id === user.id;
       const isOfficer = user.role === "officer" && row.assigned_officer_id === user.id && row.active_assignment && row.status === "submitted";

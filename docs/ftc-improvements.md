@@ -40,3 +40,12 @@ Implementation agents use GPT-6-luna with maximum reasoning effort. The coordina
 - GREEN: `FTC_TEST_API_PORT=8890 FTC_TEST_WEB_PORT=5175 npm run test:e2e -- e2e/entry-improvement.spec.ts e2e/evidence-improvement.spec.ts` passed 3/3. Evidence coverage includes PDF/PNG preview, exact original downloads after reload and officer review, draft-file deletion, and refusal to submit after browser files are removed.
 - Review corrected a canonical-THB comparison that would have rejected valid edited drafts and ensured byte unavailability never rewrites a submitted record.
 - Browser-local files remain within one browser profile. Hosted sharing continues to use the authorized server evidence store; this increment does not claim a new cross-device hosted smoke result.
+
+### 2. Confirmed draft deletion and dashboard actions
+
+- Taxpayers can cancel or confirm deleting their draft. The hosted endpoint checks owner, role, CSRF, current revision, environment, and draft state. Submitted records cannot be deleted.
+- The server retains immutable case/report/audit history behind a deletion marker. Once evidence cleanup finishes, the draft disappears from the active list and releases the active case quota. Failed cleanup remains visible with a retry action; deleted/deleting drafts cannot be reopened, recalculated, submitted, or modified through known API URLs. In-flight uploads prevent deletion from starting.
+- Dashboard actions use `แก้ไขต่อ`, `ดูผลคำนวณ`, and `ดูรายงาน`. Loading a worked example is verified to leave the browser clipboard unchanged; no source-document clipboard bug was reproduced in the baseline.
+- RED: the new authenticated DELETE request returned 404 before implementation. GREEN: four HTTP tests cover authorization, quota release, create-request replay, failed Blob cleanup/retry, inaccessible deleted records, and upload races. Two browser tests cover confirmation/removal/reload and the clipboard boundary.
+- Integration verification: `npm run verify:release` passes 121 tests in 15 files, seven migration checks, TypeScript, and the production build. Six browser specs covering foundation, existing taxpayer journeys, evidence, currency, and deletion pass 16/16 with four browser workers.
+- The additional PGlite suite exposed an existing 5-second initialization timeout under unrestricted worker pressure. `test.maxWorkers: 4` makes the full suite pass; no assertion or timeout was weakened.

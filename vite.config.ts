@@ -16,5 +16,6 @@ export default defineConfig({
     include: ["**/*.test.{ts,tsx}"],
     exclude: [...configDefaults.exclude, "tmp/**", "e2e/**"],
     restoreMocks: true,
+    maxWorkers: 4,
   },
 });

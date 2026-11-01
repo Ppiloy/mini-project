@@ -48,10 +48,10 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   const dashboardCard = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(dashboardCard).toContainText("2,500.00");
-  await expect(dashboardCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
+  await expect(dashboardCard.getByRole("link", { name: "ดูรายงาน" })).toBeVisible();
   await page.reload();
   await expect(dashboardCard).toContainText("2,500.00");
-  await dashboardCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/demo/reports/${previewId}$`));
   await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
   await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
@@ -62,7 +62,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(dashboardCard).toContainText("ส่งแล้ว · คิวจำลอง");
   await expect(dashboardCard).toContainText("2,500.00");
-  await dashboardCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/demo/reports/[^/]+$`));
   await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
   await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
@@ -97,14 +97,14 @@ test("taxpayer dashboard never presents a stale draft preview or a ready amount 
 
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(card).toContainText("2,500.00");
-  await card.getByRole("link", { name: "ทำร่างต่อ" }).click();
+  await card.getByRole("link", { name: "แก้ไขต่อ" }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: /บันทึกแล้ว/ })).toBeVisible();
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(card).toContainText("ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน");
   await expect(card).not.toContainText("2,500.00");
-  await expect(card.getByRole("link", { name: "เปิดรายงาน" })).toHaveCount(0);
+  await expect(card.getByRole("link", { name: "ดูรายงาน" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
   const incompleteCaseId = new URL(page.url()).pathname.split("/")[3]!;
@@ -116,8 +116,8 @@ test("taxpayer dashboard never presents a stale draft preview or a ready amount 
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(incompleteCard).toContainText("ข้อมูลยังไม่ครบ");
   await expect(incompleteCard).not.toContainText(/\d+,\d{3}\.\d{2}/);
-  await expect(incompleteCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
-  await incompleteCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await expect(incompleteCard.getByRole("link", { name: "ดูรายงาน" })).toBeVisible();
+  await incompleteCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(/\/demo\/reports\/demo-snapshot-/);
   await expect(page.getByText("สถานะ: ข้อมูลยังไม่ครบ")).toBeVisible();
 });

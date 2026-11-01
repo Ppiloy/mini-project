@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import type { CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
-import { createDemoCase, createDemoCaseFromDraft, findDemoCase, findDemoSnapshot, latestDemoPreview, listDemoCases } from "../../data/demoRepository.js";
+import { createDemoCase, createDemoCaseFromDraft, deleteDemoCase, findDemoCase, findDemoSnapshot, latestDemoPreview, listDemoCases } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 import { PageHeading } from "../../components/SiteFrame.js";
 import { formatMoney } from "../../components/money.js";
@@ -18,20 +18,40 @@ export function DashboardPage({ mode }: { mode: Mode }) {
   const [busy, setBusy] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [pendingDeletions, setPendingDeletions] = useState<Record<string, string>>({});
   const createRequestId = useRef(crypto.randomUUID());
 
   const load = useCallback(async () => {
     setBusy(true);
     setProblem(null);
     try {
-      if (mode === "demo") setCases(listDemoCases("taxpayer"));
-      else setCases((await hostedApi.listCases()).cases);
+      if (mode === "demo") {
+        setCases(listDemoCases("taxpayer"));
+        setPendingDeletions({});
+      } else {
+        const result = await hostedApi.listCases();
+        setCases(result.cases);
+        setPendingDeletions(Object.fromEntries((result.pendingDeletions ?? []).map((item) => [item.caseId, item.requestId])));
+      }
     } catch (error) {
       setProblem(apiFailureMessage(error, "โหลดกรณีไม่สำเร็จ"));
     } finally {
       setBusy(false);
     }
   }, [mode]);
+
+  const removeCase = useCallback((caseId: string) => {
+    setCases((current) => current.filter((record) => record.id !== caseId));
+    setPendingDeletions((current) => {
+      const next = { ...current };
+      delete next[caseId];
+      return next;
+    });
+  }, []);
+
+  const markDeletionPending = useCallback((caseId: string, requestId: string) => {
+    setPendingDeletions((current) => ({ ...current, [caseId]: requestId }));
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -75,15 +95,16 @@ export function DashboardPage({ mode }: { mode: Mode }) {
         <div><span className="summary-label">ปีภาษีที่รองรับ</span><strong>2568 <span className="muted-inline">(2025)</span></strong></div>
         <div><span className="summary-label">นโยบายคำนวณ</span><strong>rd-ftc-demo-2568-v1</strong></div>
       </section>
-      {mode === "demo" && <section className="fixture-launch card"><div><p className="eyebrow">WORKED EXAMPLES</p><h2>เริ่มจากข้อมูลคำนวณตัวอย่าง</h2><p>คัดลอกตัวอย่างลงในกรณีสมมติใหม่เพื่อสำรวจ D/E/F, การจัดสรรภาษี และความคลาดเคลื่อนต้นทาง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>ตัวอย่างนำเข้า 50% · G = 2,500</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>ตัวอย่างเวียดนามและจีน · 143,544.30</button></div></section>}
+      {mode === "demo" && <section className="fixture-launch card"><div><p className="eyebrow">WORKED EXAMPLES</p><h2>เริ่มจากข้อมูลคำนวณตัวอย่าง</h2><p>เปิดตัวอย่างเป็นร่างใหม่เพื่อสำรวจ D/E/F การจัดสรรภาษี และความคลาดเคลื่อนต้นทาง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>ตัวอย่างนำเข้า 50% · G = 2,500</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>ตัวอย่างเวียดนามและจีน · 143,544.30</button></div></section>}
       <section className="content-section">
-        <div className="section-heading"><div><p className="eyebrow">MY CASES</p><h2>กรณีคำนวณเครดิตภาษี</h2></div><button className="button button-quiet button-small" onClick={() => void load()}>รีเฟรชรายการ</button></div>
+        <div className="section-heading"><div><p className="eyebrow">MY CASES</p><h2>กรณีคำนวณเครดิตภาษี</h2></div></div>
         {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{mode === "hosted" && <Link to="/login">เข้าสู่ระบบอีกครั้ง</Link>}</div>}
         {busy ? <div className="loading-card" role="status">กำลังโหลดรายการ…</div> : cases.length === 0 ? (
           <div className="empty-state card"><div className="empty-icon" aria-hidden="true">＋</div><h3>ยังไม่มีกรณีคำนวณ</h3><p>สร้างกรณีเพื่อเริ่มบันทึกรายได้และข้อมูลการนำเงินเข้าประเทศ</p><button className="button button-secondary" onClick={startCase} disabled={creating}>สร้างกรณีแรก</button></div>
         ) : (
           <div className="case-list">
-            {cases.map((record) => <CaseCard key={record.id} record={record} mode={mode} />)}
+            {cases.map((record) => <CaseCard key={record.id} record={record} mode={mode}
+              pendingDeleteRequestId={pendingDeletions[record.id] ?? null} onDeleted={removeCase} onDeletionPending={markDeletionPending} />)}
           </div>
         )}
       </section>
@@ -98,15 +119,27 @@ type CaseCardLoad =
   | { key: string; state: "snapshot"; record: FtcCaseRecord; snapshot: CalculationSnapshot }
   | { key: string; state: "failed"; record: FtcCaseRecord; error: string };
 
-function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
-  const { user } = useAppSession();
+function CaseCard({ record, mode, pendingDeleteRequestId, onDeleted, onDeletionPending }: {
+  record: FtcCaseRecord;
+  mode: Mode;
+  pendingDeleteRequestId: string | null;
+  onDeleted(caseId: string): void;
+  onDeletionPending(caseId: string, requestId: string): void;
+}) {
+  const { user, csrfToken } = useAppSession();
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState<CaseCardLoad | null>(null);
-  const key = `${mode}:${user?.id ?? ""}:${record.id}:${record.status}:${record.draft.revision}:${record.submittedSnapshotId ?? ""}:${attempt}`;
+  const [deleting, setDeleting] = useState(false);
+  const [deleteProblem, setDeleteProblem] = useState<string | null>(null);
+  const key = `${mode}:${user?.id ?? ""}:${record.id}:${record.status}:${record.draft.revision}:${record.submittedSnapshotId ?? ""}:${attempt}:${pendingDeleteRequestId ?? ""}`;
   const current = loaded?.key === key ? loaded : { key, state: "loading" as const, record };
 
   useEffect(() => {
     let active = true;
+    if (pendingDeleteRequestId) {
+      setLoaded({ key, state: "none", record });
+      return () => { active = false; };
+    }
     setLoaded({ key, state: "loading", record });
     const load = async () => {
       let currentRecord = record;
@@ -153,7 +186,7 @@ function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
     };
     void load();
     return () => { active = false; };
-  }, [key, mode, record, user]);
+  }, [key, mode, pendingDeleteRequestId, record, user]);
 
   const currentRecord = current.record;
   const hrefRoot = mode === "demo" ? "/demo" : "/app";
@@ -164,17 +197,54 @@ function CaseCard({ record, mode }: { record: FtcCaseRecord; mode: Mode }) {
   const resultStatus = snapshot?.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ"
     : snapshot?.result.outcome === "needs_review" ? "มีข้อเท็จจริงที่ต้องตรวจสอบ / อยู่นอกขอบเขตตัวอย่าง"
       : snapshot?.result.outcome === "ready" ? "ผลคำนวณพร้อมแล้ว แต่ไม่มียอดเครดิตที่แสดงได้" : "";
+  const deleteDraft = async () => {
+    if (deleting || record.status !== "draft" || !user) return;
+    if (!pendingDeleteRequestId && !window.confirm(`ต้องการลบร่างกรณีปีภาษี ${record.draft.taxYear ? record.draft.taxYear + 543 : 2568} หรือไม่ ไฟล์แนบในร่างนี้จะถูกลบด้วย`)) return;
+    setDeleting(true);
+    setDeleteProblem(null);
+    const requestId = pendingDeleteRequestId ?? crypto.randomUUID();
+    try {
+      if (mode === "demo") {
+        if (!await deleteDemoCase(record.id, user.id)) throw new Error("ลบได้เฉพาะร่างของบัญชีนี้");
+        onDeleted(record.id);
+        return;
+      }
+      if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+      const result = await hostedApi.deleteDraftCase(record.id, record.draft.revision, csrfToken, requestId);
+      if (result.deleted) onDeleted(record.id);
+      else onDeletionPending(record.id, requestId);
+    } catch (error) {
+      if (mode === "hosted") {
+        try {
+          const current = await hostedApi.listCases();
+          const pending = current.pendingDeletions?.find((item) => item.caseId === record.id);
+          if (pending) onDeletionPending(record.id, pending.requestId);
+          else if (!current.cases.some((item) => item.id === record.id)) {
+            onDeleted(record.id);
+            return;
+          }
+        } catch { /* keep the original error visible when reconciliation is unavailable */ }
+      }
+      setDeleteProblem(apiFailureMessage(error, "ลบร่างไม่สำเร็จ"));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <article className="case-card card">
-      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {currentRecord.draft.taxYear ? currentRecord.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${currentRecord.status === "submitted" ? "status-submitted" : "status-draft"}`}>{currentRecord.status === "submitted" ? (mode === "demo" ? "ส่งแล้ว · คิวจำลอง" : "ส่งแล้ว · คิวตรวจสอบ") : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {currentRecord.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p>
-        {current.state === "loading" && <p className="case-calculation-note" role="status">กำลังตรวจผลคำนวณที่บันทึกไว้…</p>}
-        {current.state === "none" && <p className="case-calculation-note">ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน</p>}
+      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {currentRecord.draft.taxYear ? currentRecord.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${currentRecord.status === "submitted" ? "status-submitted" : "status-draft"}`}>{pendingDeleteRequestId ? "กำลังลบ" : currentRecord.status === "submitted" ? (mode === "demo" ? "ส่งแล้ว · คิวจำลอง" : "ส่งแล้ว · คิวตรวจสอบ") : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {currentRecord.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p>
+        {pendingDeleteRequestId
+          ? <p className="case-calculation-note" role="status">รอลบไฟล์แนบให้เสร็จ คุณลองดำเนินการต่อได้จากปุ่มด้านล่าง</p>
+          : current.state === "loading" && <p className="case-calculation-note" role="status">กำลังตรวจผลคำนวณที่บันทึกไว้…</p>}
+        {deleteProblem && <p className="case-calculation-note" role="alert">{deleteProblem}</p>}
+        {!pendingDeleteRequestId && current.state === "none" && <p className="case-calculation-note">ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน</p>}
         {current.state === "failed" && <div className="case-calculation-note" role="alert"><span>{current.error}</span><button className="button button-quiet button-small" onClick={() => setAttempt((value) => value + 1)}>ลองโหลดผลคำนวณอีกครั้ง</button></div>}
-        {snapshot && <div className="case-calculation-note"><span>ผลคำนวณรุ่น {snapshot.revision}</span>{snapshot.result.outcome === "ready" && snapshot.result.allowableCredit !== null
+        {!pendingDeleteRequestId && snapshot && <div className="case-calculation-note"><span>ผลคำนวณรุ่น {snapshot.revision}</span>{snapshot.result.outcome === "ready" && snapshot.result.allowableCredit !== null
           ? <strong>เครดิตภาษีที่ใช้ได้ {formatMoney(snapshot.result.allowableCredit)} บาท</strong>
           : <span>{resultStatus}</span>}</div>}
       </div>
-      <div className="case-card-action"><Link className="button button-secondary" to={destination}>{currentRecord.status === "submitted" ? "ดูผลและรายงาน" : "ทำร่างต่อ"}</Link>{reportHref && <Link className="button button-quiet button-small" to={reportHref}>เปิดรายงาน</Link>}</div>
+      <div className="case-card-action">{!pendingDeleteRequestId && <Link className="button button-secondary" to={destination}>{currentRecord.status === "submitted" ? "ดูผลคำนวณ" : "แก้ไขต่อ"}</Link>}{!pendingDeleteRequestId && reportHref && <Link className="button button-quiet button-small" to={reportHref}>ดูรายงาน</Link>}{currentRecord.status === "draft" && <button className="button button-quiet button-small" onClick={() => void deleteDraft()} disabled={deleting}>{deleting ? "กำลังลบ…" : pendingDeleteRequestId ? "ลองลบไฟล์ที่เหลืออีกครั้ง" : "ลบร่าง"}</button>}</div>
     </article>
   );
 }

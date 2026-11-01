@@ -77,6 +77,12 @@ export interface CaseRow {
   updated_at: Date | string;
 }
 
+interface CaseDeletionMarkerRow {
+  request_id: string;
+  request_digest: string;
+  response: { deleted?: boolean; cleanupPending?: boolean; revision?: number } | string;
+}
+
 export interface CreateAppOptions {
   pool: PgPoolLike;
   sessionSecret: string;
@@ -307,6 +313,22 @@ function requireString(value: unknown, field: string, maxLength = 160): string {
     throw new ApiFailure(400, "invalid_input", `ข้อมูล ${field} ไม่ถูกต้อง`);
   }
   return value;
+}
+
+function parseCaseDeletionResponse(value: CaseDeletionMarkerRow["response"]): { deleted?: boolean; cleanupPending?: boolean; revision?: number } {
+  return typeof value === "string" ? JSON.parse(value) as { deleted?: boolean; cleanupPending?: boolean; revision?: number } : value;
+}
+
+export async function caseDeletionMarker(query: Pick<PgQueryable, "query">, caseId: string): Promise<CaseDeletionMarkerRow | null> {
+  const result = await query.query<CaseDeletionMarkerRow>(
+    "SELECT request_id,request_digest,response FROM api_mutation_requests WHERE case_id=$1 AND operation='delete-case' ORDER BY created_at,request_id LIMIT 1",
+    [caseId],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function assertCaseNotDeleting(query: Pick<PgQueryable, "query">, caseId: string): Promise<void> {
+  if (await caseDeletionMarker(query, caseId)) throw new ApiFailure(409, "conflict", "รายการนี้อยู่ระหว่างลบหรือถูกลบแล้ว");
 }
 
 function isMutation(method: string): boolean {
@@ -786,12 +808,25 @@ export function createApp(options: CreateAppOptions): Express {
 
   app.get("/api/cases", authenticated, taxpayerOnly, async (_request, response, next) => {
     try {
+      const userId = (response.locals.user as ApiUser).id;
+      const markerId = (response.locals.environmentMarker as EnvironmentMarker).id;
       const result = await options.pool.query<CaseRow>(
-        "SELECT * FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2 ORDER BY updated_at DESC, id",
-        [(response.locals.user as ApiUser).id, (response.locals.environmentMarker as EnvironmentMarker).id],
+        `SELECT c.* FROM ftc_cases c WHERE c.owner_id=$1 AND c.environment_marker_id=$2
+         AND NOT EXISTS (SELECT 1 FROM api_mutation_requests deletion WHERE deletion.case_id=c.id
+           AND deletion.operation='delete-case' AND deletion.response->>'deleted'='true')
+         ORDER BY c.updated_at DESC, c.id`,
+        [userId, markerId],
       );
       const cases = await Promise.all(result.rows.map((row) => loadCaseRecord(options.pool, row)));
-      sendApiSuccess(response, apiSuccessSchemas.cases, { cases }, response.locals.requestId);
+      const pending = await options.pool.query<{ case_id: string; request_id: string }>(
+        `SELECT deletion.case_id,deletion.request_id FROM api_mutation_requests deletion
+         JOIN ftc_cases c ON c.id=deletion.case_id
+         WHERE deletion.operation='delete-case' AND deletion.response->>'cleanupPending'='true'
+           AND c.owner_id=$1 AND c.environment_marker_id=$2 ORDER BY c.updated_at DESC,c.id`,
+        [userId, markerId],
+      );
+      const pendingDeletions = pending.rows.map((row) => ({ caseId: row.case_id, requestId: row.request_id }));
+      sendApiSuccess(response, apiSuccessSchemas.cases, { cases, ...(pendingDeletions.length ? { pendingDeletions } : {}) }, response.locals.requestId);
     } catch (error) {
       next(error);
     }
@@ -806,8 +841,14 @@ export function createApp(options: CreateAppOptions): Express {
       const result = await inTransaction(options.pool, async (client) => {
         await client.query("SELECT id FROM app_users WHERE id=$1 FOR UPDATE", [user.id]);
         const existing = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2 AND create_request_id=$3", [user.id, marker.id, requestId]);
-        if (existing.rows[0]) return { row: existing.rows[0], created: false };
-        const count = await client.query<{ count: number }>("SELECT count(*)::int AS count FROM ftc_cases WHERE owner_id=$1 AND environment_marker_id=$2", [user.id, marker.id]);
+        if (existing.rows[0]) {
+          await assertCaseNotDeleting(client, existing.rows[0].id);
+          return { row: existing.rows[0], created: false };
+        }
+        const count = await client.query<{ count: number }>(
+          `SELECT count(*)::int AS count FROM ftc_cases c WHERE c.owner_id=$1 AND c.environment_marker_id=$2
+           AND NOT EXISTS (SELECT 1 FROM api_mutation_requests deletion WHERE deletion.case_id=c.id
+             AND deletion.operation='delete-case' AND deletion.response->>'deleted'='true')`, [user.id, marker.id]);
         if ((count.rows[0]?.count ?? 0) >= 10) throw new ApiFailure(429, "rate_limited", "บัญชีนี้มีแบบร่างครบ 10 รายการแล้ว");
         const id = randomUUID();
         const timestamp = new Date().toISOString();
@@ -828,6 +869,103 @@ export function createApp(options: CreateAppOptions): Express {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.delete("/api/cases/:id", authenticated, taxpayerOnly, csrf, async (request, response, next) => {
+    try {
+      const caseId = routeCaseId(request.params.id);
+      if (!caseId) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
+      const body = requireExactFields(request.body, ["expectedRevision", "requestId"]);
+      if (!Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 0) {
+        throw new ApiFailure(400, "invalid_input", "expectedRevision ไม่ถูกต้อง");
+      }
+      const expectedRevision = body.expectedRevision as number;
+      const requestId = requireString(body.requestId, "requestId", 128);
+      const bodyDigest = digest({ expectedRevision });
+      const user = response.locals.user as ApiUser;
+      const marker = response.locals.environmentMarker as EnvironmentMarker;
+      const authorized = await inTransaction(options.pool, async (client) => {
+        const selected = await client.query<CaseRow>(
+          "SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 AND environment_marker_id=$3 FOR UPDATE",
+          [caseId, user.id, marker.id],
+        );
+        const row = selected.rows[0];
+        if (!row) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
+        if (row.status !== "draft") throw new ApiFailure(409, "conflict", "ส่งรายการแล้ว ไม่สามารถลบได้");
+        const prior = await caseDeletionMarker(client, row.id);
+        if (prior) {
+          if (prior.request_id !== requestId || prior.request_digest !== bodyDigest) {
+            throw new ApiFailure(409, "conflict", "ใช้ปุ่มลองลบอีกครั้งในรายการที่กำลังลบ");
+          }
+          const saved = parseCaseDeletionResponse(prior.response);
+          if (saved.deleted) return { complete: true as const, revision: row.revision };
+          return { complete: false as const, revision: row.revision };
+        }
+        if (row.revision !== expectedRevision) throw new ApiFailure(409, "conflict", "ข้อมูลเปลี่ยนไปแล้ว กรุณาโหลดแบบร่างล่าสุด");
+        const uploading = await client.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM attachments WHERE case_id=$1 AND status='pending'", [row.id],
+        );
+        if ((uploading.rows[0]?.count ?? 0) > 0) {
+          throw new ApiFailure(409, "conflict", "มีไฟล์กำลังบันทึก กรุณารอให้การอัปโหลดเสร็จแล้วลองลบอีกครั้ง");
+        }
+        await client.query(
+          `UPDATE attachments SET status='deleted',source_id=NULL,remittance_id=NULL,cleanup_pending=true
+           WHERE case_id=$1 AND status IN ('ready','failed')`, [row.id],
+        );
+        const pending = await client.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM attachments WHERE case_id=$1 AND status='deleted' AND cleanup_pending=true", [row.id],
+        );
+        const result = { deleted: false, cleanupPending: (pending.rows[0]?.count ?? 0) > 0, revision: row.revision };
+        await client.query(
+          `INSERT INTO api_mutation_requests(case_id,request_id,operation,request_digest,response)
+           VALUES ($1,$2,'delete-case',$3,$4::jsonb)`, [row.id, requestId, bodyDigest, JSON.stringify(result)],
+        );
+        return { complete: false as const, revision: row.revision };
+      });
+
+      if (authorized.complete) {
+        sendApiSuccess(response, apiSuccessSchemas.caseDelete,
+          { deleted: true, cleanupPending: false, revision: authorized.revision }, response.locals.requestId);
+        return;
+      }
+
+      if (options.blobIO) {
+        const cleanup = await options.pool.query<{ id: string; storage_key: string; storage_environment: string; storage_store: string; storage_region: string }>(
+          `SELECT id,storage_key,storage_environment,storage_store,storage_region FROM attachments
+           WHERE case_id=$1 AND environment_marker_id=$2 AND status='deleted' AND cleanup_pending=true ORDER BY id`, [caseId, marker.id],
+        );
+        for (const attachment of cleanup.rows) {
+          if (attachment.storage_environment !== marker.kind || attachment.storage_store !== marker.storageStore || attachment.storage_region !== marker.storageRegion) continue;
+          try {
+            await options.blobIO.delete(marker, attachment.storage_key);
+            await options.pool.query(
+              "UPDATE attachments SET cleanup_pending=false,storage_deleted_at=now() WHERE id=$1 AND case_id=$2 AND environment_marker_id=$3 AND status='deleted' AND cleanup_pending=true",
+              [attachment.id, caseId, marker.id],
+            );
+          } catch { /* keep the durable tombstone so the user can retry */ }
+        }
+      }
+
+      const result = await inTransaction(options.pool, async (client) => {
+        const locked = await client.query<CaseRow>(
+          "SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 AND environment_marker_id=$3 FOR UPDATE", [caseId, user.id, marker.id],
+        );
+        const row = locked.rows[0];
+        if (!row || row.status !== "draft") throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
+        const pending = await client.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM attachments WHERE case_id=$1 AND status='deleted' AND cleanup_pending=true",
+          [caseId],
+        );
+        const cleanupPending = (pending.rows[0]?.count ?? 0) > 0;
+        const deletionResult = { deleted: !cleanupPending, cleanupPending, revision: row.revision };
+        await client.query(
+          "UPDATE api_mutation_requests SET response=$3::jsonb WHERE case_id=$1 AND operation='delete-case' AND request_id=$2",
+          [caseId, requestId, JSON.stringify(deletionResult)],
+        );
+        return deletionResult;
+      });
+      sendApiSuccess(response, apiSuccessSchemas.caseDelete, result, response.locals.requestId);
+    } catch (error) { next(error); }
   });
 
   app.put("/api/cases/:id/draft", authenticated, taxpayerOnly, csrf, async (request, response, next) => {
@@ -882,6 +1020,7 @@ export function createApp(options: CreateAppOptions): Express {
         const locked = await client.query<CaseRow>("SELECT * FROM ftc_cases WHERE id=$1 AND owner_id=$2 AND environment_marker_id=$3 FOR UPDATE", [id, user.id, marker.id]);
         const row = locked.rows[0];
         if (!row) throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้");
+        await assertCaseNotDeleting(client, row.id);
         const prior = await client.query<{ request_digest: string; response: { case: FtcCaseRecord } }>(
           "SELECT request_digest, response FROM api_mutation_requests WHERE case_id=$1 AND operation='save-draft' AND request_id=$2",
           [row.id, requestId],
