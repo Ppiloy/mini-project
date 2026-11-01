@@ -27,6 +27,7 @@ if (!Number.isInteger(apiPort) || apiPort < 1024 || apiPort > 65535 ||
 
 export default defineConfig({
   testDir: "./e2e/real-backend",
+  outputDir: join("test-results", `real-backend-${webPort}`),
   fullyParallel: false,
   workers: 1,
   reporter: "list",
@@ -58,7 +59,7 @@ export default defineConfig({
       command: `${node} "${viteCli}" --host 127.0.0.1 --port ${webPort} --strictPort`,
       url: `http://127.0.0.1:${webPort}`,
       timeout: 60_000,
-      env: { FTC_TEST_API_PORT: String(apiPort) },
+      env: { FTC_TEST_API_PORT: String(apiPort), FTC_BROWSER_TEST: "1" },
       reuseExistingServer: false,
     },
   ],

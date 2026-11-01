@@ -20,6 +20,7 @@ process.env.FTC_REAL_BROWSER_RUN_TOKEN = runToken;
 export default defineConfig({
   testDir: "./e2e",
   testIgnore: ["**/real-backend/**"],
+  outputDir: join("test-results", `default-${webPort}`),
   fullyParallel: true,
   reporter: "list",
   globalTeardown: "./e2e/real-backend/global-teardown.ts",
@@ -42,7 +43,7 @@ export default defineConfig({
     {
       command: `${node} "${viteCli}" --host 127.0.0.1 --port ${webPort} --strictPort`,
       url: `http://127.0.0.1:${webPort}`,
-      env: { FTC_TEST_API_PORT: String(apiPort) },
+      env: { FTC_TEST_API_PORT: String(apiPort), FTC_BROWSER_TEST: "1" },
       reuseExistingServer: false,
     },
   ],

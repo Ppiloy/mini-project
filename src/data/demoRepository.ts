@@ -21,22 +21,39 @@ interface DemoStore {
 
 const blankStore = (): DemoStore => ({ cases: [], snapshots: [], attachments: [], storedEvidenceIds: [] });
 
+function invalidStoreError(): Error {
+  return new Error("เปิดข้อมูลสาธิตไม่ได้ เพราะเบราว์เซอร์ไม่อนุญาตให้อ่านพื้นที่จัดเก็บหรือข้อมูลเสียหาย กรุณาเปิดใช้พื้นที่จัดเก็บในเบราว์เซอร์หรือกู้คืนข้อมูลเดิม แล้วโหลดหน้านี้ใหม่ ข้อมูลเดิมยังไม่ได้ถูกลบหรือเขียนทับ");
+}
+
 function readStore(): DemoStore {
+  let stored: string | null;
   try {
-    const stored = localStorage.getItem(STORE_KEY);
-    if (!stored) return blankStore();
-    const parsed = JSON.parse(stored) as Partial<DemoStore>;
-    return {
-      cases: Array.isArray(parsed.cases) ? parsed.cases : [],
-      snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
-      attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
-      storedEvidenceIds: Array.isArray(parsed.storedEvidenceIds)
-        ? parsed.storedEvidenceIds.filter((id): id is string => typeof id === "string")
-        : [],
-    };
+    stored = localStorage.getItem(STORE_KEY);
   } catch {
-    return blankStore();
+    throw invalidStoreError();
   }
+  if (stored === null) return blankStore();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    throw invalidStoreError();
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw invalidStoreError();
+
+  const candidate = parsed as Partial<DemoStore>;
+  const storedEvidenceIds = candidate.storedEvidenceIds;
+  if (!Array.isArray(candidate.cases) || !Array.isArray(candidate.snapshots) || !Array.isArray(candidate.attachments)
+    || (storedEvidenceIds !== undefined && (!Array.isArray(storedEvidenceIds) || !storedEvidenceIds.every((id) => typeof id === "string")))) {
+    throw invalidStoreError();
+  }
+  return {
+    cases: candidate.cases,
+    snapshots: candidate.snapshots,
+    attachments: candidate.attachments,
+    storedEvidenceIds: storedEvidenceIds ?? [],
+  };
 }
 
 function writeStore(store: DemoStore): void {

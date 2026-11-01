@@ -10,7 +10,11 @@ const apiPort = process.env.FTC_TEST_API_PORT ?? "8888";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { fs: { allow: [process.cwd(), thaiFontPackage] }, proxy: { "/api": `http://127.0.0.1:${apiPort}` } },
+  server: {
+    fs: { allow: [process.cwd(), thaiFontPackage] },
+    proxy: { "/api": `http://127.0.0.1:${apiPort}` },
+    ...(process.env.FTC_BROWSER_TEST === "1" ? { hmr: false } : {}),
+  },
   test: {
     environment: "jsdom",
     include: ["**/*.test.{ts,tsx}"],

@@ -11,6 +11,8 @@ The user confirmed three TDD boundaries before new tests were written:
 
 Implementation agents use GPT-6-luna with maximum reasoning effort. The coordinating agent reviews the implementation against the brief before each release commit.
 
+The user confirmed delivery of the core and P2 improvements. P3 officer decisions, supplementary documents, and versioned resubmission are deferred.
+
 ## Baseline findings
 
 - The release gate passes: 117 tests in 14 files, seven ordered SQL migrations, TypeScript, and the production build. The initial sandbox run failed on local socket/private temporary-directory restrictions; rerunning with the necessary execution access passed.
@@ -49,3 +51,9 @@ Implementation agents use GPT-6-luna with maximum reasoning effort. The coordina
 - RED: the new authenticated DELETE request returned 404 before implementation. GREEN: four HTTP tests cover authorization, quota release, create-request replay, failed Blob cleanup/retry, inaccessible deleted records, and upload races. Two browser tests cover confirmation/removal/reload and the clipboard boundary.
 - Integration verification: `npm run verify:release` passes 121 tests in 15 files, seven migration checks, TypeScript, and the production build. Six browser specs covering foundation, existing taxpayer journeys, evidence, currency, and deletion pass 16/16 with four browser workers.
 - The additional PGlite suite exposed an existing 5-second initialization timeout under unrestricted worker pressure. `test.maxWorkers: 4` makes the full suite pass; no assertion or timeout was weakened.
+
+### 3. Browser storage failure and test-run isolation
+
+- Demo persistence reports an actionable error when browser storage cannot be read, JSON is malformed, or required collections have the wrong shape. These failures cannot silently create an empty store over existing drafts. A missing storage key remains a valid empty store; older records without the file-byte inventory still load.
+- RED: read failures and malformed collections did not produce an error before implementation. GREEN: two browser journeys exercise failed/malformed reads, attempted creation, recovery, and the original draft remaining visible. Two response-contract journeys also pass, including legacy demo-store compatibility.
+- Browser tests now use separate artifact folders per port and disable hot reload only in the test environment. This resolves observed cross-run artifact collisions and unexpected page reloads during parallel implementation. Normal development hot reload is preserved.
