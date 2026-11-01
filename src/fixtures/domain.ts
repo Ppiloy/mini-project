@@ -111,7 +111,7 @@ export const slideDiscrepancyFixture: CalculationFixture & { sourcePrintedTotal:
     "The source displays 143,554.30 THB; independent arithmetic gives 143,544.30 THB. This fixture preserves both values and adds no 10 THB adjustment.",
     "Country/type grouping follows the educational formula and does not validate treaty eligibility.",
   ],
-  draft: confirmedDraft({ id: "slide-discrepancy-2568", domesticAssessableIncome: "1000000.00", thaiTax: "318750.00", sources: [vnSalary, vnDividend, cnSalary, cnDividend], taxProvenance: "Prepared educational slide example; supplied L is not inferred from J." }),
+  draft: confirmedDraft({ id: "slide-discrepancy-2568", domesticAssessableIncome: "1000000.00", thaiTax: "318750.00", sources: [vnSalary, vnDividend, cnSalary, cnDividend], taxProvenance: "ตัวอย่างระบุจำนวน (L) เป็นภาษีไทยก่อนเครดิตภาษีต่างประเทศ หลังรายการค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง โดยไม่ได้คำนวณจากเงินได้ในประเทศเพียงรายการเดียว" }),
   expected: { totalAssessableIncome: "1975000", vnIncome: "750000", vnAttributableTax: "225000", vnLimit: "121044.3037974683544303797468354430379747", vnCreditDisplayed: "121044.30", cnIncome: "225000", cnAttributableTax: "22500", cnLimit: "36313.29113924050632911392405063291139241", cnCreditDisplayed: "22500.00", allowableCredit: "143544.30" },
   sourcePrintedTotal: "143554.30",
   sourceDiscrepancy: "The slide prints 143,554.30 THB, which is 10.00 THB above the recomputed 143,544.30 THB.",
@@ -127,7 +127,7 @@ export const partialRemittanceFixture: CalculationFixture = {
     "F=25,000 and the 50% share are the documented partial-remittance example; G=2,500 follows the formula.",
     "No legal treaty eligibility conclusion is implied.",
   ],
-  draft: confirmedDraft({ id: "manual-partial-remittance", domesticAssessableIncome: "0.00", thaiTax: "100000.00", sources: [partialSource], taxProvenance: "Prepared allocation example; L is supplied." }),
+  draft: confirmedDraft({ id: "manual-partial-remittance", domesticAssessableIncome: "0.00", thaiTax: "100000.00", sources: [partialSource], taxProvenance: "ตัวอย่างการจัดสรรนี้กำหนด (L) เป็นจำนวนที่ระบุไว้เพื่อสาธิตสูตร ไม่ใช่การคำนวณภาษีเงินได้บุคคลธรรมดาไทยครบถ้วน" }),
   expected: { share: "0.5", attributableTax: "2500", allowableCredit: "2500.00" },
 };
 

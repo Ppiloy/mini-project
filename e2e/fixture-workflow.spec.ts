@@ -40,7 +40,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
 
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   const previewUrl = new URL(page.url());
   const caseId = previewUrl.pathname.split("/")[3]!;
   const previewId = previewUrl.searchParams.get("preview")!;
@@ -53,21 +53,21 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/demo/reports/${previewId}$`));
   await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.goto(`/demo/cases/${caseId}/result?preview=${previewId}`);
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(dashboardCard).toContainText("ส่งแล้ว · คิวจำลอง");
   await expect(dashboardCard).toContainText("2,500.00");
   await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/demo/reports/[^/]+$`));
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.reload();
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
@@ -75,9 +75,9 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).click();
   await expect(page.getByText("ส่งแล้ว · อ่านอย่างเดียว")).toBeVisible();
   await expect(page.getByRole("heading", { name: "ประวัติการเข้าถึง" })).toBeVisible();
-  await page.getByRole("link", { name: "ดูรายงานที่พิมพ์ได้" }).click();
+  await page.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page.getByRole("heading", { name: "รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
   await page.emulateMedia({ media: "print" });
   await expect(page.getByRole("button", { name: "พิมพ์ / บันทึกเป็น PDF" })).toBeHidden();
   await expect(page.locator(".print-report")).toBeVisible();
@@ -89,7 +89,7 @@ test("taxpayer dashboard never presents a stale draft preview or a ready amount 
   await advanceToReview(page);
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   const previewUrl = new URL(page.url());
   const caseId = previewUrl.pathname.split("/")[3]!;
   const card = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
@@ -135,7 +135,7 @@ test("editing Thai tax invalidates its confirmation and prevents a ready preview
 
   await expect(page.getByText("ข้อมูลรายได้ อัตราแลกเปลี่ยน หรือที่มาของภาษีไทยเปลี่ยนแล้ว กรุณายืนยันภาษีไทยอีกครั้ง")).toBeVisible();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
-  await expect(page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
   await expect(page.getByRole("alert").filter({ hasText: "ยังสร้างผลคำนวณไม่ได้" })).toBeVisible();
   await expect(page.getByTestId("canonical-worksheet")).toHaveCount(0);
 });
@@ -255,7 +255,7 @@ test("zero eligible tax permits one combined source file with income and remitta
   await expect(page.getByText("รายงานรวม.pdf", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
 });
 
@@ -287,7 +287,7 @@ test("unsupported tax year stays visible and does not produce an ordinary credit
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   await expect(page.getByRole("heading", { name: "ปีภาษีและขอบเขตกรณี" })).toBeVisible();
   await expect(page.getByRole("region", { name: "ปีภาษีและขอบเขตกรณี" }).getByRole("alert").filter({ hasText: "ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
 });
 
 test("zero D and F greater than D are blocked with source-specific messages", async ({ page }) => {

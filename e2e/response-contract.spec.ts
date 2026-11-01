@@ -35,6 +35,13 @@ test("printable reports retain the frozen manual FX URL and assumption", async (
   draft.createdAt = now;
   draft.updatedAt = now;
   const source = createEmptySource();
+  source.countryCode = "VN";
+  source.countryName = "Vietnam";
+  source.incomeType = "salary_40_1";
+  source.subtype = "salary";
+  source.earnedTaxYear = 2025;
+  source.inputMode = "original_currency";
+  source.currencyCode = "USD";
   source.fxReference = {
     currencyCode: "USD", thbRate: "35.00", baseUnits: 1, effectiveDate: "2025-01-01",
     rateType: "manual", sourceKind: "user_supplied", sourceLabel: "Manual source for this frozen report",
@@ -51,7 +58,9 @@ test("printable reports retain the frozen manual FX URL and assumption", async (
 
   await page.goto(`/demo/reports/${snapshotId}`);
 
-  await expect(page.getByText("Entered manually for the educational example; not a verified historical rate.")).toBeVisible();
-  const sourceLink = page.getByRole("link", { name: "https://fx.example.test/rate/2025-01-01" });
+  const worksheet = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
+  await expect(worksheet.getByText("Entered manually for the educational example; not a verified historical rate.", { exact: true })).toBeVisible();
+  const sourceLink = worksheet.getByRole("link", { name: "แหล่งอัตราแลกเปลี่ยน", exact: true });
   await expect(sourceLink).toHaveAttribute("href", "https://fx.example.test/rate/2025-01-01");
+  await expect(worksheet.getByText("https://fx.example.test/rate/2025-01-01", { exact: true })).toHaveCount(0);
 });

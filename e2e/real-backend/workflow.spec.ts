@@ -98,8 +98,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(calculateResponse.status()).toBe(200);
   expect(apiSuccessSchemas.snapshot.safeParse(await calculateResponse.json()).success).toBe(true);
   await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=[0-9a-f-]+$`, "i"));
-  await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   const previewId = new URL(page.url()).searchParams.get("preview")!;
   const previewResponse = await browserApi(page, `/api/snapshots/${previewId}`);
   expect(previewResponse.status).toBe(200);
@@ -113,16 +112,16 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await expect(taxpayerCard).not.toContainText("2,500.00");
   await taxpayerCard.getByRole("button", { name: "ลองโหลดผลคำนวณอีกครั้ง" }).click();
   await expect(taxpayerCard).toContainText("2,500.00");
-  await expect(taxpayerCard.getByRole("link", { name: "เปิดรายงาน" })).toBeVisible();
+  await expect(taxpayerCard.getByRole("link", { name: "ดูรายงาน" })).toBeVisible();
   await page.reload();
   await expect(taxpayerCard).toContainText("2,500.00");
-  await taxpayerCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await taxpayerCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/reports/${previewId}$`));
   await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await assertFocusedSkipLinkIsScreenOnly(page, testInfo.outputPath("draft-report.pdf"));
   await page.goto(`/app/cases/${caseId}/result?preview=${previewId}`);
-  await expect(page.getByText("เครดิตที่ใช้ได้ตามสมมติฐาน")).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   const sourceLines = preview.result.lines.filter((line) => line.sourceId === sourceId);
   expect(sourceLines.map((line) => line.code)).toEqual([
     "source_D", "source_E_paid", "source_E_eligible", "source_F", "source_share", "source_G",
@@ -139,16 +138,17 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(Math.min(allocatedFromReference, thaiCapFromReference)).toBe(2_500);
 
   const submitPromise = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/submit`) && response.request().method() === "POST");
-  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   const submitResponse = await submitPromise;
   expect(submitResponse.status()).toBe(200);
   expect(apiSuccessSchemas.submission.safeParse(await submitResponse.json()).success).toBe(true);
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
-  await page.getByRole("link", { name: "เปิดรายงาน / พิมพ์" }).click();
+  await page.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page.getByRole("heading", { name: "รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-  await expect(page.getByText("rd-ftc-demo-2568-v1")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.locator(".print-report")).toContainText("ระบบต้นแบบเพื่อการศึกษา");
+  await expect(page.getByText("rd-ftc-demo-2568-v1", { exact: false })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   const reportUrl = page.url();
   const submittedSnapshotId = new URL(reportUrl).pathname.split("/").at(-1)!;
   expect(submittedSnapshotId).toMatch(/^[0-9a-f-]{36}$/i);
@@ -169,13 +169,13 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
   await expect(taxpayerCard).toContainText("ส่งแล้ว · คิวตรวจสอบ");
   await expect(taxpayerCard).toContainText("2,500.00");
-  await taxpayerCard.getByRole("link", { name: "เปิดรายงาน" }).click();
+  await taxpayerCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/reports/${submittedSnapshotId}$`));
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.reload();
-  await expect(page.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await assertFocusedSkipLinkIsScreenOnly(page, testInfo.outputPath("submitted-report.pdf"));
 
   const taxpayerBContext = await browser.newContext();
@@ -215,10 +215,10 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
     await officerPage.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).first().click();
     await expect(officerPage.getByText("ส่งแล้ว · อ่านอย่างเดียว")).toBeVisible();
     await expect(officerPage.getByRole("heading", { name: "ประวัติการเข้าถึง" })).toBeVisible();
-    await officerPage.getByRole("link", { name: "ดูรายงานที่พิมพ์ได้" }).click();
+    await officerPage.getByRole("link", { name: "ดูรายงาน" }).click();
     await expect(officerPage).toHaveURL(reportUrl);
-    await expect(officerPage.getByText("รายงานจาก snapshot ที่ส่งแล้ว")).toBeVisible();
-    await expect(officerPage.getByText("2,500.00", { exact: true }).first()).toBeVisible();
+    await expect(officerPage.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+    await expect(officerPage.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
     const officerMutation = await browserApi(officerPage, `/api/cases/${caseId}/draft`, {
       method: "PUT", csrfToken: officerSession.csrfToken,
       body: { expectedRevision: 0, requestId: "officer-read-only-proof", data: {} },
@@ -257,7 +257,7 @@ test("real API rejects incomplete and unsupported input without inventing an ord
   const incomplete = await browserApi(page, `/api/snapshots/${incompleteId}`);
   expect((incomplete.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "incomplete", allowableCredit: null });
 
-  await page.getByRole("button", { name: "กลับไปแก้ไข" }).click();
+  await page.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
   await advance(page);
   await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
@@ -275,7 +275,7 @@ test("real API rejects incomplete and unsupported input without inventing an ord
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
   await expect(page).toHaveURL(/\/app\/cases\/[^/]+\/result\?preview=/);
   await expect(page.getByText("ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)")).toBeVisible();
-  await expect(page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
   const unsupportedId = new URL(page.url()).searchParams.get("preview")!;
   const unsupported = await browserApi(page, `/api/snapshots/${unsupportedId}`);
   expect((unsupported.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "needs_review", allowableCredit: null });

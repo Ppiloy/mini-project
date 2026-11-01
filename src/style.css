@@ -196,6 +196,7 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 .sticky-save, .mobile-only { display: none; }
 .filter-panel { padding: 16px; display: grid; grid-template-columns: minmax(150px, .7fr) minmax(220px, 1.3fr) auto; align-items: end; gap: 12px; }
 .filter-panel .field { margin: 0; }
+.officer-worklist-filters { grid-template-columns: repeat(2, minmax(0, 1fr)) repeat(2, minmax(150px, .8fr)) auto; }
 .queue-count { color: var(--muted); font-size: 11px; }
 .submitted-banner { margin: 20px 0; padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid #b2ddff; border-radius: 12px; background: #eff8ff; }
 .submitted-banner p { margin: 5px 0 0; color: #4f6782; font-size: 10px; }
@@ -215,6 +216,10 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 .data-table thead th { color: #516981; background: #f5f8fc; font-size: 9px; font-weight: 650; }
 .data-table th:first-child, .data-table td:first-child { text-align: left; }
 .data-table tbody th { font-weight: 600; }
+.officer-worklist-table { min-width: 900px; }
+.officer-worklist-table th, .officer-worklist-table td { vertical-align: middle; }
+.officer-worklist-table small { color: var(--muted); font-size: 9px; }
+.officer-worklist-table .button { white-space: nowrap; }
 .empty-cell { color: var(--muted); text-align: center !important; }
 .table-note { margin: 10px 0 0; color: var(--muted); font-size: 9px; }
 .source-result-list, .officer-source-list { display: grid; gap: 12px; }
@@ -255,6 +260,8 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 .report-meta > div { min-width: 0; display: grid; gap: 3px; }
 .report-meta span, .report-summary-grid span, .report-source-grid span { color: #63788f; font-size: 9px; }
 .report-meta strong { overflow-wrap: anywhere; font-size: 10px; }
+.report-timestamp-note { margin: -6px 0 14px; color: #536b83; font-size: 9px; line-height: 1.5; }
+.result-saved-note { display: block; margin-top: 5px; color: #536b83; font-size: 12px; line-height: 1.55; }
 .report-section { margin-top: 20px; page-break-inside: avoid; }
 .report-section h2 { margin-bottom: 9px; padding-bottom: 6px; border-bottom: 1px solid #dce5ef; color: #174c9b; font-size: 14px; }
 .report-total { margin: 8px 0 10px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid #c7d7fe; border-radius: 9px; background: #f5f8ff; }
@@ -288,6 +295,72 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 .source-discrepancy { margin-top: 12px; padding: 10px; border-left: 3px solid #f79009; background: #fffaeb; font-size: 8px; }
 .source-discrepancy p { margin: 4px 0 0; line-height: 1.55; }
 .report-footer { margin-top: 22px; padding-top: 10px; display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid #dce5ef; color: #718198; font-size: 8px; }
+.worksheet { display: grid; gap: 14px; min-width: 0; }
+.worksheet-section { min-width: 0; margin: 0; padding: 20px; }
+.worksheet-section > h2 { margin: 0 0 10px; color: #173b60; font-size: 16px; line-height: 1.55; overflow-wrap: anywhere; }
+.worksheet-explanation, .worksheet-disclaimer { margin: 10px 0 0; color: #536b83; font-size: 10px; line-height: 1.65; overflow-wrap: anywhere; }
+.worksheet-disclaimer { padding-top: 10px; border-top: 1px solid #e3eaf1; }
+.worksheet-label { display: block; min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.worksheet-label-code { display: inline; margin-right: 3px; color: #476582; font-size: .92em; font-weight: 700; }
+.worksheet-label-name { color: inherit; font-weight: 600; }
+.worksheet-source-table { width: 100%; table-layout: fixed; }
+.worksheet-source-table th, .worksheet-source-table td { padding: 8px 6px; text-align: left; vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.worksheet-source-table thead th { font-size: 11px; }
+.worksheet-source-name th { color: #174c9b; background: #f7f9fc; font-size: 12px; }
+.worksheet-source-values td { font-size: 13px; font-variant-numeric: tabular-nums; }
+.worksheet-source-details td { padding-top: 3px; border-bottom: 1px solid #dce5ef; }
+.worksheet-source-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: #506780; font-size: 10px; line-height: 1.6; }
+.worksheet-original-currency { margin: 7px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; color: #506780; font-size: 10px; line-height: 1.6; }
+.worksheet-original-currency strong { color: #173b60; }
+.worksheet-fx-link { color: #174c9b; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.worksheet-fx-assumption { flex-basis: 100%; }
+.worksheet-assumption-note { margin: 7px 0 0; padding: 7px 9px; border-left: 3px solid #f0ad4e; background: #fff9ed; color: #694a16; font-size: 9px; line-height: 1.55; overflow-wrap: anywhere; }
+.worksheet-source-rationale { margin: 7px 0 0; color: #506780; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.worksheet-source-rationale strong { color: #304b67; }
+.worksheet-source-cards, .worksheet-country-cards { display: none; }
+.worksheet-summary-table { width: 100%; table-layout: fixed; }
+.worksheet-summary-table th, .worksheet-summary-table td { padding: 10px 8px; border-bottom: 1px solid #dce5ef; vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+.worksheet-summary-table th { width: 68%; background: #f7f9fc; color: #506780; text-align: left; font-size: 12px; font-weight: 600; }
+.worksheet-summary-table td { color: #173b60; text-align: right; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.worksheet-provenance { margin-top: 9px; color: #526b83; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.worksheet-provenance strong { display: block; margin-bottom: 3px; color: #304b67; }
+.worksheet-provenance p { margin: 0; }
+.worksheet-country-table { table-layout: fixed; }
+.worksheet-country-table th, .worksheet-country-table td { padding: 10px 7px; white-space: normal; overflow-wrap: anywhere; }
+.worksheet-country-table thead th { vertical-align: top; font-size: 11px; }
+.worksheet-country-table tbody th, .worksheet-country-table tbody td, .worksheet-country-table tfoot th, .worksheet-country-table tfoot td { font-size: 13px; font-variant-numeric: tabular-nums; }
+.worksheet-country-table tbody th { text-align: left; }
+.worksheet-country-table tfoot th, .worksheet-country-table tfoot td, .worksheet-source-table tfoot th, .worksheet-source-table tfoot td { padding-top: 10px; border-top: 2px solid #bccbd9; background: #f5f8fc; font-weight: 700; }
+.worksheet-source-table tfoot th, .worksheet-source-table tfoot td { font-size: 12px; font-variant-numeric: tabular-nums; }
+.worksheet-source-totals-mobile { display: none; }
+.worksheet-paid-tax-total { margin: 8px 0 0; color: #526b83; font-size: 10px; line-height: 1.55; }
+.worksheet-country-total { padding: 11px; display: grid; gap: 5px; border: 1px solid #c7d7fe; border-radius: 8px; background: #f5f8ff; font-size: 11px; font-variant-numeric: tabular-nums; }
+.worksheet-country-total small { color: #526b83; font-size: 10px; }
+.worksheet-total { border-color: #c7d7fe; background: linear-gradient(115deg, #fff, #f5f8ff); }
+.worksheet-total-value { padding: 14px 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; }
+.worksheet-total-value strong { color: #1849a9; font-size: clamp(23px, 3.3vw, 32px); font-variant-numeric: tabular-nums; }
+.worksheet-total-value span { color: #526b83; font-size: 10px; }
+.worksheet-formulas { margin-top: 7px; border-top: 1px solid #dce5ef; color: #3e5872; font-size: 10px; }
+.worksheet-formulas summary { padding: 10px 0; color: #174c9b; cursor: pointer; font-weight: 650; }
+.worksheet-formula-print-heading { display: none; margin: 8px 0 4px; color: #304b67; }
+.worksheet-formulas ul { margin: 0; padding: 0 0 8px 20px; display: grid; gap: 5px; line-height: 1.6; }
+.worksheet-evidence-group { margin-top: 15px; }
+.worksheet-evidence-group h3 { margin: 0 0 7px; color: #304b67; font-size: 11px; }
+.worksheet-evidence-group .file-list { margin: 0; }
+.worksheet-evidence-unavailable { color: #8b4a32; font-size: 9px; }
+.review-points > h2 { margin: 0 0 6px; color: #173b60; font-size: 15px; }
+.review-points > p { margin: 0 0 12px; color: #536b83; font-size: 10px; line-height: 1.6; }
+.review-points ul { margin: 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.review-points li { padding: 10px 12px; display: grid; gap: 4px; border-left: 3px solid #7f9fc5; border-radius: 0 8px 8px 0; background: #f5f8fc; }
+.review-points li > strong { color: #304b67; font-size: 12px; line-height: 1.5; }
+.review-points li > p { margin: 0; color: #536b83; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.review-points li > p strong { color: #304b67; font-size: inherit; }
+.review-points li .review-point-category { width: fit-content; padding: 3px 8px; border-radius: 999px; color: #344b63; background: #e8eef5; font-size: 9px; font-weight: 700; line-height: 1.45; }
+.review-point-category-invalid { color: #8b1e16 !important; background: #fee4e2 !important; }
+.review-point-category-missingEvidence { color: #854a0e !important; background: #fff0c2 !important; }
+.review-point-category-unsupported { color: #55308a !important; background: #efe5ff !important; }
+.review-point-category-substantive { color: #1849a9 !important; background: #e4ecff !important; }
+.review-points-empty { padding: 12px 14px; border-left: 3px solid #a7b6c8; background: #f5f8fc; }
 .error-page { padding: 24px; }
 
 @media (max-width: 760px) {
@@ -328,6 +401,7 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .mobile-only { display: flex; }
   .sticky-save { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); background: #ffffffed; box-shadow: 0 -5px 20px #173b6010; color: #526a83; font-size: 10px; }
   .filter-panel { grid-template-columns: 1fr 1fr; }
+  .officer-worklist-filters { grid-template-columns: 1fr 1fr; }
   .filter-panel .button { grid-column: 1 / -1; }
   .result-total { align-items: start; flex-direction: column; padding: 19px; }
   .total-amount { font-size: 30px; }
@@ -335,6 +409,24 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .fact-card { padding: 11px; }
   .fact-card > strong { font-size: 10px; }
   .amount-grid { grid-template-columns: 1fr 1fr; }
+  .worksheet-section { padding: 16px; }
+  .worksheet-section > h2 { font-size: 14px; }
+  .worksheet-source-desktop, .worksheet-country-table-wrap { display: none; }
+  .worksheet-source-cards, .worksheet-country-cards { display: grid; gap: 10px; }
+  .worksheet-source-card, .worksheet-country-card { min-width: 0; padding: 12px; border: 1px solid #e0e8f1; border-radius: 9px; background: #fcfdff; }
+  .worksheet-source-card h3, .worksheet-country-card h3 { margin: 0 0 8px; color: #174c9b; font-size: 13px; }
+  .worksheet-source-card dl, .worksheet-country-card dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .worksheet-source-card dl > div, .worksheet-country-card dl > div { min-width: 0; padding: 7px; border-radius: 7px; background: #f4f7fb; }
+  .worksheet-source-card dt, .worksheet-country-card dt { margin-bottom: 4px; color: #526b83; font-size: 11px; }
+  .worksheet-source-card dd, .worksheet-country-card dd { margin: 0; color: #173b60; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .worksheet-summary-table th, .worksheet-summary-table td { padding: 9px 7px; }
+  .worksheet-summary-table th { width: 65%; font-size: 11px; }
+  .worksheet-summary-table td { font-size: 13px; }
+  .worksheet-total-value { align-items: start; flex-direction: column; gap: 3px; }
+  .worksheet-source-meta { display: grid; gap: 3px; }
+  .worksheet-source-totals-mobile { margin-top: 8px; padding: 11px; display: grid; grid-template-columns: 1fr; gap: 6px; border: 1px solid #cbd8e6; border-radius: 8px; background: #f7f9fc; color: #304b67; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .worksheet-source-totals-mobile strong { grid-column: 1 / -1; }
+  .worksheet-paid-tax-total { display: none; }
   .result-source-title { flex-direction: column; }
   .result-actions { align-items: stretch; flex-direction: column-reverse; }
   .result-actions .button { width: 100%; }
@@ -358,6 +450,7 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .summary-strip > div:last-child { grid-column: auto; }
   .result-facts { grid-template-columns: 1fr; }
   .filter-panel { grid-template-columns: 1fr; }
+  .officer-worklist-filters { grid-template-columns: 1fr; }
   .filter-panel .button { grid-column: auto; }
 }
 
@@ -380,6 +473,29 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .report-source-grid { grid-template-columns: repeat(3, 1fr); }
   .report-summary-grid { grid-template-columns: repeat(4,1fr); }
   .report-source > p, .report-list, .report-line small { overflow-wrap: anywhere; }
+  .worksheet-source-cards, .worksheet-country-cards { display: none !important; }
+  .worksheet-source-desktop, .worksheet-country-table-wrap { display: block !important; overflow: visible; }
+  .worksheet-source-table, .worksheet-country-table { width: 100%; table-layout: fixed; font-size: 7pt; }
+  .worksheet-source-table th, .worksheet-source-table td, .worksheet-country-table th, .worksheet-country-table td { padding: 4px 3px; white-space: normal; overflow-wrap: anywhere; }
+  .worksheet-source-table thead th, .worksheet-country-table thead th { font-size: 7.5pt; }
+  .worksheet-source-values td { font-size: 8pt; }
+  .worksheet-source-table tfoot th, .worksheet-source-table tfoot td, .worksheet-country-table tfoot th, .worksheet-country-table tfoot td { font-size: 7.5pt; }
+  .worksheet-source-table .worksheet-source-details td { padding-top: 3px; }
+  .worksheet-source-meta, .worksheet-original-currency { font-size: 7pt; }
+  .worksheet-source-totals-mobile, .worksheet-country-total { display: none !important; }
+  .worksheet-summary-table th, .worksheet-summary-table td { padding: 5px 5px; }
+  .print-report .worksheet-section { margin-bottom: 8px; padding: 12px; break-inside: avoid; page-break-inside: avoid; }
+  .print-report .worksheet-section:nth-of-type(2) { break-before: page; page-break-before: always; }
+  .print-report .worksheet-section > h2 { margin-bottom: 7px; }
+  .worksheet-section > h2, .worksheet-source-name, .worksheet-source-values, .worksheet-country-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .worksheet-evidence-group { margin-top: 7px; }
+  .worksheet-evidence-group h3 { margin-bottom: 3px; }
+  .empty-evidence { margin-top: 2px; font-size: 7pt; }
+  .report-footer { margin-top: 8px; padding-top: 6px; break-inside: avoid; page-break-inside: avoid; font-size: 7pt; }
+  .worksheet-formulas[open] { break-inside: auto; }
+  .worksheet-formulas { font-size: 8pt; }
+  .worksheet-formulas summary { display: none !important; }
+  .worksheet-formula-print-heading { display: block; }
   a { color: #173b60 !important; text-decoration: none; }
   .draft-watermark, .submitted-report-label { border: 1px solid #aab7c7; background: #f3f6fa !important; color: #344b63 !important; }
 }

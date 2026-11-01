@@ -73,3 +73,18 @@ export function incomeTypeLabel(source: Pick<ForeignIncomeSourceDraft, "incomeTy
   if (source.incomeType === "other") return "ประเภทเงินได้อื่น — ยังไม่รองรับ";
   return "ยังไม่ระบุประเภทเงินได้";
 }
+
+const KNOWN_EXAMPLE_NOTES: Readonly<Record<string, string>> = {
+  "Deliberately synthetic quote to demonstrate conversion per 100 units; not a historical market rate.": "อัตราสมมติในตัวอย่างเพื่อสาธิตการแปลงต่อ 100 หน่วย ไม่ใช่อัตราตลาดย้อนหลัง",
+  "Prepared educational slide example; supplied L is not inferred from J.": "ตัวอย่างระบุจำนวน (L) เป็นภาษีไทยก่อนเครดิตภาษีต่างประเทศหลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง โดยไม่ได้คำนวณจากเงินได้ในประเทศเพียงรายการเดียว",
+  "Prepared allocation example; L is supplied.": "ตัวอย่างการจัดสรรนี้กำหนด (L) เป็นจำนวนที่ระบุไว้เพื่อสาธิตสูตร ไม่ใช่การคำนวณภาษีเงินได้บุคคลธรรมดาไทยครบถ้วน",
+  "Assumed eligible solely for this mathematical educational example.": "ผู้ใช้ยืนยันจำนวนภาษีที่นำไปคำนวณเพื่อใช้ในตัวอย่างการศึกษาเท่านั้น",
+  "Manual-derived D/E row; eligible tax is still an explicit educational assumption.": "ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ",
+  "No remittance in the educational example; D remains positive so the allocation denominator is defined.": "ตัวอย่างนี้ไม่มีการนำเงินเข้า แต่ (D) ยังมีจำนวนเงินได้เพื่อแสดงวิธีคำนวณสัดส่วน",
+};
+
+/** Localizes known fixture notes while leaving arbitrary taxpayer-entered text unchanged. */
+export function displayKnownExampleNote(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return KNOWN_EXAMPLE_NOTES[value] ?? value;
+}

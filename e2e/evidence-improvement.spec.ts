@@ -78,7 +78,7 @@ test("demo evidence previews and downloads the original file after reload and of
   }
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
 
   await page.goto("/demo");
@@ -122,7 +122,7 @@ test("demo submission rejects stale evidence metadata after browser file bytes a
     })));
   })()`);
 
-  await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();
+  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByRole("alert")).toContainText("ไฟล์ต้นฉบับบางรายการไม่มีอยู่ในอุปกรณ์นี้");
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toHaveCount(0);
 

@@ -1,13 +1,59 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
+import { countryLabel, displayKnownExampleNote, incomeTypeLabel } from "../../../shared/labels.js";
 import { formatDate, formatMoney } from "../../components/money.js";
 import { PageHeading } from "../../components/SiteFrame.js";
-import { EvidenceFileActions } from "../../components/EvidenceFileActions.js";
+import { Worksheet } from "../../components/Worksheet.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoAttachments, listDemoCases } from "../../data/demoRepository.js";
 
 type Mode = "demo" | "hosted";
+
+const AUDIT_EVENT_LABELS: Readonly<Record<string, string>> = {
+  "เปิดดูกรณี": "เจ้าหน้าที่เปิดดูกรณี",
+  preview_created: "บันทึกผลคำนวณตัวอย่าง",
+  evidence_upload_reserved: "เริ่มแนบหลักฐาน",
+  evidence_upload_failed: "แนบหลักฐานไม่สำเร็จ",
+  evidence_uploaded: "แนบหลักฐานแล้ว",
+  evidence_deleted: "ลบหลักฐานก่อนส่ง",
+  case_submitted: "ส่งกรณีเข้าตรวจสอบ",
+  officer_queue_accessed: "เจ้าหน้าที่เปิดคิวตรวจสอบ",
+  officer_case_accessed: "เจ้าหน้าที่เปิดดูกรณี",
+  officer_snapshot_accessed: "เจ้าหน้าที่เปิดดูผลที่ส่งแล้ว",
+  officer_evidence_accessed: "เจ้าหน้าที่เปิดดูหลักฐาน",
+};
+
+function auditEventLabel(event: string): string {
+  return AUDIT_EVENT_LABELS[event] ?? "เหตุการณ์อื่น";
+}
+
+function reviewPoints(snapshot: CalculationSnapshot): Array<{ title: string; detail: string }> {
+  const points: Array<{ title: string; detail: string }> = [];
+  const thaiTax = snapshot.inputs.thaiTax;
+  if (thaiTax.amountBeforeFtc !== null || thaiTax.provenance) {
+    points.push({
+      title: "ข้อมูลภาษีไทยก่อนเครดิต (L)",
+      detail: `ผู้ใช้ระบุ ${formatMoney(thaiTax.amountBeforeFtc)} บาท · ที่มา: ${displayKnownExampleNote(thaiTax.provenance) ?? "ไม่ได้ระบุ"} ตรวจเทียบจำนวนและที่มากับเอกสารประกอบ`,
+    });
+  }
+  for (const source of snapshot.inputs.sources) {
+    const sourceName = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
+    if (source.fxReference?.rateType === "manual" || source.fxReference?.sourceKind === "user_supplied") {
+      points.push({
+        title: `อัตราแลกเปลี่ยนที่ผู้ใช้ระบุ — ${sourceName}`,
+        detail: "ตรวจสอบอัตรา วันที่ใช้ และเอกสารอ้างอิงที่ผู้ใช้ระบุ",
+      });
+    }
+    if (source.eligibilityRationale) {
+      points.push({
+        title: `ข้อมูลภาษีต่างประเทศ — ${sourceName}`,
+        detail: `เหตุผลที่ผู้ใช้ให้ไว้: ${displayKnownExampleNote(source.eligibilityRationale)} เปรียบเทียบจำนวนและเอกสารที่แนบกับข้อเท็จจริงของรายการนี้`,
+      });
+    }
+  }
+  return points;
+}
 
 export function OfficerQueuePage({ mode }: { mode: Mode }) {
   const [records, setRecords] = useState<FtcCaseRecord[]>([]);
@@ -80,20 +126,22 @@ export function OfficerCasePage({ mode }: { mode: Mode }) {
   }, [id, mode]);
 
   if (busy) return <div className="loading-card" role="status">กำลังโหลดกรณีที่ได้รับมอบหมาย…</div>;
-  if (problem || !record || !snapshot) return <section className="card"><h1>เปิดกรณีไม่ได้</h1><div className="alert alert-error" role="alert">{problem ?? "ไม่พบข้อมูล"}</div><a className="button button-secondary" href={mode === "demo" ? "/demo/officer" : "/officer"}>กลับคิวเจ้าหน้าที่</a></section>;
-  const result = snapshot.result;
+  if (problem || !record || !snapshot) return <section className="card"><h1>เปิดกรณีไม่ได้</h1><div className="alert alert-error" role="alert">{problem ?? "ไม่พบข้อมูล"}</div><a className="button button-secondary" href={mode === "demo" ? "/demo/officer" : "/officer"}>กลับไปหน้ารายการ</a></section>;
   const root = mode === "demo" ? "/demo" : "";
+  const points = reviewPoints(snapshot);
   return <>
-    <PageHeading eyebrow={`ASSIGNED CASE · ${id.slice(-8).toUpperCase()}`} title="ตรวจทานกรณีที่ส่งแล้ว">
-      ข้อมูลและผลคำนวณเป็น snapshot ที่ส่งมา เจ้าหน้าที่เปิดดูได้โดยไม่แก้ไขตัวเลขต้นฉบับ
+    <PageHeading eyebrow="กรณีที่ได้รับมอบหมาย" title="ตรวจทานกรณีที่ส่งแล้ว">
+      ข้อมูลและผลคำนวณที่ส่งมาแสดงแบบอ่านอย่างเดียว เจ้าหน้าที่เปิดดูได้โดยไม่แก้ไขตัวเลขต้นฉบับ
     </PageHeading>
-    {mode === "demo" && <div className="alert alert-info">ข้อมูลจำลอง · การเปิดหน้านี้แสดงเหตุการณ์เข้าถึงใน audit trail จำลอง</div>}
-    <div className="submitted-banner"><div><span className="status-badge status-submitted">ส่งแล้ว · อ่านอย่างเดียว</span><p>ส่งเมื่อ {formatDate(record.submittedAt)} · เลขอ้างอิงตัวอย่าง {record.id.slice(-8).toUpperCase()}</p></div><a className="button button-secondary" href={`${root}/reports/${snapshot.id}`}>เปิดรายงานเดียวกัน</a></div>
-    <section className="result-total card"><div><p className="eyebrow">FROZEN SUBMISSION SNAPSHOT</p><h2>เครดิตที่ใช้ได้ตามสมมติฐาน</h2><p>นโยบาย {result.policyVersion} · รุ่นข้อมูล {snapshot.revision}</p></div><strong className="total-amount">{formatMoney(result.allowableCredit)} <small>บาท</small></strong></section>
-    <section className="content-section card breakdown-section"><div className="section-heading"><div><p className="eyebrow">COUNTRY BREAKDOWN</p><h2>ผลคำนวณแยกตามประเทศ</h2></div></div><div className="table-scroll"><table className="data-table"><thead><tr><th>ประเทศ</th><th>เงินได้นำเข้า N</th><th>ภาษีจัดสรร O</th><th>เพดาน P</th><th>เครดิต Q</th></tr></thead><tbody>{result.countries.map((country) => <tr key={country.countryCode}><th scope="row">{country.countryName}</th><td>{formatMoney(country.remittedIncome)}</td><td>{formatMoney(country.attributableForeignTax)}</td><td>{formatMoney(country.thaiTaxLimit)}</td><td>{formatMoney(country.displayedAllowableCredit)}</td></tr>)}</tbody></table></div></section>
-    <section className="content-section card breakdown-section"><div className="section-heading"><div><p className="eyebrow">ORIGINAL SUBMISSION</p><h2>ข้อมูลที่ผู้เสียภาษีส่ง</h2></div></div><div className="officer-source-list">{snapshot.inputs.sources.map((source, index) => <article className="officer-source" key={source.id ?? index}><h3>{source.countryName} · {source.incomeType} {source.subtype && `(${source.subtype})`}</h3><div className="amount-grid"><div><dt>D · เงินได้ต่างประเทศ</dt><dd>{formatMoney(source.grossIncomeAmount)} {source.currencyCode}</dd></div><div><dt>ภาษีที่ชำระจริง</dt><dd>{formatMoney(source.actualForeignTaxPaid)} {source.currencyCode}</dd></div><div><dt>E · สมมติฐานภาษีเข้าเกณฑ์</dt><dd>{formatMoney(source.eligibleForeignTax)} {source.currencyCode}</dd></div><div><dt>F · นำเข้าไทย</dt><dd>{formatMoney(source.remittedIncomeAmount)} {source.currencyCode}</dd></div><div><dt>วันพำนัก</dt><dd>{source.residenceDaysInEarnedYear ?? "—"} วัน</dd></div><div><dt>วันที่เกิดเงินได้ / นำเข้า</dt><dd>{formatDate(source.earnedDate)} / {formatDate(source.remittance?.remittanceDate)}</dd></div></div><p className="assumption-note">เหตุผลและสมมติฐาน E: {source.eligibilityRationale ?? "—"}</p>{source.fxReference && <p className="fx-provenance">FX: {source.fxReference.thbRate} THB / {source.fxReference.baseUnits} {source.fxReference.currencyCode} · {source.fxReference.sourceLabel} · {formatDate(source.fxReference.effectiveDate)}</p>}</article>)}</div><div className="thai-tax-row"><strong>J · เงินได้ในประเทศ:</strong> {formatMoney(snapshot.inputs.domesticAssessableIncome)} บาท · <strong>L · ภาษีไทยก่อน FTC:</strong> {formatMoney(snapshot.inputs.thaiTax.amountBeforeFtc)} บาท · {snapshot.inputs.thaiTax.provenance}</div></section>
-    <section className="content-section card breakdown-section"><div className="section-heading"><div><p className="eyebrow">EVIDENCE</p><h2>เอกสารที่แนบมา</h2></div></div><ul className="file-list">{attachments.map((file) => <li key={file.id}><span className="file-icon" aria-hidden="true">{file.mediaType.includes("pdf") ? "PDF" : "IMG"}</span><span className="file-name"><strong>{file.displayName}</strong><small>{file.kind.replaceAll("_", " ")} · {file.mediaType} · {formatMoney(String(file.byteSize), 0)} bytes · {file.status === "ready" ? "พร้อมใช้งาน" : file.status}</small></span><EvidenceFileActions file={file} mode={mode} /></li>)}</ul>{attachments.length === 0 && <p className="empty-evidence">ไม่มีไฟล์แนบ</p>}</section>
-    <section className="content-section card breakdown-section"><div className="section-heading"><div><p className="eyebrow">ACCESS HISTORY</p><h2>ประวัติการเข้าถึง</h2></div></div><div className="table-scroll"><table className="data-table"><thead><tr><th>เหตุการณ์</th><th>ผู้ใช้</th><th>วันและเวลา</th></tr></thead><tbody>{audit.map((event, index) => <tr key={`${event.event}-${index}`}><td>{event.event}</td><td>{event.actor}</td><td>{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(event.occurredAt))}</td></tr>)}</tbody></table></div></section>
-    <div className="result-actions"><a className="button button-quiet" href={mode === "demo" ? "/demo/officer" : "/officer"}>กลับคิว</a><a className="button button-primary" href={`${root}/reports/${snapshot.id}`}>ดูรายงานที่พิมพ์ได้</a></div>
+    {mode === "demo" && <div className="alert alert-info">ข้อมูลจำลอง · การเปิดหน้านี้แสดงเหตุการณ์ในประวัติการเข้าถึงจำลอง</div>}
+    <div className="submitted-banner"><div><span className="status-badge status-submitted">ส่งแล้ว · อ่านอย่างเดียว</span><p>ส่งเมื่อ {formatDate(record.submittedAt)}</p></div><a className="button button-secondary" href={`${root}/reports/${snapshot.id}`}>ดูรายงาน</a></div>
+    <Worksheet snapshot={snapshot} attachments={attachments} evidenceMode={mode} />
+    <section className="content-section card review-points" aria-labelledby="review-points-heading">
+      <h2 id="review-points-heading">จุดที่ควรทบทวน</h2>
+      <p>รายการนี้ช่วยจัดหัวข้อสำหรับตรวจข้อมูลและเอกสาร ไม่ใช่ผลอนุมัติหรือการวินิจฉัยสิทธิ</p>
+      {points.length > 0 ? <ul>{points.map((point, index) => <li key={`${point.title}-${index}`}><strong>{point.title}</strong><span>{point.detail}</span></li>)}</ul> : <p>ไม่มีหัวข้อเพิ่มเติมจากข้อมูลที่บันทึกไว้</p>}
+    </section>
+    <section className="content-section card breakdown-section"><div className="section-heading"><div><h2>ประวัติการเข้าถึง</h2></div></div><div className="table-scroll"><table className="data-table"><thead><tr><th>เหตุการณ์</th><th>ผู้ใช้</th><th>วันและเวลา</th></tr></thead><tbody>{audit.map((event, index) => <tr key={`${event.event}-${index}`}><td>{auditEventLabel(event.event)}</td><td>{event.actor}</td><td>{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(event.occurredAt))}</td></tr>)}</tbody></table></div></section>
+    <div className="result-actions"><a className="button button-quiet" href={mode === "demo" ? "/demo/officer" : "/officer"}>กลับไปหน้ารายการ</a></div>
   </>;
 }
