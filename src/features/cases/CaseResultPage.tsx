@@ -5,7 +5,7 @@ import { validateSubmission } from "../../../shared/calculator.js";
 import { formatDate, formatMoney } from "../../components/money.js";
 import { PageHeading } from "../../components/SiteFrame.js";
 import { ApiClientError, apiFailureContext, apiFailureMessage, hostedApi } from "../../data/api.js";
-import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview, saveDemoSnapshot, submitDemoCase } from "../../data/demoRepository.js";
+import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview, submitDemoCase } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 
 type Mode = "demo" | "hosted";
@@ -85,8 +85,8 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
           attachments,
         });
         if (messages.length) { setSubmitProblems(messages.map((item) => item.message)); return; }
-        const frozenSnapshot = saveDemoSnapshot({ ...snapshot, id: `demo-submitted-${crypto.randomUUID()}`, kind: "submitted", createdAt: new Date().toISOString() });
-        const submitted = submitDemoCase(record.id, frozenSnapshot);
+        const frozenSnapshot: CalculationSnapshot = { ...snapshot, id: `demo-submitted-${crypto.randomUUID()}`, kind: "submitted", createdAt: new Date().toISOString() };
+        const submitted = await submitDemoCase(record.id, frozenSnapshot);
         setRecord(submitted);
         setSnapshot(frozenSnapshot);
         setConfirmedSubmitted(true);

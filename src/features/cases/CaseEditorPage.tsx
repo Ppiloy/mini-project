@@ -6,7 +6,7 @@ import { draftSchema } from "../../../shared/draft.js";
 import { DEMO_POLICY } from "../../../shared/policy.js";
 import { createCalculationSnapshot } from "../../../shared/snapshot.js";
 import { ApiClientError, apiFailureMessage, hostedApi } from "../../data/api.js";
-import { addDemoAttachment, deleteDemoAttachment, findDemoCase, listDemoAttachments, saveDemoDraft, saveDemoSnapshot } from "../../data/demoRepository.js";
+import { addDemoAttachment, deleteDemoAttachment, findDemoCase, getDemoAttachmentFile, listDemoAttachments, saveDemoDraft, saveDemoSnapshot } from "../../data/demoRepository.js";
 import { hostedPendingDraftKey, useAppSession } from "../../app/App.js";
 import { PageHeading } from "../../components/SiteFrame.js";
 import { StepFive, StepFour, StepOne, StepThree, StepTwo } from "./FormSteps.js";
@@ -213,7 +213,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     try {
       let attachment: AttachmentMetadata;
       if (mode === "demo") {
-        attachment = addDemoAttachment(record.id, operation.sourceId, operation.kind, operation.file);
+        attachment = await addDemoAttachment(record.id, operation.sourceId, operation.kind, operation.file);
         setAttachments((all) => [attachment, ...all]);
         const latest = findDemoCase(record.id, "taxpayer");
         if (latest) { setRecord(latest); setDraft(structuredClone(latest.draft)); setSavedJson(JSON.stringify(latest.draft)); }
@@ -285,7 +285,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     try {
       const saved = await saveDraft();
       if (!saved) return;
-      if (mode === "demo") deleteDemoAttachment(attachmentId);
+      if (mode === "demo") await deleteDemoAttachment(attachmentId);
       else {
         if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
         await hostedApi.removeEvidence(attachmentId, saved.draft.revision, csrfToken);
@@ -308,15 +308,16 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       let blob: Blob;
       let filename = attachment.displayName;
       if (mode === "demo") {
-        blob = new Blob([`ไฟล์นี้เป็นรายการจำลองในระบบต้นแบบเพื่อการศึกษา\nชื่อไฟล์ต้นฉบับ: ${attachment.displayName}\nไม่มีการเก็บหรือส่งต่อเนื้อหาไฟล์จริงในโหมดสาธิต`], { type: "text/plain;charset=utf-8" });
-        filename = `${attachment.displayName}.demo.txt`;
+        const stored = await getDemoAttachmentFile(attachment.id);
+        if (!stored) throw new Error("ไฟล์ต้นฉบับไม่พร้อมใช้งานในอุปกรณ์นี้ กรุณาแนบไฟล์อีกครั้ง");
+        blob = stored.type === attachment.mediaType ? stored : stored.slice(0, stored.size, attachment.mediaType);
       } else blob = await hostedApi.downloadEvidence(attachment.id);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
       anchor.download = filename;
       anchor.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) { setProblem(apiFailureMessage(error, "ดาวน์โหลดไฟล์ไม่สำเร็จ")); }
   };
 

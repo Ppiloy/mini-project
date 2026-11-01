@@ -36,7 +36,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
     await page.getByLabel(name).setInputFiles(pdf);
     await expect(page.getByText("พร้อมใช้งาน").first()).toBeVisible();
   }
-  await expect(page.getByText("ตัวอย่างหลักฐาน.pdf")).toHaveCount(4);
+  await expect(page.getByText("ตัวอย่างหลักฐาน.pdf", { exact: true })).toHaveCount(4);
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
 
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
@@ -152,7 +152,7 @@ test("zero eligible tax permits one combined source file with income and remitta
   await expect(page.getByRole("checkbox", { name: "หลักฐานภาษีที่ชำระในต่างประเทศ" })).toHaveCount(0);
 
   await page.getByLabel("แนบ: หลักฐานรวม / เอกสารอื่น").setInputFiles({ name: "รายงานรวม.pdf", mimeType: "application/pdf", buffer: Buffer.from("combined source evidence") });
-  await expect(page.getByText("รายงานรวม.pdf")).toBeVisible();
+  await expect(page.getByText("รายงานรวม.pdf", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   await page.getByRole("button", { name: "ส่งเข้าคิวตรวจสอบในระบบต้นแบบ" }).click();

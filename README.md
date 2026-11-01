@@ -2,7 +2,7 @@
 
 This is an educational prototype for recording foreign income and remittances, calculating a bounded example credit, attaching evidence, and reviewing an unchanged result. It does not determine legal eligibility or prepare a tax filing. Use fictional information only.
 
-The browser-only fixture mode at `/demo` is the presentation fallback. Its records are local to the browser and its file downloads are labelled simulations; it is separate from the hosted database, queue, and evidence store.
+The browser-only example mode at `/demo` is the presentation fallback. It stores records in localStorage and original evidence files in IndexedDB within that browser profile. Files can be previewed and downloaded there; this does not share them across devices or profiles. The hosted database, officer queue, and authorized evidence store remain separate.
 
 ## Start and verify
 

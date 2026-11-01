@@ -5,6 +5,8 @@ import type {
   FtcCaseDraft,
   FtcCaseRecord,
 } from "../../shared/contracts.js";
+import { withCanonicalThbAmounts } from "../../shared/calculator.js";
+import { deleteDemoEvidenceFiles, readDemoEvidenceFile, storeDemoEvidenceFile } from "./demoEvidenceStore.js";
 
 const STORE_KEY = "ftc.prototype.fixture.v1";
 
@@ -14,9 +16,10 @@ interface DemoStore {
   cases: FtcCaseRecord[];
   snapshots: CalculationSnapshot[];
   attachments: AttachmentMetadata[];
+  storedEvidenceIds: string[];
 }
 
-const blankStore = (): DemoStore => ({ cases: [], snapshots: [], attachments: [] });
+const blankStore = (): DemoStore => ({ cases: [], snapshots: [], attachments: [], storedEvidenceIds: [] });
 
 function readStore(): DemoStore {
   try {
@@ -27,6 +30,9 @@ function readStore(): DemoStore {
       cases: Array.isArray(parsed.cases) ? parsed.cases : [],
       snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
       attachments: Array.isArray(parsed.attachments) ? parsed.attachments : [],
+      storedEvidenceIds: Array.isArray(parsed.storedEvidenceIds)
+        ? parsed.storedEvidenceIds.filter((id): id is string => typeof id === "string")
+        : [],
     };
   } catch {
     return blankStore();
@@ -61,6 +67,31 @@ export function listDemoCases(persona: DemoPersona): FtcCaseRecord[] {
 
 export function findDemoCase(id: string, persona: DemoPersona): FtcCaseRecord | undefined {
   return listDemoCases(persona).find((record) => record.id === id);
+}
+
+async function evidenceFingerprint(file: File): Promise<string> {
+  if (!crypto.subtle) return Promise.reject(new Error("ไม่สามารถตรวจสอบไฟล์ในเบราว์เซอร์นี้ได้"));
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function assertDemoAttachmentAllowed(store: DemoStore, caseId: string, sourceId: string | null, file: File): FtcCaseRecord {
+  const record = store.cases.find((item) => item.id === caseId && item.status === "draft");
+  if (!record) throw new Error("ไม่พบร่างที่แนบไฟล์ได้ในสาธิตนี้");
+  if (sourceId !== null && !record.draft.sources.some((source) => source.id === sourceId)) {
+    throw new Error("ไม่พบแหล่งเงินได้ที่เลือก กรุณาบันทึกร่างล่าสุดก่อนแนบไฟล์");
+  }
+  if (!["application/pdf", "image/jpeg", "image/png"].includes(file.type)) {
+    throw new Error("รองรับเฉพาะไฟล์ PDF, JPEG หรือ PNG");
+  }
+  if (file.size <= 0 || file.size > 3 * 1024 * 1024) throw new Error("ไฟล์ต้องมีขนาดมากกว่า 0 และไม่เกิน 3 MiB");
+  const currentFiles = store.attachments.filter((item) => item.caseId === caseId && item.status !== "deleted");
+  const sameSource = currentFiles.filter((item) => item.sourceId === sourceId);
+  if (sameSource.length >= 5) throw new Error("แนบไฟล์ต่อรายการได้ไม่เกิน 5 ไฟล์");
+  if (currentFiles.length >= 20 || currentFiles.reduce((sum, item) => sum + item.byteSize, 0) + file.size > 30 * 1024 * 1024) {
+    throw new Error("ไฟล์เกินโควตาของกรณี: สูงสุด 20 ไฟล์และรวม 30 MiB");
+  }
+  return record;
 }
 
 export function createDemoCase(): FtcCaseRecord {
@@ -130,6 +161,12 @@ export function saveDemoDraft(id: string, draft: FtcCaseDraft): FtcCaseRecord {
 
 export function saveDemoSnapshot(snapshot: CalculationSnapshot): CalculationSnapshot {
   const store = readStore();
+  const record = store.cases.find((item) => item.id === snapshot.caseId);
+  if (!record || record.status !== "draft") throw new Error("ไม่สามารถเปลี่ยนผลของกรณีที่ส่งแล้วได้");
+  if (snapshot.kind !== "preview" || snapshot.revision !== record.draft.revision
+    || JSON.stringify(snapshot.inputs) !== JSON.stringify(withCanonicalThbAmounts(record.draft))) {
+    throw new Error("ผลคำนวณไม่ตรงกับร่างที่บันทึกไว้");
+  }
   const old = store.snapshots.findIndex((item) => item.caseId === snapshot.caseId && item.revision === snapshot.revision && item.kind === snapshot.kind);
   if (old >= 0) store.snapshots.splice(old, 1);
   store.snapshots.unshift(snapshot);
@@ -145,7 +182,10 @@ export function latestDemoPreview(caseId: string, revision: number): Calculation
   return readStore().snapshots.find((item) => item.caseId === caseId && item.kind === "preview" && item.revision === revision);
 }
 
-export function addDemoAttachment(caseId: string, sourceId: string | null, kind: AttachmentMetadata["kind"], file: File): AttachmentMetadata {
+export async function addDemoAttachment(caseId: string, sourceId: string | null, kind: AttachmentMetadata["kind"], file: File): Promise<AttachmentMetadata> {
+  const beforeSave = readStore();
+  assertDemoAttachmentAllowed(beforeSave, caseId, sourceId, file);
+  const sha256 = await evidenceFingerprint(file);
   const attachment: AttachmentMetadata = {
     id: `demo-evidence-${crypto.randomUUID()}`,
     caseId,
@@ -154,33 +194,110 @@ export function addDemoAttachment(caseId: string, sourceId: string | null, kind:
     displayName: file.name,
     mediaType: file.type || "application/octet-stream",
     byteSize: file.size,
-    sha256: "จำลองในโหมดสาธิต",
+    sha256,
     status: "ready",
     createdAt: new Date().toISOString(),
   };
+  await storeDemoEvidenceFile(attachment.id, file);
   const store = readStore();
+  try {
+    assertDemoAttachmentAllowed(store, caseId, sourceId, file);
+  } catch (error) {
+    await deleteDemoEvidenceFiles([attachment.id]);
+    throw error;
+  }
   store.attachments.unshift(attachment);
+  store.storedEvidenceIds = [...new Set([...store.storedEvidenceIds, attachment.id])];
   touchCase(store, caseId);
-  writeStore(store);
+  try {
+    writeStore(store);
+  } catch (error) {
+    await deleteDemoEvidenceFiles([attachment.id]).catch(() => undefined);
+    throw error;
+  }
   return attachment;
 }
 
-export function listDemoAttachments(caseId: string): AttachmentMetadata[] {
-  return readStore().attachments.filter((item) => item.caseId === caseId && item.status !== "deleted");
+export async function getDemoAttachmentFile(id: string): Promise<Blob | null> {
+  try {
+    const blob = await readDemoEvidenceFile(id);
+    if (!blob) markDemoEvidenceUnavailable(id);
+    return blob;
+  } catch {
+    markDemoEvidenceUnavailable(id);
+    return null;
+  }
 }
 
-export function deleteDemoAttachment(id: string): void {
+export function listDemoAttachments(caseId: string): AttachmentMetadata[] {
+  const store = readStore();
+  const storedEvidenceIds = new Set(store.storedEvidenceIds);
+  return store.attachments
+    .filter((item) => item.caseId === caseId && item.status !== "deleted")
+    .map((item) => item.status === "ready" && !storedEvidenceIds.has(item.id) ? { ...item, status: "failed" } : item);
+}
+
+function markDemoEvidenceUnavailable(id: string): void {
+  const store = readStore();
+  const attachment = store.attachments.find((item) => item.id === id && item.status !== "failed");
+  if (!attachment || !store.cases.some((record) => record.id === attachment.caseId && record.status === "draft")) return;
+  store.attachments = store.attachments.map((item) => item.id === id ? { ...item, status: "failed" } : item);
+  store.storedEvidenceIds = store.storedEvidenceIds.filter((value) => value !== id);
+  try { writeStore(store); } catch { /* The caller still reports the missing file without claiming it is usable. */ }
+}
+
+export async function deleteDemoAttachment(id: string): Promise<void> {
   const store = readStore();
   const attachment = store.attachments.find((item) => item.id === id);
-  store.attachments = store.attachments.filter((item) => item.id !== id);
-  if (attachment) touchCase(store, attachment.caseId);
-  writeStore(store);
+  if (attachment && !store.cases.some((record) => record.id === attachment.caseId && record.status === "draft")) {
+    throw new Error("ไฟล์ของกรณีที่ส่งแล้วไม่สามารถลบหรือเปลี่ยนได้");
+  }
+  const next = structuredClone(store);
+  next.attachments = next.attachments.filter((item) => item.id !== id);
+  next.storedEvidenceIds = next.storedEvidenceIds.filter((value) => value !== id);
+  if (attachment) touchCase(next, attachment.caseId);
+  writeStore(next);
+  try {
+    await deleteDemoEvidenceFiles([id]);
+  } catch (error) {
+    writeStore(store);
+    throw error;
+  }
 }
 
-export function submitDemoCase(id: string, snapshot: CalculationSnapshot): FtcCaseRecord {
-  const store = readStore();
-  const index = store.cases.findIndex((record) => record.id === id && record.status === "draft");
+export async function submitDemoCase(id: string, snapshot: CalculationSnapshot): Promise<FtcCaseRecord> {
+  let store = readStore();
+  let index = store.cases.findIndex((record) => record.id === id && record.status === "draft");
   if (index < 0) throw new Error("กรณีนี้ส่งแล้วหรือไม่อยู่ในคิวสาธิต");
+  const currentDraft = withCanonicalThbAmounts(store.cases[index]!.draft);
+  const currentPreview = store.snapshots.find((item) => item.caseId === id && item.kind === "preview" && item.revision === store.cases[index]!.draft.revision);
+  if (snapshot.kind !== "submitted" || snapshot.caseId !== id || snapshot.revision !== store.cases[index]!.draft.revision
+    || JSON.stringify(snapshot.inputs) !== JSON.stringify(currentDraft)
+    || !currentPreview || JSON.stringify(snapshot.result) !== JSON.stringify(currentPreview.result)
+    || JSON.stringify(snapshot.evidence) !== JSON.stringify(currentPreview.evidence)
+    || store.snapshots.some((item) => item.id === snapshot.id)) {
+    throw new Error("ผลส่งตรวจไม่ตรงกับฉบับคำนวณล่าสุด");
+  }
+  const missingEvidence = await Promise.all(snapshot.evidence.map(async (evidence) =>
+    await readDemoEvidenceFile(evidence.id).catch(() => null) ? null : evidence.id,
+  ));
+  const missingEvidenceIds = missingEvidence.filter((evidenceId): evidenceId is string => evidenceId !== null);
+  if (missingEvidenceIds.length > 0) {
+    store.attachments = store.attachments.map((item) => missingEvidenceIds.includes(item.id) ? { ...item, status: "failed" } : item);
+    store.storedEvidenceIds = store.storedEvidenceIds.filter((evidenceId) => !missingEvidenceIds.includes(evidenceId));
+    writeStore(store);
+    throw new Error("ไฟล์ต้นฉบับบางรายการไม่มีอยู่ในอุปกรณ์นี้ กรุณาแนบไฟล์เหล่านั้นอีกครั้งก่อนส่งตรวจ");
+  }
+  store = readStore();
+  index = store.cases.findIndex((record) => record.id === id && record.status === "draft");
+  const latestPreview = index < 0 ? null : store.snapshots.find((item) => item.caseId === id && item.kind === "preview" && item.revision === store.cases[index]!.draft.revision);
+  const latestDraft = index < 0 ? null : withCanonicalThbAmounts(store.cases[index]!.draft);
+  if (index < 0 || snapshot.revision !== store.cases[index]!.draft.revision
+    || !latestDraft || JSON.stringify(snapshot.inputs) !== JSON.stringify(latestDraft)
+    || !latestPreview || JSON.stringify(snapshot.result) !== JSON.stringify(latestPreview.result)
+    || JSON.stringify(snapshot.evidence) !== JSON.stringify(latestPreview.evidence)) {
+    throw new Error("ร่างหรือผลคำนวณเปลี่ยนไประหว่างส่ง กรุณาคำนวณใหม่ก่อนส่งตรวจ");
+  }
   const now = new Date().toISOString();
   const submitted: FtcCaseRecord = {
     ...store.cases[index]!,
@@ -191,8 +308,29 @@ export function submitDemoCase(id: string, snapshot: CalculationSnapshot): FtcCa
     updatedAt: now,
   };
   store.cases[index] = submitted;
+  store.snapshots.unshift(snapshot);
   writeStore(store);
   return submitted;
+}
+
+export async function deleteDemoCase(id: string, ownerId: string): Promise<boolean> {
+  const store = readStore();
+  const record = store.cases.find((item) => item.id === id);
+  if (!record || record.ownerId !== ownerId || record.status !== "draft") return false;
+  const evidenceIds = store.attachments.filter((item) => item.caseId === id).map((item) => item.id);
+  const next = structuredClone(store);
+  next.cases = next.cases.filter((item) => item.id !== id);
+  next.snapshots = next.snapshots.filter((item) => item.caseId !== id);
+  next.attachments = next.attachments.filter((item) => item.caseId !== id);
+  next.storedEvidenceIds = next.storedEvidenceIds.filter((evidenceId) => !evidenceIds.includes(evidenceId));
+  writeStore(next);
+  try {
+    await deleteDemoEvidenceFiles(evidenceIds);
+    return true;
+  } catch (error) {
+    writeStore(store);
+    throw error;
+  }
 }
 
 export function clearDemoState(): void {

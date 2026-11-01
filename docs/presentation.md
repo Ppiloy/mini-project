@@ -15,9 +15,9 @@ Keep the sourced slide discrepancy visible: the source presentation stated **143
 
 ## Offline fixture fallback
 
-Run `npm ci` and `npm run dev`, then open `http://localhost:5173/demo`. Select **ตัวอย่างเวียดนามและจีน · 143,544.30**, complete the guided fixture flow, save/calculate, and use the report link to print. The mode is intentionally labelled as browser-local simulation. It has no hosted queue, persistent shared database, or downloadable real evidence. For an already prepared static sample, use [the committed Thai draft report](../output/pdf/sample-thai-draft-report.pdf); preserve its exact draft label `ร่าง — ยังไม่ได้ส่ง`.
+Run `npm ci` and `npm run dev`, then open `http://localhost:5173/demo`. Select the Vietnam–China worked example, complete the guided flow, save/calculate, and use the report link to print. The mode stores example records and original uploaded evidence within this browser profile. It has no hosted queue or shared database. Use the same profile when switching between demo roles; another profile cannot retrieve these files. For an already prepared static sample, use [the committed Thai draft report](../output/pdf/sample-thai-draft-report.pdf); preserve its exact draft label `ร่าง — ยังไม่ได้ส่ง`.
 
-The preview-initialization document `server/fixtures/fictional-preview-evidence.pdf` is a separate one-page fictional PDF used for initialized preview downloads. It contains no real taxpayer or financial information. The fallback's simulated attachments remain names/statuses only.
+The preview-initialization document `server/fixtures/fictional-preview-evidence.pdf` is a separate one-page fictional PDF used for initialized preview downloads and evidence tests. It contains no real taxpayer or financial information. Older demo attachments that stored only names/statuses are shown as unavailable and must be uploaded again. Clearing browser storage also removes locally stored files.
 
 ## Speaking notes
 
