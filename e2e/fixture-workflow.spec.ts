@@ -72,7 +72,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.goto("/demo");
   await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
   await expect(page.getByRole("heading", { name: "คิวกรณีที่ส่งเข้าตรวจสอบ" })).toBeVisible();
-  await page.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).click();
+  await page.getByRole("link", { name: "ตรวจทาน" }).click();
   await expect(page.getByText("ส่งแล้ว · อ่านอย่างเดียว")).toBeVisible();
   await expect(page.getByRole("heading", { name: "ประวัติการเข้าถึง" })).toBeVisible();
   await page.getByRole("link", { name: "ดูรายงาน" }).click();

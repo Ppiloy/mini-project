@@ -83,7 +83,7 @@ test("demo evidence previews and downloads the original file after reload and of
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
-  await page.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).click();
+  await page.getByRole("link", { name: "ตรวจทาน" }).click();
   const officerRow = page.locator(".file-list li").filter({ hasText: name });
   await expect(officerRow).toBeVisible();
   await expect(officerRow.getByRole("button", { name: "ลบ", exact: true })).toHaveCount(0);

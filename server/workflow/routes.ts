@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Express, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
-import type { ApiUser, CalculationSnapshot, FtcCaseRecord, FrozenEvidenceReference } from "../../shared/contracts.js";
+import type { ApiUser, CalculationSnapshot, FtcCaseRecord, FrozenEvidenceReference, OfficerWorklistFilters, OfficerWorklistItem } from "../../shared/contracts.js";
 import { apiSuccessSchemas } from "../../shared/contracts.js";
 import { validateSubmission } from "../../shared/calculator.js";
 import { DEMO_POLICY } from "../../shared/policy.js";
+import { classifySubmittedSnapshot, officerReviewScope } from "../../shared/review.js";
 import { createCalculationSnapshot } from "../../shared/snapshot.js";
 import type { PgPoolLike, PgQueryable } from "../postgres.js";
 import { ApiFailure } from "../api-failure.js";
@@ -422,6 +423,40 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         return data;
       });
       sendApiSuccess(response, apiSuccessSchemas.submission, submitted, response.locals.requestId);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/api/officer/worklist", options.authenticated, async (request, response, next) => {
+    try {
+      const user = response.locals.user as ApiUser; const marker = options.environmentMarker(response);
+      if (user.role !== "officer") throw new ApiFailure(403,"forbidden","ไม่มีสิทธิ์เข้าถึงข้อมูลเจ้าหน้าที่");
+      const status = request.query.status;
+      const reviewPoints = request.query.reviewPoints;
+      if (status !== undefined && status !== "all" && status !== "awaiting_review") failInput("ตัวกรองสถานะไม่ถูกต้อง");
+      if (reviewPoints !== undefined && reviewPoints !== "all" && reviewPoints !== "with" && reviewPoints !== "without") failInput("ตัวกรองจุดตรวจไม่ถูกต้อง");
+      if (Object.keys(request.query).some((key) => key !== "status" && key !== "reviewPoints")) failInput("ตัวกรองไม่ถูกต้อง");
+      const filters: OfficerWorklistFilters = { status: status as OfficerWorklistFilters["status"], reviewPoints: reviewPoints as OfficerWorklistFilters["reviewPoints"] };
+      const snapshots = await inTransaction(options.pool,async (client) => {
+        const rows = await client.query<SnapshotRow & { submitted_at: Date | string }>(
+          `SELECT snapshot.*,c.submitted_at FROM ftc_cases c
+           JOIN officer_case_assignments assignment ON assignment.case_id=c.id AND assignment.officer_id=$1 AND assignment.active
+           JOIN calculation_snapshots snapshot ON snapshot.case_id=c.id AND snapshot.id=c.submitted_snapshot_id AND snapshot.kind='submitted'
+           WHERE c.assigned_officer_id=$1 AND c.status='submitted' AND c.environment_marker_id=$2
+           ORDER BY snapshot.created_at,c.id FOR UPDATE OF c`, [user.id,marker.id]);
+        for (const snapshot of rows.rows) await appendAudit(client,user.id,snapshot.case_id,"officer_queue_accessed",snapshot.id);
+        return rows.rows;
+      });
+      const cases: OfficerWorklistItem[] = snapshots.map((row) => {
+        const snapshot = snapshotRecord(row);
+        const points = classifySubmittedSnapshot(snapshot);
+        return { caseId: snapshot.caseId, reference: snapshot.caseId, taxYear: snapshot.inputs.taxYear,
+          sourceCount: snapshot.inputs.sources.length, totalFtc: snapshot.result.allowableCredit, submittedAt: new Date(row.submitted_at).toISOString(),
+          reviewStatus: "awaiting_review" as const, reviewPointCount: points.length, reviewPoints: points };
+      }).filter((item) => filters.reviewPoints !== "with" || item.reviewPointCount > 0)
+        .filter((item) => filters.reviewPoints !== "without" || item.reviewPointCount === 0)
+        .sort((left, right) => Number(right.reviewPointCount > 0) - Number(left.reviewPointCount > 0)
+          || left.submittedAt.localeCompare(right.submittedAt) || left.caseId.localeCompare(right.caseId));
+      sendApiSuccess(response, apiSuccessSchemas.officerWorklist, { cases, reviewScope: officerReviewScope }, response.locals.requestId);
     } catch (error) { next(error); }
   });
 

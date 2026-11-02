@@ -193,7 +193,7 @@ test("officer detail reuses the worksheet and groups frozen evidence by source a
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
-  await page.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).click();
+  await page.getByRole("link", { name: "ตรวจทาน" }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   await expect(sourceTable.getByText("50.00%", { exact: true })).toBeVisible();

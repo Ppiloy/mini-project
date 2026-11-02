@@ -11,6 +11,8 @@ import type {
   FtcCaseDraft,
   FtcCaseRecord,
   OfficerCaseDetail as SharedOfficerCaseDetail,
+  OfficerWorklistFilters,
+  OfficerWorklistResponse,
   PendingCaseDeletion,
 } from "../../shared/contracts.js";
 
@@ -167,6 +169,13 @@ export const hostedApi = {
   },
   listOfficerCases(): Promise<{ cases: FtcCaseRecord[] }> {
     return request("/api/officer/cases", {}, undefined, apiSuccessSchemas.cases);
+  },
+  listOfficerWorklist(filters: OfficerWorklistFilters = {}): Promise<OfficerWorklistResponse> {
+    const query = new URLSearchParams();
+    if (filters.status) query.set("status", filters.status);
+    if (filters.reviewPoints) query.set("reviewPoints", filters.reviewPoints);
+    const suffix = query.size > 0 ? `?${query.toString()}` : "";
+    return request(`/api/officer/worklist${suffix}`, {}, undefined, apiSuccessSchemas.officerWorklist);
   },
   getOfficerCase(id: string): Promise<OfficerCaseDetail> {
     return request(`/api/officer/cases/${encodeURIComponent(id)}`, {}, undefined, apiSuccessSchemas.officerCaseDetail);

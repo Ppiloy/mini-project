@@ -212,7 +212,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
     const queue = await browserApi(officerPage, "/api/officer/cases");
     const queueCase = (queue.json as { data: { cases: Array<{ id: string; assignedOfficerId: string }> } }).data.cases.find((item) => item.id === caseId);
     expect(queueCase?.assignedOfficerId).toBe(seed.FTC_OFFICER_USER_ID);
-    await officerPage.getByRole("link", { name: "ตรวจทานแบบอ่านอย่างเดียว" }).first().click();
+    await officerPage.getByRole("link", { name: "ตรวจทาน" }).first().click();
     await expect(officerPage.getByText("ส่งแล้ว · อ่านอย่างเดียว")).toBeVisible();
     await expect(officerPage.getByRole("heading", { name: "ประวัติการเข้าถึง" })).toBeVisible();
     await officerPage.getByRole("link", { name: "ดูรายงาน" }).click();

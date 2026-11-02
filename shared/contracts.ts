@@ -344,6 +344,63 @@ export interface OfficerCaseDetail {
 export const officerCaseDetailSchema: z.ZodType<OfficerCaseDetail> = z.object({ case: caseRecordSchema, attachments: z.array(attachmentMetadataSchema), snapshot: calculationSnapshotSchema,
   auditEvents: z.array(auditEventSchema) }).strict();
 
+export type ReviewPointCategory = "invalid" | "missingEvidence" | "unsupported" | "substantive";
+export type OfficerWorklistStatus = "awaiting_review";
+
+export interface OfficerReviewPoint {
+  code: string;
+  category: ReviewPointCategory;
+  sourceId: SourceId | null;
+  sourceIndex: number | null;
+  title: string;
+  reason: string;
+  nextAction: string;
+}
+
+export interface OfficerWorklistItem {
+  caseId: CaseId;
+  reference: string;
+  taxYear: number | null;
+  sourceCount: number;
+  totalFtc: DecimalString | null;
+  submittedAt: IsoDateTime;
+  reviewStatus: OfficerWorklistStatus;
+  reviewPointCount: number;
+  reviewPoints: OfficerReviewPoint[];
+}
+
+export interface OfficerWorklistResponse {
+  cases: OfficerWorklistItem[];
+  /** Clarifies that these prompts are structural and are not an approval or evidence verification. */
+  reviewScope: string;
+}
+
+export interface OfficerWorklistFilters {
+  status?: "all" | "awaiting_review";
+  reviewPoints?: "all" | "with" | "without";
+}
+
+const officerReviewPointSchema: z.ZodType<OfficerReviewPoint> = z.object({
+  code: z.string().min(1), category: z.enum(["invalid", "missingEvidence", "unsupported", "substantive"]),
+  sourceId: z.string().min(1).max(100).nullable(), sourceIndex: z.number().int().nonnegative().nullable(),
+  title: z.string().min(1), reason: z.string().min(1), nextAction: z.string().min(1),
+}).strict();
+
+const officerWorklistItemSchema: z.ZodType<OfficerWorklistItem> = z.object({
+  caseId: z.string().min(1).max(100), reference: z.string().min(1), taxYear: z.number().int().nullable(),
+  sourceCount: z.number().int().nonnegative(), totalFtc: nullableDecimal, submittedAt: dateTime,
+  reviewStatus: z.literal("awaiting_review"), reviewPointCount: z.number().int().nonnegative(),
+  reviewPoints: z.array(officerReviewPointSchema),
+}).strict().superRefine((item, context) => {
+  if (item.reviewPointCount !== item.reviewPoints.length) {
+    context.addIssue({ code: "custom", path: ["reviewPointCount"], message: "Review point count must match the supplied points." });
+  }
+});
+
+export const officerWorklistResponseSchema: z.ZodType<OfficerWorklistResponse> = z.object({
+  cases: z.array(officerWorklistItemSchema), reviewScope: z.string().min(1),
+}).strict();
+
 export function apiSuccessSchema<T>(data: z.ZodType<T>): z.ZodType<ApiSuccess<T>> {
   return z.object({ data, requestId: z.string().min(1).max(128) }).strict();
 }
@@ -361,6 +418,7 @@ export const apiSuccessSchemas = {
   snapshot: apiSuccessSchema(z.object({ snapshot: calculationSnapshotSchema }).strict()),
   submission: apiSuccessSchema(z.object({ case: caseRecordSchema, snapshot: calculationSnapshotSchema }).strict()),
   officerCaseDetail: apiSuccessSchema(officerCaseDetailSchema),
+  officerWorklist: apiSuccessSchema(officerWorklistResponseSchema),
   attachmentUpload: apiSuccessSchema(z.object({ attachment: attachmentMetadataSchema, case: caseRecordSchema, revision: z.number().int().nonnegative() }).strict()),
   attachmentDelete: apiSuccessSchema(z.object({ deleted: z.literal(true), revision: z.number().int().nonnegative() }).strict()),
   caseDelete: apiSuccessSchema(z.object({ deleted: z.boolean(), cleanupPending: z.boolean(), revision: z.number().int().nonnegative() }).strict()),

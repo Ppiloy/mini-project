@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import request from "supertest";
@@ -5,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
 import { createEmptySource } from "../shared/draft.js";
-import type { ForeignIncomeSourceDraft } from "../shared/contracts.js";
+import type { ForeignIncomeSourceDraft, FtcCaseDraft } from "../shared/contracts.js";
+import { createCalculationSnapshot } from "../shared/snapshot.js";
 import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
@@ -111,6 +113,37 @@ async function login(app: ReturnType<typeof createApp>, loginName: string) {
   const response = await agent.post("/api/auth/login").set("Origin", origin).send({ loginName, password: "demo-password-1" });
   expect(response.status).toBe(200);
   return { agent, csrfToken: response.body.data.csrfToken as string, user: response.body.data.user, cookie: String(response.headers["set-cookie"]?.[0] ?? "") };
+}
+
+async function createStoredWorklistSubmission(
+  pool: PgPoolLike,
+  input: { ownerId: string; officerId: string; environmentMarkerId: string; draft: FtcCaseDraft; createdAt: string; submittedAt: string; activeAssignment?: boolean },
+): Promise<{ caseId: string }> {
+  const caseId = randomUUID();
+  const draft = { ...structuredClone(input.draft), id: caseId };
+  await pool.query(
+    `INSERT INTO ftc_cases(id,owner_id,draft,create_request_id,environment_marker_id)
+     VALUES ($1,$2,$3::jsonb,$4,$5)`,
+    [caseId, input.ownerId, JSON.stringify(draft), `worklist-${caseId}`, input.environmentMarkerId],
+  );
+  const snapshot = createCalculationSnapshot({ id: randomUUID(), caseId, revision: draft.revision, kind: "submitted",
+    inputs: draft, evidence: [], createdAt: input.createdAt });
+  snapshot.result.allowableCredit = "1.23";
+  snapshot.result.outcome = "ready";
+  snapshot.result.validationMessages = [];
+  await pool.query(
+    `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+     VALUES ($1,$2,$3,'submitted',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+    [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+      JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+  );
+  await pool.query("INSERT INTO officer_case_assignments(case_id,officer_id,assigned_by,active) VALUES ($1,$2,$2,$3)",
+    [caseId, input.officerId, input.activeAssignment ?? true]);
+  await pool.query(
+    "UPDATE ftc_cases SET status='submitted',assigned_officer_id=$2,submitted_snapshot_id=$3,submitted_at=$4::timestamptz WHERE id=$1",
+    [caseId, input.officerId, snapshot.id, input.submittedAt],
+  );
+  return { caseId };
 }
 
 describe("hosted authentication and durable draft API", () => {
@@ -788,6 +821,7 @@ describe("hosted authentication and durable draft API", () => {
     expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBeNull();
   });
 
+
   it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {
     const { app } = await setup();
     const { agent, csrfToken } = await login(app, "taxpayer-a");
@@ -881,5 +915,142 @@ describe("hosted authentication and durable draft API", () => {
     expect(attempts.every((attempt) => [401, 429].includes(attempt.status))).toBe(true);
     expect((await request(app).post("/api/auth/login").set("Origin", origin)
       .send({ loginName: "taxpayer-a", password: "demo-password-1" })).status).toBe(429);
+  });
+});
+
+describe("officer review worklist", () => {
+  it("uses immutable snapshot facts and submission time with concrete, non-approval review prompts", async () => {
+    const { app, pool } = await setup();
+    const taxpayer = await login(app, "taxpayer-a");
+    const officer = await login(app, "officer-a");
+    const created = await taxpayer.agent.post("/api/cases").set("Origin", origin)
+      .set("X-CSRF-Token", taxpayer.csrfToken).send({ requestId: "worklist-create-1" });
+    expect(created.status).toBe(201);
+
+    const caseId = created.body.data.case.id as string;
+    const inputs = structuredClone(created.body.data.case.draft);
+    inputs.taxYear = 2025;
+    inputs.thaiTax.amountBeforeFtc = "5000";
+    inputs.thaiTax.provenance = "จำนวนจากเอกสารภาษีไทยสำหรับทดสอบ";
+    const source = createEmptySource();
+    source.id = randomUUID();
+    source.countryCode = "US";
+    source.countryName = "United States";
+    source.incomeType = "salary_40_1";
+    source.earnedTaxYear = 2025;
+    source.earnedDate = "2025-03-01";
+    source.residenceDaysInEarnedYear = 180;
+    source.inputMode = "original_currency";
+    source.grossIncomeAmount = "1000";
+    source.currencyCode = "USD";
+    source.grossIncomeThb = "35000";
+    source.actualForeignTaxPaid = "100";
+    source.actualForeignTaxPaidThb = "3500";
+    source.eligibleForeignTax = "80";
+    source.eligibleForeignTaxThb = "2800";
+    source.eligibilityRationale = "Recorded taxpayer assumption";
+    source.remittance = { remittanceDate: "2025-04-01", transferTotalAmount: null, transferCurrencyCode: null,
+      transferTotalThb: null, classification: null, classificationNote: null };
+    source.remittedIncomeAmount = "1000";
+    source.remittedIncomeThb = "35000";
+    source.fxReference = { currencyCode: "USD", thbRate: "35", baseUnits: 1, effectiveDate: "2025-04-01",
+      rateType: "manual", sourceKind: "user_supplied", sourceLabel: "Manual rate", sourceUrl: null, educationalAssumption: null };
+    source.unsupportedClassification = "other";
+    source.unsupportedExplanation = "Recorded as an unsupported fact";
+    inputs.sources = [source];
+
+    const snapshot = createCalculationSnapshot({ id: randomUUID(), caseId, revision: inputs.revision, kind: "submitted",
+      inputs, evidence: [], createdAt: "2025-06-07T08:09:10.000Z" });
+    snapshot.result.allowableCredit = "321.09";
+    snapshot.result.outcome = "ready";
+    snapshot.result.validationMessages = [{ code: "source.remitted_exceeds_income", message: "เงินได้ที่นำเข้ามากกว่าเงินได้ต้นทาง",
+      path: ["sources", 0, "remittedIncomeAmount"] }];
+    await pool.query(
+      `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+       VALUES ($1,$2,$3,'submitted',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+      [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+        JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+    );
+    await pool.query("INSERT INTO officer_case_assignments(case_id,officer_id,assigned_by) VALUES ($1,$2,$2)", [caseId, officer.user.id]);
+    await pool.query(
+      "UPDATE ftc_cases SET status='submitted',assigned_officer_id=$2,submitted_snapshot_id=$3,submitted_at=$4::timestamptz WHERE id=$1",
+      [caseId, officer.user.id, snapshot.id, "2025-08-09T10:11:12.000Z"],
+    );
+    const marker = await pool.query<{ marker_id: string }>("SELECT marker_id FROM active_hosting_environment WHERE singleton=true");
+    const countryOnlyDraft = structuredClone(created.body.data.case.draft as FtcCaseDraft);
+    const countryOnlySource = createEmptySource();
+    countryOnlySource.id = randomUUID();
+    countryOnlySource.countryCode = "US";
+    countryOnlySource.countryName = "United States";
+    countryOnlyDraft.sources = [countryOnlySource];
+    const clear = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officer.user.id,
+      environmentMarkerId: marker.rows[0]!.marker_id, draft: countryOnlyDraft,
+      createdAt: "2025-01-01T00:00:00.000Z", submittedAt: "2025-08-10T10:11:12.000Z" });
+    const olderFlaggedInputs = structuredClone(inputs);
+    olderFlaggedInputs.sources[0]!.id = randomUUID();
+    const olderFlagged = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officer.user.id,
+      environmentMarkerId: marker.rows[0]!.marker_id, draft: olderFlaggedInputs,
+      createdAt: "2025-06-06T08:09:10.000Z", submittedAt: "2025-08-11T10:11:12.000Z" });
+
+    const response = await officer.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(response.status).toBe(200);
+    expect(response.body.data.reviewScope).toContain("ไม่ใช่การอนุมัติ");
+    expect(response.body.data.cases).toHaveLength(3);
+    expect(response.body.data.cases.map((entry: { caseId: string }) => entry.caseId)).toEqual([caseId, olderFlagged.caseId, clear.caseId]);
+    const item = response.body.data.cases[0];
+    expect(item).toMatchObject({ caseId, reference: caseId, taxYear: 2025, sourceCount: 1, totalFtc: "321.09",
+      submittedAt: "2025-08-09T10:11:12.000Z", reviewStatus: "awaiting_review" });
+    expect(item.reviewPoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "unsupported", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "invalid", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "substantive", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "missingEvidence", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "missingEvidence", sourceId: null, sourceIndex: null }),
+    ]));
+    expect(item.reviewPoints.every((point: { title: string; reason: string; nextAction: string }) =>
+      point.title.length > 0 && point.reason.length > 0 && point.nextAction.length > 0)).toBe(true);
+    expect(item.reviewPoints.map((point: { code: string }) => point.code)).toEqual(expect.arrayContaining([
+      "source.unsupported_classification", "fx.manual_reference", "source.actual_tax_differs_from_used", "source.missing_evidence",
+      "case.missing_thai_tax_evidence", "result.source.remitted_exceeds_income",
+    ]));
+    expect(item.reviewPointCount).toBe(item.reviewPoints.length);
+    expect((await officer.agent.get("/api/officer/worklist?status=awaiting_review&reviewPoints=with").set("Origin", origin)).body.data.cases).toHaveLength(2);
+    expect((await officer.agent.get("/api/officer/worklist?reviewPoints=without").set("Origin", origin)).body.data.cases).toHaveLength(1);
+    expect((await officer.agent.get("/api/officer/worklist?status=invalid").set("Origin", origin)).status).toBe(400);
+    expect((await taxpayer.agent.get("/api/officer/worklist").set("Origin", origin)).status).toBe(403);
+  });
+
+  it("shows only submitted cases with this officer's active assignment in the current environment", async () => {
+    const { app, pool } = await setup();
+    const taxpayer = await login(app, "taxpayer-a");
+    const officerA = await login(app, "officer-a");
+    const template = await taxpayer.agent.post("/api/cases").set("Origin", origin)
+      .set("X-CSRF-Token", taxpayer.csrfToken).send({ requestId: "worklist-scope-template" });
+    expect(template.status).toBe(201);
+    const mainMarker = await pool.query<{ marker_id: string }>("SELECT marker_id FROM active_hosting_environment WHERE singleton=true");
+    const mainMarkerId = mainMarker.rows[0]!.marker_id;
+    const isolatedMarker = await pool.query<{ id: string }>(
+      `INSERT INTO hosting_environment_markers(kind,database_fingerprint,storage_store,storage_region,deployment_context)
+       VALUES ('local',$1,'isolated-worklist-store','us-east-2','dev-isolated') RETURNING id`, ["ab".repeat(32)]);
+    const officerBId = randomUUID();
+    await pool.query("INSERT INTO app_users(id,login_name,display_name,password_hash,role) VALUES ($1,'officer-b','Officer B',$2,'officer')",
+      [officerBId, await hashPasswordForTest("demo-password-1")]);
+    const draft = template.body.data.case.draft as FtcCaseDraft;
+    const submittedAt = "2025-08-09T10:11:12.000Z";
+    const visible = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-05-01T00:00:00.000Z", submittedAt });
+    await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-01-01T00:00:00.000Z", submittedAt, activeAssignment: false });
+    const assignedToB = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerBId,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-02-01T00:00:00.000Z", submittedAt });
+    await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: isolatedMarker.rows[0]!.id, draft, createdAt: "2025-03-01T00:00:00.000Z", submittedAt });
+
+    const officerAQueue = await officerA.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(officerAQueue.status).toBe(200);
+    expect(officerAQueue.body.data.cases.map((item: { caseId: string }) => item.caseId)).toEqual([visible.caseId]);
+    const officerB = await login(app, "officer-b");
+    const officerBQueue = await officerB.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(officerBQueue.body.data.cases.map((item: { caseId: string }) => item.caseId)).toEqual([assignedToB.caseId]);
   });
 });
