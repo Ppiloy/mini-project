@@ -6,6 +6,7 @@ import type {
   FtcCaseRecord,
 } from "../../shared/contracts.js";
 import { withCanonicalThbAmounts } from "../../shared/calculator.js";
+import { DEMO_POLICY } from "../../shared/policy.js";
 import { deleteDemoEvidenceFiles, readDemoEvidenceFile, storeDemoEvidenceFile } from "./demoEvidenceStore.js";
 
 const STORE_KEY = "ftc.prototype.fixture.v1";
@@ -196,7 +197,12 @@ export function findDemoSnapshot(id: string): CalculationSnapshot | undefined {
 }
 
 export function latestDemoPreview(caseId: string, revision: number): CalculationSnapshot | undefined {
-  return readStore().snapshots.find((item) => item.caseId === caseId && item.kind === "preview" && item.revision === revision);
+  return readStore().snapshots.find((item) => item.caseId === caseId
+    && item.kind === "preview"
+    && item.revision === revision
+    && item.policy.id === DEMO_POLICY.id
+    && item.result.policyVersion === DEMO_POLICY.id
+    && item.result.engineVersion === DEMO_POLICY.engineVersion);
 }
 
 export async function addDemoAttachment(caseId: string, sourceId: string | null, kind: AttachmentMetadata["kind"], file: File): Promise<AttachmentMetadata> {

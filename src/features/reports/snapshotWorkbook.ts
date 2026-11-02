@@ -4,6 +4,7 @@ import type { CalculationSnapshot as SavedCalculationSnapshot, EvidenceKind, For
 import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, worksheetLabel, WORKSHEET_SECTIONS } from "../../../shared/labels.js";
 import { calculateResidenceDaysInYear, validateResidencePeriods } from "../../../shared/residence.js";
 import { formatDate } from "../../components/money.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../../shared/foreignTax.js";
 
 const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const MONEY_FORMAT = "#,##0.00;[Red]-#,##0.00";
@@ -40,11 +41,6 @@ function sumDecimalValues(values: Array<string | null | undefined>): string | nu
   const present = values.filter((value): value is string => value !== null && value !== undefined);
   if (!present.length) return null;
   return present.reduce((sum, value) => sum.plus(value), new Decimal(0)).toString();
-}
-
-function sameAmount(left: string | null, right: string | null): boolean {
-  if (left === null || right === null) return left === right;
-  try { return new Decimal(left).equals(new Decimal(right)); } catch { return left === right; }
 }
 
 function percentCell(value: string | null | undefined): number | string {
@@ -88,7 +84,7 @@ function tableHeader(sheet: ExcelWorksheet, values: string[]): ExcelRow {
   return row;
 }
 
-function sourceValue(snapshot: SavedCalculationSnapshot, source: ForeignIncomeSourceDraft, index: number, code: "source_G" | "source_share"): string | null {
+function sourceValue(snapshot: SavedCalculationSnapshot, source: ForeignIncomeSourceDraft, index: number, code: "source_E_paid" | "source_E_eligible" | "source_G" | "source_share"): string | null {
   const lines = snapshot.result.lines.filter((line) => line.code === code);
   if (source.id) return lines.find((line) => line.sourceId === source.id)?.value ?? null;
   const priorSameCountry = snapshot.inputs.sources.slice(0, index).filter((item) => item.countryCode === source.countryCode).length;
@@ -126,25 +122,26 @@ function addDetailsRow(sheet: ExcelWorksheet, sourceName: string, label: string,
   return sheet.addRow([sourceName, label, safeValue ?? "—"]);
 }
 
-function appendSourceDetails(sheet: ExcelWorksheet, source: ForeignIncomeSourceDraft): void {
+function appendSourceDetails(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot, source: ForeignIncomeSourceDraft, index: number): void {
   const sourceName = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
   addDetailsRow(sheet, sourceName, "วันที่เกิดเงินได้", formatDate(source.earnedDate));
   addDetailsRow(sheet, sourceName, "วันที่นำเข้าไทย", formatDate(source.remittance?.remittanceDate));
   if (source.residenceDaysInEarnedYear !== null) addDetailsRow(sheet, sourceName, "วันพำนักในปีที่เกิดเงินได้", source.residenceDaysInEarnedYear);
-  if (!sameAmount(source.actualForeignTaxPaidThb, source.eligibleForeignTaxThb)) {
-    const row = addDetailsRow(sheet, sourceName, "ภาษีที่ชำระทั้งหมดตามหลักฐาน (บาท)", amountCell(source.actualForeignTaxPaidThb));
+  if (hasEligibleTaxAdjustment(source)) {
+    const row = addDetailsRow(sheet, sourceName, "ภาษีที่ชำระจริงทั้งหมด (บาท)", amountCell(sourceValue(snapshot, source, index, "source_E_paid")));
     row.getCell(3).numFmt = MONEY_FORMAT;
-    const usedRow = addDetailsRow(sheet, sourceName, "จำนวน (E) ที่ใช้จัดสรร (G) (บาท)", amountCell(source.eligibleForeignTaxThb));
+    const usedRow = addDetailsRow(sheet, sourceName, "จำนวน (E) ที่ใช้คำนวณ (G) (บาท)", amountCell(sourceValue(snapshot, source, index, "source_E_eligible")));
     usedRow.getCell(3).numFmt = MONEY_FORMAT;
-    addDetailsRow(sheet, sourceName, "คำอธิบาย", "จำนวนภาษีจริงกับจำนวน (E) ที่นำไปคำนวณอาจต่างกัน ข้อมูลนี้เป็นจำนวนที่ผู้ใช้ระบุ ไม่ใช่การยืนยันสิทธิทางกฎหมาย");
+    if (source.eligibilityRationale) addDetailsRow(sheet, sourceName, "เหตุผลการปรับจำนวน (E) ที่ผู้ใช้ระบุ", displayKnownExampleNote(source.eligibilityRationale));
   }
+  else if (source.eligibilityRationale) addDetailsRow(sheet, sourceName, "หมายเหตุเดิมที่บันทึกไว้", displayKnownExampleNote(source.eligibilityRationale));
   if (source.inputMode === "original_currency") {
     addDetailsRow(sheet, sourceName, "สกุลเงินต้นทาง", currencyLabel(source.currencyCode));
-    for (const [letter, amount] of [["D", source.grossIncomeAmount], ["E", source.eligibleForeignTax], ["F", source.remittedIncomeAmount]] as const) {
+    for (const [letter, amount] of [["D", source.grossIncomeAmount], ["E", effectiveForeignTaxAmount(source)], ["F", source.remittedIncomeAmount]] as const) {
       const row = addDetailsRow(sheet, sourceName, worksheetLabel(letter), amountCell(amount));
       row.getCell(3).numFmt = MONEY_FORMAT;
     }
-    if (!sameAmount(source.actualForeignTaxPaid, source.eligibleForeignTax)) {
+    if (hasEligibleTaxAdjustment(source)) {
       const actualRow = addDetailsRow(sheet, sourceName, "ภาษีที่ชำระทั้งหมดตามหลักฐาน", amountCell(source.actualForeignTaxPaid));
       actualRow.getCell(3).numFmt = MONEY_FORMAT;
     }
@@ -163,7 +160,6 @@ function appendSourceDetails(sheet: ExcelWorksheet, source: ForeignIncomeSourceD
       }
     }
   }
-  if (source.eligibilityRationale) addDetailsRow(sheet, sourceName, "เหตุผลของ (E) ที่ผู้ใช้ระบุ", displayKnownExampleNote(source.eligibilityRationale));
 }
 
 function appendResidenceSummary(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot): void {
@@ -271,7 +267,7 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
       countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ"),
       incomeTypeLabel(source),
       amountCell(source.grossIncomeThb),
-      amountCell(source.eligibleForeignTaxThb),
+      amountCell(sourceValue(snapshot, source, index, "source_E_eligible")),
       amountCell(source.remittedIncomeThb),
       amountCell(g),
       percentCell(h),
@@ -285,7 +281,7 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
   const sourceTotal = sheet.addRow([
     "รวมทุกแหล่งเงินได้", "", "", "",
     amountCell(sumDecimalValues(snapshot.inputs.sources.map((source) => source.grossIncomeThb))),
-    amountCell(sumDecimalValues(snapshot.inputs.sources.map((source) => source.eligibleForeignTaxThb))),
+    amountCell(sumDecimalValues(snapshot.result.lines.filter((line) => line.code === "source_E_eligible").map((line) => line.value))),
     amountCell(snapshot.result.totalRemittedIncome), amountCell(sourceGTotal), "—",
   ]);
   for (const column of [5, 6, 7, 8]) sourceTotal.getCell(column).numFmt = MONEY_FORMAT;
@@ -300,7 +296,7 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
     ["L", snapshot.result.thaiTaxBeforeFtc],
   ] as const;
   for (const [letter, value] of summary) addMoneyRow(sheet, worksheetLabel(letter), value);
-  addDetailsRow(sheet, "", "ที่มาของข้อมูล (L) ที่ผู้ใช้ระบุ", displayKnownExampleNote(snapshot.inputs.thaiTax.provenance) ?? "ไม่ได้ระบุ");
+  addDetailsRow(sheet, "", "ข้อมูลประกอบ (L)", displayKnownExampleNote(snapshot.inputs.thaiTax.provenance) ?? "ผู้ใช้ระบุจำนวนภาษีไทยก่อนเครดิต (L)");
   addDetailsRow(sheet, "", "คำอธิบาย (L)", "(L) คือภาษีไทยที่ผู้ใช้ระบุว่าคำนวณหลังหักค่าใช้จ่ายและค่าลดหย่อนแล้ว และก่อนใช้เครดิตภาษีต่างประเทศ ระบบไม่ได้คำนวณยอดนี้หรือยืนยันรายการหักจากเอกสารที่ให้ไว้");
   appendResidenceSummary(sheet, snapshot);
   sheet.addRow([]);
@@ -336,7 +332,7 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
 
   section(sheet, "รายละเอียดประกอบแหล่งเงินได้", 3);
   tableHeader(sheet, ["แหล่งเงินได้", "รายการ", "ข้อมูลที่บันทึก"]);
-  snapshot.inputs.sources.forEach((source) => appendSourceDetails(sheet, source));
+  snapshot.inputs.sources.forEach((source, index) => appendSourceDetails(sheet, snapshot, source, index));
   addEvidence(sheet, snapshot);
 
   sheet.views = [{ state: "frozen", ySplit: sourceHeader.number, xSplit: 1 }];

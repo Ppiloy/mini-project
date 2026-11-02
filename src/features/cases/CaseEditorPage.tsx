@@ -465,8 +465,8 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       <fieldset disabled={isFormBusy} aria-busy={isFormBusy} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         {stepContent}
       {step === 4 && <div className="confirmation-controls">
-        <label className="confirm-card"><input type="checkbox" checked={taxCurrent} onChange={(event) => toggleThaiConfirmation(event.target.checked)} /><span><strong>ยืนยันจำนวนและที่มาของภาษีไทย (L)</strong><small>ผูกกับรายได้ แหล่งเงินได้ และอัตราแลกเปลี่ยนปัจจุบัน</small></span></label>
-        {draft.sources.map((source, index) => <label className="confirm-card" key={source.id ?? `confirm-${index}`}><input type="checkbox" checked={isSourceEligibilityConfirmationCurrent(source)} onChange={(event) => toggleEligibilityConfirmation(index, event.target.checked)} /><span><strong>ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ {index + 1}</strong><small>{source.eligibilityRationale || "กรุณากรอกเหตุผลของจำนวน (E) ในขั้นข้อมูลเงินได้จากต่างประเทศ"}</small></span></label>)}
+        <label className="confirm-card"><input type="checkbox" checked={taxCurrent} onChange={(event) => toggleThaiConfirmation(event.target.checked)} /><span><strong>ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)</strong><small>ตรวจทานจำนวน (L) กับข้อมูลรายได้และแหล่งเงินได้ปัจจุบันแล้ว</small></span></label>
+        {draft.sources.map((source, index) => <label className="confirm-card" key={source.id ?? `confirm-${index}`}><input type="checkbox" checked={isSourceEligibilityConfirmationCurrent(source)} onChange={(event) => toggleEligibilityConfirmation(index, event.target.checked)} /><span><strong>ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ {index + 1}</strong><small>ตรวจทานจำนวน (E) ที่แสดงและข้อมูลเพิ่มเติมของรายการนี้แล้ว</small></span></label>)}
       </div>}
       </fieldset>
       <div className="form-actions">

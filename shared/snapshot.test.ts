@@ -23,7 +23,7 @@ describe("calculation snapshots", () => {
     expect(snapshot.inputs.sources[0]?.grossIncomeThb).toBe("50000");
     expect(snapshot.result.lines[0]?.value).toBe("50000");
     expect(snapshot.policy.id).toBe("rd-ftc-demo-2568-v1");
-    expect(snapshot.result.engineVersion).toBe("ftc-engine-v1");
+    expect(snapshot.result.engineVersion).toBe("ftc-engine-v2");
   });
 
   it("recomputes results from the exact frozen inputs and rejects a mismatched revision", () => {

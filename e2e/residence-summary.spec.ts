@@ -65,13 +65,16 @@ test("saved inclusive residence periods show frozen annual totals in result and 
   await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 2").fill("2025-06-30");
   await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 2").fill("2025-07-03");
   await advanceToReview(page);
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)", exact: false }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)", exact: false }).check();
   for (let source = 1; source <= 4; source += 1) {
-    await page.getByRole("checkbox", { name: `ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ ${source}`, exact: false }).check();
+    await page.getByRole("checkbox", { name: `ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ ${source}`, exact: false }).check();
   }
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
 
+  const worksheetDetails = page.locator(".result-worksheet-details");
+  await expect(worksheetDetails).not.toHaveAttribute("open", "");
+  await worksheetDetails.locator(":scope > summary").click();
   const summary = page.getByRole("region", { name: "สรุปช่วงเวลาที่พำนัก" });
   await expect(summary).toBeVisible();
   await expect(summary).toContainText("2024-12-15 – 2025-06-30");

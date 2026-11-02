@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyDraft, createEmptySource } from "../shared/draft.js";
+import type { FtcCaseDraft } from "../shared/contracts.js";
 import { slideDiscrepancyFixture } from "../src/fixtures/domain.js";
 import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
@@ -68,7 +69,7 @@ async function createCase(agent: ReturnType<typeof request.agent>, csrf: string,
 
 function pdfBytes(suffix = "one"): Buffer { return Buffer.from(`%PDF-1.7\n${suffix}\n%%EOF`, "ascii"); }
 
-function validDraft(caseId: string) {
+function validDraft(caseId: string): FtcCaseDraft {
   const source = createEmptySource();
   Object.assign(source, {
     countryCode:"VN",countryName:"Vietnam",incomeType:"salary_40_1",earnedTaxYear:2025,earnedDate:"2025-01-01",
@@ -87,6 +88,27 @@ async function uploadPdf(agent: ReturnType<typeof request.agent>, csrf: string, 
 }
 
 describe("hosted evidence, preview and submission HTTP workflows", () => {
+  it("accepts ordinary E and L amounts without rationale text over the authenticated API", async () => {
+    const { app } = await setup();
+    const { agent, csrf } = await login(app);
+    const record = await createCase(agent, csrf, "ordinary-e-l-api");
+    const draft = validDraft(record.id);
+    draft.thaiTax.provenance = null;
+    draft.sources[0]!.eligibleForeignTax = null;
+    draft.sources[0]!.eligibleForeignTaxThb = null;
+    draft.sources[0]!.eligibilityRationale = null;
+
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: 0, requestId: "ordinary-e-l-save", data: draft, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: saved.body.data.case.draft.revision, requestId: "ordinary-e-l-preview" });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.data.snapshot.result).toMatchObject({ outcome: "ready", allowableCredit: "106250.00" });
+    expect(preview.body.data.snapshot.result.lines.find((line: { code: string }) => line.code === "source_E_eligible")?.value).toBe("150000");
+  });
+
   it("blocks officer credentials from every taxpayer endpoint and denies owner branches for officer-owned records", async () => {
     let blobReads = 0;
     const blobs:BlobIO={...storage(),async get(){blobReads+=1;return pdfBytes("private");}};

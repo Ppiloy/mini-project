@@ -1,4 +1,5 @@
 import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "./foreignTax.js";
 
 function fingerprintableSource(source: ForeignIncomeSourceDraft): Record<string, unknown> {
   return {
@@ -63,14 +64,15 @@ export function taxInputFingerprint(draft: FtcCaseDraft): string {
 export function isThaiTaxConfirmationCurrent(draft: FtcCaseDraft): boolean {
   const confirmation = draft.thaiTax;
   return confirmation.amountBeforeFtc !== null
-    && confirmation.provenance !== null
     && confirmation.confirmedAt !== null
     && confirmation.confirmedInputFingerprint === taxInputFingerprint(draft);
 }
 
 export function isSourceEligibilityConfirmationCurrent(source: ForeignIncomeSourceDraft): boolean {
-  return source.eligibleForeignTax !== null
-    && source.eligibilityRationale !== null
+  const rationaleIsRequired = hasEligibleTaxAdjustment(source);
+  return source.actualForeignTaxPaid !== null
+    && effectiveForeignTaxAmount(source) !== null
+    && (!rationaleIsRequired || (source.eligibilityRationale !== null && source.eligibilityRationale.trim() !== ""))
     && source.eligibilityConfirmedAt !== null
     && source.eligibilityConfirmedInputFingerprint === sourceEligibilityFingerprint(source);
 }

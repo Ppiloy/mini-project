@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
 import { validateSubmission } from "../../../shared/calculator.js";
+import { DEMO_POLICY } from "../../../shared/policy.js";
 import { formatDate } from "../../components/money.js";
 import { PageHeading } from "../../components/SiteFrame.js";
 import { Worksheet } from "../../components/Worksheet.js";
+import { ResultSummary } from "./ResultSummary.js";
 import { ApiClientError, apiFailureContext, apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview, submitDemoCase } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
@@ -59,7 +61,12 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
 
   const calculateCurrent = () => navigate(`${mode === "demo" ? "/demo" : "/app"}/cases/${encodeURIComponent(id)}/edit`);
   const isSubmitted = record?.status === "submitted";
-  const isCurrent = record && snapshot && snapshot.revision === record.draft.revision;
+  const revisionMatches = Boolean(record && snapshot && snapshot.revision === record.draft.revision);
+  const versionMatches = Boolean(snapshot
+    && snapshot.policy.id === DEMO_POLICY.id
+    && snapshot.result.policyVersion === DEMO_POLICY.id
+    && snapshot.result.engineVersion === DEMO_POLICY.engineVersion);
+  const isCurrent = revisionMatches && versionMatches;
   const canSubmit = !isSubmitted && snapshot?.kind === "preview" && isCurrent && snapshot.result.outcome === "ready";
 
   const submit = async () => {
@@ -131,6 +138,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
   const reportRoot = mode === "demo" ? "/demo" : "";
   const reportHref = `${reportRoot}/reports/${encodeURIComponent(snapshot.id)}`;
   const stale = !isCurrent && !isSubmitted;
+  const staleBecauseDraftChanged = !revisionMatches;
   const outcomeText = snapshot.result.outcome === "ready" ? "คำนวณได้ตามข้อมูลและสมมติฐานที่ระบุ" : snapshot.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ" : "มีข้อมูลที่ต้องทบทวน";
   const savedAt = new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt));
 
@@ -141,9 +149,13 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     </PageHeading>
     {confirmedSubmitted && <div className="alert alert-success" role="status"><strong>ส่งเข้าคิวจำลองแล้ว</strong><span>ระบบต้นแบบบันทึกผลสำเร็จและไม่สร้างรายการซ้ำเมื่อยืนยันสถานะ</span></div>}
     {problem && <div className="alert alert-error" role="alert">{problem}{mode === "hosted" && problem.includes("เซสชันหมดอายุ") && <a href="/login">เข้าสู่ระบบอีกครั้ง</a>}</div>}
-    {stale && <div className="alert alert-warning" role="status"><strong>ผลนี้เป็นข้อมูลก่อนการแก้ไขล่าสุด</strong><span>มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่งเข้าคิว</span></div>}
+    {stale && <div className="alert alert-warning" role="status"><strong>{staleBecauseDraftChanged ? "ผลนี้เป็นข้อมูลก่อนการแก้ไขล่าสุด" : "ผลคำนวณนี้ใช้เงื่อนไขหรือวิธีคำนวณรุ่นก่อน"}</strong><span>{staleBecauseDraftChanged ? "มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่งเข้าคิว" : "ระบบมีการเปลี่ยนแปลงเงื่อนไขหรือวิธีคำนวณหลังบันทึกผลนี้ กรุณาคำนวณใหม่ก่อนส่งเข้าคิว"}</span></div>}
     {snapshot.result.outcome !== "ready" && <div className={`alert ${snapshot.result.outcome === "needs_review" ? "alert-warning" : "alert-info"}`} role="status"><strong>{outcomeText}</strong><ul>{snapshot.result.validationMessages.map((message, index) => <li key={`${message.code}-${index}`}>{message.message}</li>)}</ul></div>}
-    <Worksheet snapshot={snapshot} attachments={attachments} evidenceMode={mode} />
+    {!stale && <ResultSummary snapshot={snapshot} />}
+    <details className="result-worksheet-details">
+      <summary>ดูตารางรายละเอียดทั้งหมด</summary>
+      <Worksheet snapshot={snapshot} attachments={attachments} evidenceMode={mode} />
+    </details>
     <div className="result-actions">
       <a className="button button-secondary" href={reportHref}>ดูรายงาน</a>
       {!isSubmitted && <><button className="button button-quiet" onClick={calculateCurrent}>แก้ไขข้อมูล</button><button className="button button-primary" disabled={!canSubmit || busy} onClick={() => void submit()}>{busy ? "กำลังตรวจสอบสถานะ…" : "ส่งให้เจ้าหน้าที่ตรวจ"}</button></>}

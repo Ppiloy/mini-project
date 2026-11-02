@@ -38,3 +38,16 @@ Each completed increment will record the reproduced behavior, RED/GREEN results,
 - Widened only the response decimal-string bounds to retain the engine's 40 significant digits, including leading fractional zeros. No input limits, arithmetic, rounding, policy scope, or stored values were loosened or rounded to fit the transport.
 - RED/GREEN: public snapshot-contract tests cover the 143,544.30 golden result and small generated limits; the HTTP tracer saves a valid case, calculates, and reads back the exact unrounded result through authenticated routes.
 - Root reviewed the diff and verified an isolated copy of the exact staged files: 139 tests, eight ordered migrations, TypeScript, and the production build pass with CI's two-worker configuration.
+- Commit `2ef4863` was pushed; its Netlify preview build reached `ready`.
+
+### 2. Ordinary tax entry and saved credit explanation
+
+- Ordinary E uses the foreign tax paid when no exceptional adjustment is recorded. Its reason/equality controls are removed from normal entry. Existing different paid/used amounts remain visible and require an adjustment reason; cached THB amounts are rebuilt from raw facts.
+- L accepts the supplied amount without requiring prose. J/L guidance distinguishes income before expenses/allowances from Thai tax after them and before FTC. Existing notes remain saved and visible as prior notes.
+- The existing calculator now returns known I/K totals independently of full credit readiness. Unknown F or conversion inputs remain unknown; explicit zero stays zero. No second calculation engine or temporary J/L zero is used for these totals.
+- The result leads with the saved total and country O/P/Q values, explains which unrounded amount limits Q, and keeps the complete worksheet expandable. Stale/non-ready previews do not receive a ready-result summary; saved display-rounding differences are explained without redistributing credits.
+- Public calculation, authenticated API, and browser RED/GREEN checks cover these changes. Root review checks effective E in calculation, confirmations, worksheet, export and officer evidence flags, as well as saved result consistency.
+- Review corrected duplicate E field targets, ordinary details opening because of legacy notes, and foreign-tax evidence flags when actual tax is positive but adjusted E is zero. A policy/engine change now makes unsubmitted previews stale without altering historical submitted records.
+- Frozen release checks: 150 tests in 18 files, eight ordered migrations, TypeScript and production build pass. All 82 default browser journeys and 11 real-backend journeys are covered by passing runs: 78/10 initially passed; the remaining four/one passed after result-disclosure selectors and current-policy test metadata were updated. Assertions on amounts, evidence, saved reports and authorization remain intact.
+- Parallel browser runners exposed a shared Vite optimizer-cache collision. Browser tests now use project/port-specific temporary caches; production configuration is unchanged. The final configuration also passed a fresh production build.
+- Root visually checked ordinary/adjusted E and the saved Vietnam–China summary, including accessible adjustment/error targets and the rounding explanation.

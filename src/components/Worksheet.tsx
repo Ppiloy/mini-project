@@ -6,6 +6,7 @@ import { EvidenceFileActions } from "./EvidenceFileActions.js";
 import { FieldLabel } from "./FieldLabel.js";
 import { formatDate, formatMoney } from "./money.js";
 import { calculateResidenceDaysInYear, validateResidencePeriods } from "../../shared/residence.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../shared/foreignTax.js";
 
 type Mode = "demo" | "hosted";
 
@@ -36,11 +37,6 @@ function sumValues(values: Array<string | null | undefined>): string | null {
   return present.reduce((sum, value) => sum.plus(value), new Decimal(0)).toFixed();
 }
 
-function equalAmounts(left: string | null, right: string | null): boolean {
-  if (left === null || right === null) return left === right;
-  try { return new Decimal(left).equals(new Decimal(right)); } catch { return left === right; }
-}
-
 function percentage(value: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
   try { return `${new Decimal(value).mul(100).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2)}%`; }
@@ -59,7 +55,10 @@ function sourceFieldValue(snapshot: CalculationSnapshot, source: ForeignIncomeSo
   if (letter === "B") return countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ");
   if (letter === "C") return incomeTypeLabel(source);
   if (letter === "D") return `${formatMoney(source.grossIncomeThb)} บาท`;
-  if (letter === "E") return `${formatMoney(source.eligibleForeignTaxThb)} บาท`;
+  if (letter === "E") {
+    const value = sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb;
+    return `${formatMoney(value)} บาท`;
+  }
   if (letter === "F") return `${formatMoney(source.remittedIncomeThb)} บาท`;
   if (letter === "G") {
     const value = sourceLineValue(snapshot, source, index, "source_G");
@@ -107,7 +106,8 @@ function FxReferenceDetails({ reference }: { reference: NonNullable<ForeignIncom
 }
 
 function SourceValues({ snapshot, source, index }: { snapshot: CalculationSnapshot; source: ForeignIncomeSourceDraft; index: number }) {
-  const differentTaxAmount = !equalAmounts(source.actualForeignTaxPaidThb, source.eligibleForeignTaxThb);
+  const differentTaxAmount = hasEligibleTaxAdjustment(source);
+  const effectiveTax = effectiveForeignTaxAmount(source);
 
   return <>
     <tr className="worksheet-source-values">
@@ -122,13 +122,13 @@ function SourceValues({ snapshot, source, index }: { snapshot: CalculationSnapsh
       {source.inputMode === "original_currency" && <div className="worksheet-original-currency">
         <strong>จำนวนเงินต้นทาง</strong>
         <span>เงินได้ {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>
-        <span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(source.eligibleForeignTax)} {thaiCurrency(source.currencyCode)}</span>
+        <span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveTax)} {thaiCurrency(source.currencyCode)}</span>
         {differentTaxAmount && <span>ภาษีที่ชำระทั้งหมดตามหลักฐาน {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}
         <span>เงินได้ที่นำเข้า {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>
         {source.fxReference && <FxReferenceDetails reference={source.fxReference} />}
       </div>}
-      {differentTaxAmount && <p className="worksheet-assumption-note">ภาษีที่ชำระทั้งหมดตามหลักฐาน: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้จัดสรร (G): {formatMoney(source.eligibleForeignTaxThb)} บาท โดยผู้ใช้ระบุและยืนยันจำนวนนี้ ระบบยังไม่ได้ตรวจสอบสิทธิทางกฎหมาย</p>}
-      {source.eligibilityRationale && <p className="worksheet-source-rationale"><strong>เหตุผลของ (E) ที่ผู้ใช้ระบุ:</strong> {displayKnownExampleNote(source.eligibilityRationale)}</p>}
+      {differentTaxAmount && <p className="worksheet-assumption-note">ภาษีที่ชำระจริง: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้คำนวณ (G): {formatMoney(sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb)} บาท</p>}
+      {source.eligibilityRationale && <p className="worksheet-source-rationale"><strong>{differentTaxAmount ? "เหตุผลการปรับจำนวน (E) ที่ผู้ใช้ระบุ:" : "หมายเหตุเดิมที่บันทึกไว้:"}</strong> {displayKnownExampleNote(source.eligibilityRationale)}</p>}
     </td></tr>
   </>;
 }
@@ -136,10 +136,10 @@ function SourceValues({ snapshot, source, index }: { snapshot: CalculationSnapsh
 function SourceTotals({ snapshot }: { snapshot: CalculationSnapshot }) {
   const sources = snapshot.inputs.sources;
   const totalGrossIncome = sumValues(sources.map((source) => source.grossIncomeThb));
-  const totalCalculationTax = sumValues(sources.map((source) => source.eligibleForeignTaxThb));
+  const totalCalculationTax = sumValues(snapshot.result.lines.filter((line) => line.code === "source_E_eligible").map((line) => line.value));
   const totalAllocatedTax = sumValues(snapshot.result.lines.filter((line) => line.code === "source_G").map((line) => line.value));
-  const totalActualTax = sumValues(sources.map((source) => source.actualForeignTaxPaidThb));
-  const actualTaxDiffers = sources.some((source) => !equalAmounts(source.actualForeignTaxPaidThb, source.eligibleForeignTaxThb));
+  const totalActualTax = sumValues(snapshot.result.lines.filter((line) => line.code === "source_E_paid").map((line) => line.value));
+  const actualTaxDiffers = sources.some(hasEligibleTaxAdjustment);
   return <>
     <div className="worksheet-source-totals-mobile">
       <strong>รวมทุกแหล่งเงินได้</strong>
@@ -165,9 +165,9 @@ function SourceCards({ snapshot }: { snapshot: CalculationSnapshot }) {
         <span><strong>วันที่นำเข้าไทย:</strong> {formatDate(source.remittance?.remittanceDate)}</span>
         {source.residenceDaysInEarnedYear !== null && <span><strong>วันพำนักในปีที่เกิดเงินได้:</strong> {source.residenceDaysInEarnedYear} วัน</span>}
       </div>
-      {source.inputMode === "original_currency" && <div className="worksheet-original-currency"><strong>จำนวนเงินต้นทาง (D)/(E)/(F)</strong><span>{formatMoney(source.grossIncomeAmount)} / {formatMoney(source.eligibleForeignTax)} / {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>{source.fxReference && <FxReferenceDetails reference={source.fxReference} />}{!equalAmounts(source.actualForeignTaxPaidThb, source.eligibleForeignTaxThb) && <span>ภาษีที่ชำระทั้งหมดตามหลักฐาน {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}</div>}
-      {!equalAmounts(source.actualForeignTaxPaidThb, source.eligibleForeignTaxThb) && <p className="worksheet-assumption-note">ภาษีที่ชำระทั้งหมดตามหลักฐาน: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้จัดสรร (G): {formatMoney(source.eligibleForeignTaxThb)} บาท โดยผู้ใช้ระบุและยืนยันจำนวนนี้ ระบบยังไม่ได้ตรวจสอบสิทธิทางกฎหมาย</p>}
-      {source.eligibilityRationale && <p className="worksheet-source-rationale"><strong>เหตุผลของ (E) ที่ผู้ใช้ระบุ:</strong> {displayKnownExampleNote(source.eligibilityRationale)}</p>}
+      {source.inputMode === "original_currency" && <div className="worksheet-original-currency"><strong>จำนวนเงินต้นทาง</strong><span>เงินได้ {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)}</span><span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveForeignTaxAmount(source))} {thaiCurrency(source.currencyCode)}</span>{hasEligibleTaxAdjustment(source) && <span>ภาษีที่ชำระจริง {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}<span>เงินได้ที่นำเข้า {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>{source.fxReference && <FxReferenceDetails reference={source.fxReference} />}</div>}
+      {hasEligibleTaxAdjustment(source) && <p className="worksheet-assumption-note">ภาษีที่ชำระจริง: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้คำนวณ (G): {formatMoney(sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb)} บาท</p>}
+      {source.eligibilityRationale && <p className="worksheet-source-rationale"><strong>{hasEligibleTaxAdjustment(source) ? "เหตุผลการปรับจำนวน (E) ที่ผู้ใช้ระบุ:" : "หมายเหตุเดิมที่บันทึกไว้:"}</strong> {displayKnownExampleNote(source.eligibilityRationale)}</p>}
     </article>)}
   </div>;
 }
@@ -321,7 +321,7 @@ export function Worksheet({ snapshot, attachments, evidenceMode, showEvidence = 
             <tr className="worksheet-source-name"><th colSpan={8} scope="rowgroup">{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · {incomeTypeLabel(source)}</th></tr>
             <SourceValues snapshot={snapshot} source={source} index={index} />
           </Fragment>)}</tbody>
-          <tfoot><tr><th colSpan={3} scope="row">รวมทุกแหล่งเงินได้</th><td>{formatMoney(sumValues(snapshot.inputs.sources.map((source) => source.grossIncomeThb)))} บาท</td><td>{formatMoney(sumValues(snapshot.inputs.sources.map((source) => source.eligibleForeignTaxThb)))} บาท</td><td>{formatMoney(snapshot.result.totalRemittedIncome)} บาท</td><td>{formatMoney(sumValues(snapshot.result.lines.filter((line) => line.code === "source_G").map((line) => line.value)))} บาท</td><td>—</td></tr></tfoot>
+          <tfoot><tr><th colSpan={3} scope="row">รวมทุกแหล่งเงินได้</th><td>{formatMoney(sumValues(snapshot.inputs.sources.map((source) => source.grossIncomeThb)))} บาท</td><td>{formatMoney(sumValues(snapshot.result.lines.filter((line) => line.code === "source_E_eligible").map((line) => line.value)))} บาท</td><td>{formatMoney(snapshot.result.totalRemittedIncome)} บาท</td><td>{formatMoney(sumValues(snapshot.result.lines.filter((line) => line.code === "source_G").map((line) => line.value)))} บาท</td><td>—</td></tr></tfoot>
         </table></div>
         <SourceCards snapshot={snapshot} />
         <SourceTotals snapshot={snapshot} />
@@ -333,7 +333,7 @@ export function Worksheet({ snapshot, attachments, evidenceMode, showEvidence = 
       <div className="table-scroll worksheet-summary-table-wrap"><table aria-labelledby="worksheet-summary-heading" className="data-table worksheet-summary-table"><tbody>
         {SUMMARY_LETTERS.map((letter) => <tr key={letter}><th scope="row"><FieldLabel letter={letter} /></th><td>{formatMoney(summaryValues[letter])} บาท</td></tr>)}
       </tbody></table></div>
-      <div className="worksheet-provenance"><strong>ที่มาของข้อมูล (L) ที่ผู้ใช้ระบุ:</strong><p>{displayKnownExampleNote(snapshot.inputs.thaiTax.provenance) ?? "ไม่ได้ระบุ"}</p></div>
+      <div className="worksheet-provenance"><strong>ข้อมูลประกอบ (L):</strong><p>{displayKnownExampleNote(snapshot.inputs.thaiTax.provenance) ?? "ผู้ใช้ระบุจำนวนภาษีไทยก่อนเครดิต (L)"}</p></div>
       <p className="worksheet-explanation">(L) คือภาษีไทยที่ผู้ใช้ระบุว่าคำนวณหลังหักค่าใช้จ่ายและค่าลดหย่อนแล้ว และก่อนใช้เครดิตภาษีต่างประเทศ ระบบไม่ได้คำนวณยอดนี้หรือยืนยันรายการหักจากเอกสารที่ให้ไว้</p>
       <ResidencePeriodSummary snapshot={snapshot} />
     </section>

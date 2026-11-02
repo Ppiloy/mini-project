@@ -42,14 +42,14 @@ export const DEMO_POLICY: DemoPolicy = Object.freeze({
   reviewedAt: "2026-10-14",
   assumptions: Object.freeze([
     "Educational worksheet demonstration only; not a tax assessment or legal eligibility opinion.",
-    "Tax paid abroad is assumed eligible only when the user confirms E and records a rationale.",
+    "Tax paid abroad is recorded by the user; an exceptional adjustment to E is explicitly shown with its user-supplied rationale.",
     "Same-year earned income and remittance; one remittance per source; no cumulative prior-year tracking.",
     "A source supports salary under 40(1) or the demonstrated dividend subtype `dividend` under 40(4).",
     "Prepared THB worksheet inputs are already expressed in THB; original-currency D/E/F share one explicit FX quote.",
     "All fixture FX values are synthetic educational values unless the fixture itself identifies a checked source row.",
   ]),
   roundingPolicy: "40 significant digits; sum unrounded country credits, then round total half-up to 2 decimals; display each country at 2 decimals and reconcile the difference.",
-  engineVersion: "ftc-engine-v1",
+  engineVersion: "ftc-engine-v2",
   supportedCountries: Object.freeze({ VN: "Vietnam", CN: "China" }),
   supportedIncomeTypes: Object.freeze({
     salary_40_1: Object.freeze(["salary"]),

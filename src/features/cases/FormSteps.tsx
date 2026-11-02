@@ -6,6 +6,7 @@ import { calculateFTC } from "../../../shared/calculator.js";
 import { formatCalculationIssues, stepForCalculationIssue, validationTargetId, validationTargetLabel, type FormStepIssue } from "../../../shared/formValidation.js";
 import { countryLabel, COUNTRY_CHOICES, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, WORKSHEET_LABELS, WORKSHEET_SECTIONS, worksheetLabel, type WorksheetLetter } from "../../../shared/labels.js";
 import { deriveResidenceDaysForDraft } from "../../../shared/residence.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../../shared/foreignTax.js";
 import { createEmptySource } from "../../fixtures/index.js";
 import { EvidenceFileActions } from "../../components/EvidenceFileActions.js";
 import { FieldLabel } from "../../components/FieldLabel.js";
@@ -62,13 +63,13 @@ function previewCalculation(draft: FtcCaseDraft, allowMissingDomestic: boolean):
       thaiTax: {
         ...preview.thaiTax,
         amountBeforeFtc: "0.00",
-        provenance: "ค่าชั่วคราวสำหรับแสดงสูตรในแบบฟอร์ม",
       },
     };
   }
   preview = {
     ...preview,
-    sources: preview.sources.map((source) => source.eligibleForeignTax !== null && source.eligibilityRationale?.trim()
+    sources: preview.sources.map((source) => effectiveForeignTaxAmount(source) !== null
+      && (!hasEligibleTaxAdjustment(source) || source.eligibilityRationale?.trim())
       ? {
         ...source,
         eligibilityConfirmedAt: source.eligibilityConfirmedAt ?? PREVIEW_CONFIRMATION_AT,
@@ -76,7 +77,7 @@ function previewCalculation(draft: FtcCaseDraft, allowMissingDomestic: boolean):
       }
       : source),
   };
-  if (preview.thaiTax.amountBeforeFtc !== null && preview.thaiTax.provenance?.trim()) {
+  if (preview.thaiTax.amountBeforeFtc !== null) {
     preview = {
       ...preview,
       thaiTax: {
@@ -106,16 +107,6 @@ function formatPercentage(value: string | null): string {
 
 function thaiYear(value: number | null): string {
   return value === null ? "—" : String(value + 543);
-}
-
-function equalAmounts(left: string | null, right: string | null): boolean {
-  if (left === null || right === null) return left === right;
-  try { return new Decimal(left).equals(new Decimal(right)); } catch { return left === right; }
-}
-
-function sumAmounts(left: string | null, right: string | null): string | null {
-  if (left === null || right === null) return null;
-  try { return new Decimal(left).plus(right).toFixed(2); } catch { return null; }
 }
 
 function RequiredMark() {
@@ -280,6 +271,7 @@ export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
 export function StepTwo({ draft, onChange, attachments, onNavigateStep, validationErrors = [] }: StepProps) {
   const [pendingRemovalIndex, setPendingRemovalIndex] = useState<number | null>(null);
   const [blockedRemovalIndex, setBlockedRemovalIndex] = useState<number | null>(null);
+  const [adjustmentOpenBySource, setAdjustmentOpenBySource] = useState<Record<string, boolean>>({});
   const updateSource = (index: number, update: Partial<ForeignIncomeSourceDraft>) => {
     const sources = draft.sources.map((source, currentIndex) => currentIndex === index ? { ...source, ...update } : source);
     onChange(deriveResidenceDaysForDraft({ ...draft, sources }));
@@ -314,7 +306,9 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
       const remittance = source.remittance ?? { remittanceDate: null, transferTotalAmount: null, transferCurrencyCode: source.currencyCode, transferTotalThb: null, classification: null, classificationNote: null };
       const amountUnit = source.inputMode === "original_currency" ? source.currencyCode ?? "สกุลเงินต้นทาง" : source.inputMode === "worksheet_thb" ? "บาท" : "เลือกรูปแบบก่อน";
       const sourceIssues = validationErrors.filter((issue) => issue.path?.[0] === "sources" && issue.path[1] === index);
-      const eligibleMatchesPaid = source.actualForeignTaxPaid !== null && equalAmounts(source.actualForeignTaxPaid, source.eligibleForeignTax);
+      const hasTaxAdjustment = hasEligibleTaxAdjustment(source);
+      const adjustmentKey = source.id ?? `new-${index}`;
+      const adjustmentOpen = hasTaxAdjustment || (adjustmentOpenBySource[adjustmentKey] ?? false);
       const sourcePreview = previewCalculation({ ...draft, sources: [source] }, true);
       const computedG = previewSourceLine(sourcePreview, [source], 0, "source_G");
       const computedShare = previewSourceLine(sourcePreview, [source], 0, "source_share");
@@ -344,7 +338,7 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
                 updateSource(index, { incomeType: (choice?.incomeType ?? null) as ForeignIncomeSourceDraft["incomeType"], subtype: choice?.subtype ?? null });
               }}><option value="">เลือกประเภท</option>{INCOME_CHOICES.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select></label></td>
               <td data-label={`${worksheetLabel("D")} *`}><MoneyField id={`source-${index}-grossIncomeAmount`} label={<span className="sr-only">{worksheetLabel("D")}</span>} value={source.grossIncomeAmount} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { grossIncomeAmount: value })} /></td>
-              <td data-label={`${worksheetLabel("E")} *`}><MoneyField id={`source-${index}-eligibleForeignTax`} label={<span className="sr-only">{worksheetLabel("E")}</span>} value={source.eligibleForeignTax} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { eligibleForeignTax: value, ...(source.actualForeignTaxPaid !== null && equalAmounts(source.actualForeignTaxPaid, source.eligibleForeignTax) ? { actualForeignTaxPaid: value } : {}) })} /></td>
+              <td data-label={`${worksheetLabel("E")} *`}>{adjustmentOpen ? <output className="readonly-value" aria-label={worksheetLabel("E")}>{effectiveForeignTaxAmount(source) === null ? "—" : `${formatMoney(effectiveForeignTaxAmount(source))} ${amountUnit}`}</output> : <MoneyField id={`source-${index}-actualForeignTaxPaid`} label={<span className="sr-only">{worksheetLabel("E")}</span>} value={effectiveForeignTaxAmount(source)} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { actualForeignTaxPaid: value, ...(source.eligibleForeignTax !== null ? { eligibleForeignTax: value } : {}) })} />}</td>
               <td data-label={`${worksheetLabel("F")} *`}><MoneyField id={`source-${index}-remittedIncomeAmount`} label={<span className="sr-only">{worksheetLabel("F")}</span>} value={source.remittedIncomeAmount} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { remittedIncomeAmount: value })} /></td>
               <td data-label={worksheetLabel("G")}><output className="readonly-value" aria-label={worksheetLabel("G")}>{computedG === null ? "—" : `${formatMoney(computedG)} บาท`}</output></td>
               <td data-label={worksheetLabel("H")}><output className="readonly-value" aria-label={worksheetLabel("H")}>{formatPercentage(computedShare)}</output></td>
@@ -367,9 +361,16 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
                 updateSource(index, { ...(changed ? clearAmounts() : {}), currencyCode, fxReference: changed ? clearFxQuote(source, currencyCode) : source.fxReference });
               }} />}
               <label className="field"><span>วันที่นำเงินเข้าไทย <RequiredMark /></span><input id={`source-${index}-remittance-remittanceDate`} type="date" required aria-required="true" value={remittance.remittanceDate ?? ""} onChange={(event) => updateSource(index, { remittance: { ...remittance, remittanceDate: nullableText(event.target.value) } })} /></label>
-              <label className="field field-span"><span>เหตุผลของจำนวน (E) <RequiredMark /></span><textarea id={`source-${index}-eligibilityRationale`} rows={2} maxLength={1000} required aria-required="true" value={displayKnownExampleNote(source.eligibilityRationale) ?? ""} onChange={(event) => updateSource(index, { eligibilityRationale: nullableText(event.target.value) })} placeholder="อธิบายที่มาของจำนวนภาษีในช่อง (E)" /></label>
-              <label className="confirm-card source-paid-equals-eligible field-span"><input type="checkbox" aria-label={`ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ (E) · แหล่งเงินได้ ${index + 1}`} checked={eligibleMatchesPaid} disabled={source.eligibleForeignTax === null} onChange={(event) => updateSource(index, { actualForeignTaxPaid: event.target.checked ? source.eligibleForeignTax : null })} /><span><strong>จำนวนภาษีที่จ่ายจริงเท่ากับจำนวน (E)</strong><small>จำนวนภาษีที่จ่ายจริงและจำนวน (E) ที่ใช้คำนวณเป็นคนละข้อเท็จจริง ระบบจะไม่เติมจำนวนที่จ่ายจริงให้อัตโนมัติ เลือกเมื่อยอดจริงตรงกับจำนวน (E) ทุกประการ</small></span></label>
-              {!eligibleMatchesPaid && <details className="unsupported-details field-span" open><summary>จำนวนภาษีที่จ่ายจริงต่างจาก (E)</summary><div className="field-grid details-grid"><MoneyField id={`source-${index}-actualForeignTaxPaid`} label={<>ภาษีต่างประเทศที่ชำระจริงทั้งหมด <RequiredMark /></>} value={source.actualForeignTaxPaid} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { actualForeignTaxPaid: value })} hint="กรอกยอดจริงตามเอกสาร หากยังไม่ทราบ ให้บันทึกร่างและกลับมากรอกภายหลัง" /></div></details>}
+              {!adjustmentOpen && source.eligibilityRationale?.trim() && <p className="field-hint field-span" role="note">หมายเหตุเดิมที่บันทึกไว้: {displayKnownExampleNote(source.eligibilityRationale)}</p>}
+              <details className="unsupported-details field-span" open={adjustmentOpen} onToggle={(event) => {
+                const nextOpen = event.currentTarget.open;
+                setAdjustmentOpenBySource((current) => ({ ...current, [adjustmentKey]: nextOpen }));
+              }}><summary>รายละเอียดเพิ่มเติมของภาษีที่ชำระจริงและจำนวน (E)</summary>{adjustmentOpen && <div className="field-grid details-grid">
+                <p className="field-hint field-span">กรอกส่วนนี้เมื่อจำนวน (E) ที่ใช้คำนวณต่างจากภาษีที่ชำระจริง หรือเมื่อจำเป็นต้องเก็บข้อมูลเดิมไว้แยกกัน</p>
+                <MoneyField id={`source-${index}-actualForeignTaxPaid`} label={<>ภาษีต่างประเทศที่ชำระจริงทั้งหมด <RequiredMark /></>} value={source.actualForeignTaxPaid} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { actualForeignTaxPaid: value })} />
+                <MoneyField id={`source-${index}-eligibleForeignTax`} label={<>จำนวน (E) ที่ใช้คำนวณ</>} value={source.eligibleForeignTax} unit={amountUnit} disabled={source.inputMode === null} onChange={(value) => updateSource(index, { eligibleForeignTax: value })} hint="เว้นว่างเมื่อใช้จำนวนภาษีที่ชำระจริงเป็น (E)" />
+                <label className="field field-span"><span>เหตุผลของการปรับจำนวน (E){hasTaxAdjustment && <RequiredMark />}</span><textarea id={`source-${index}-eligibilityRationale`} rows={2} maxLength={1000} required={hasTaxAdjustment} aria-required={hasTaxAdjustment} value={displayKnownExampleNote(source.eligibilityRationale) ?? ""} onChange={(event) => updateSource(index, { eligibilityRationale: nullableText(event.target.value) })} placeholder="กรอกเฉพาะเมื่อจำนวน (E) ต่างจากภาษีที่ชำระจริง" /></label>
+              </div>}</details>
               {source.inputMode === "original_currency" && <div className="field-grid details-grid field-span">
                 <MoneyField id={`source-${index}-fxReference-thbRate`} label={<>อัตรา THB ต่อหน่วยฐาน <RequiredMark /></>} value={fx.thbRate} unit="บาท / หน่วย" required onChange={(value) => updateFx({ thbRate: value })} />
                 <label className="field"><span>หน่วยของอัตรา <RequiredMark /></span><select id={`source-${index}-fxReference-baseUnits`} required aria-required="true" value={fx.baseUnits ?? ""} onChange={(event) => updateFx({ baseUnits: event.target.value === "100" ? 100 : event.target.value === "1" ? 1 : null })}><option value="">เลือกหน่วย</option><option value="1">ต่อ 1 หน่วย</option><option value="100">ต่อ 100 หน่วย</option></select></label>
@@ -389,21 +390,27 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
   </section>;
 }
 
-export function StepThree({ draft, onChange, validationErrors = [] }: StepProps) {
-  const preview = previewCalculation(draft, true);
-  const totalRemitted = preview.totalRemittedIncome;
-  const totalAssessable = sumAmounts(draft.domesticAssessableIncome, totalRemitted);
+export function StepThree({ draft, onChange, onNavigateStep, validationErrors = [] }: StepProps) {
+  const result = calculateFTC(draft);
+  const totalRemitted = result.totalRemittedIncome;
+  const totalAssessable = result.totalAssessableIncome;
   const issues = validationErrors.filter((issue) => issue.path?.[0] === "domesticAssessableIncome" || issue.path?.[0] === "thaiTax");
+  const rawRemittanceIssues = result.validationMessages.filter((issue) =>
+    issue.path?.[0] === "sources" && typeof issue.path[1] === "number"
+    && ["inputMode", "currencyCode", "remittedIncomeAmount", "fxReference"].includes(String(issue.path[2]))
+  );
+  const remittanceIssues = formatCalculationIssues(draft, rawRemittanceIssues);
   return <section className="step-panel" aria-labelledby="step-title">
     <h2 id="step-title">{WORKSHEET_SECTIONS[1]}</h2>
     <p className="muted">ระบุเงินได้ในประเทศ (J) และภาษีไทยก่อนเครดิต (L) ระบบรวมเงินได้ที่นำเข้าจากทุกแหล่งเป็น (I) และแสดง (K) = (I) + (J)</p>
     {issues.length > 0 && <div className="alert alert-error" role="alert"><ul>{issues.map((issue, index) => <li key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></li>)}</ul></div>}
     <div className="field-grid field-grid-single">
       <div className="field"><span>{worksheetTitle("I")}</span><output className="readonly-value" aria-label={WORKSHEET_LABELS.I}>{totalRemitted === null ? "—" : `${formatMoney(totalRemitted)} บาท`}</output></div>
-      <MoneyField id="case-domesticAssessableIncome" label={worksheetTitle("J", true)} required value={draft.domesticAssessableIncome} onChange={(value) => onChange({ ...draft, domesticAssessableIncome: value })} />
+      {totalRemitted === null && remittanceIssues.length > 0 && <div className="field field-span" role="status"><strong>ยังสรุปยอด (I) ไม่ได้</strong><ul>{remittanceIssues.map((issue, index) => <li key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} sourceIndex={typeof issue.path?.[1] === "number" ? issue.path[1] : undefined} onNavigateStep={onNavigateStep} targetStep={stepForCalculationIssue(rawRemittanceIssues[index]!)} /></li>)}</ul></div>}
+      <MoneyField id="case-domesticAssessableIncome" label={worksheetTitle("J", true)} required value={draft.domesticAssessableIncome} onChange={(value) => onChange({ ...draft, domesticAssessableIncome: value })} hint="(J) คือเงินได้ในประเทศก่อนหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง" />
       <div className="field"><span>{worksheetTitle("K")}</span><output className="readonly-value" aria-label={WORKSHEET_LABELS.K}>{totalAssessable === null ? "—" : `${formatMoney(totalAssessable)} บาท`}</output><small className="field-hint">คำนวณจาก (I) + (J)</small></div>
-      <MoneyField id="case-thaiTax-amountBeforeFtc" label={worksheetTitle("L", true)} required value={draft.thaiTax.amountBeforeFtc} onChange={(value) => onChange({ ...draft, thaiTax: { ...draft.thaiTax, amountBeforeFtc: value } })} />
-      <label className="field field-span"><span>ที่มาของจำนวน (L) <RequiredMark /></span><textarea id="case-thaiTax-provenance" rows={3} maxLength={1000} required aria-required="true" value={displayKnownExampleNote(draft.thaiTax.provenance) ?? ""} onChange={(event) => onChange({ ...draft, thaiTax: { ...draft.thaiTax, provenance: nullableText(event.target.value) } })} placeholder="อธิบายที่มาของภาษีไทยจากตัวอย่างหรือข้อมูลที่ใช้" /><small className="field-hint">(L) คือภาษีไทยก่อนเครดิต หลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง ไม่ใช่ยอดหัก ณ ที่จ่าย</small></label>
+      <MoneyField id="case-thaiTax-amountBeforeFtc" label={worksheetTitle("L", true)} required value={draft.thaiTax.amountBeforeFtc} onChange={(value) => onChange({ ...draft, thaiTax: { ...draft.thaiTax, amountBeforeFtc: value } })} hint="ระบุจำนวนหลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง แต่ก่อนใช้เครดิตภาษีต่างประเทศ" />
+      {draft.thaiTax.provenance && <p className="field-hint field-span">หมายเหตุเดิมที่บันทึกไว้: {displayKnownExampleNote(draft.thaiTax.provenance)}</p>}
     </div>
     <div className="info-callout"><strong>ยืนยันภาษีไทยในขั้นตรวจทาน</strong><p>การเปลี่ยน (J), แหล่งเงินได้, ช่วงพำนัก หรืออัตราแลกเปลี่ยน จะทำให้ต้องตรวจทานการยืนยันอีกครั้ง</p></div>
   </section>;
@@ -447,7 +454,8 @@ export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttac
         const source = sourceIndex === undefined ? null : draft.sources[sourceIndex] ?? null;
         const items = attachments.filter((file) => sourceIndex === undefined ? file.sourceId === null : sourceId !== null && file.sourceId === sourceId);
         const needsSourceProof = !isZeroAmount(source?.remittedIncomeAmount);
-        const checklistKinds = evidenceKinds.filter(({ kind }) => kind !== "foreign_tax" || !isZeroAmount(source?.eligibleForeignTax));
+        const effectiveTax = source === null ? null : effectiveForeignTaxAmount(source);
+        const checklistKinds = evidenceKinds.filter(({ kind }) => kind !== "foreign_tax" || !isZeroAmount(effectiveTax));
         return <article className="evidence-card" key={sourceIndex === undefined ? "thai-tax-evidence" : `source-evidence-${sourceIndex}`}>
           <div className="evidence-title"><div><h3>{label}</h3><p>ไฟล์ {items.length}/5 · รวมไม่เกิน 30 MiB ต่อกรณี</p></div><div className="evidence-upload-actions">
             {sourceIndex === undefined ? <UploadButton label="แนบหลักฐานภาษีไทย" kind="thai_tax" sourceId={null} disabled={busy || items.length >= 5} onUpload={onUpload} /> : evidenceKinds.map(({ kind, label: kindLabel }) => <UploadButton key={kind} label={`แนบ: ${kindLabel}`} kind={kind} sourceId={sourceId} sourceIndex={sourceIndex} disabled={busy || items.length >= 5} onUpload={onUpload} />)}
@@ -465,7 +473,7 @@ export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttac
         </article>;
       })}
     </div>
-    <div className="review-assumptions"><h3>ขอบเขตและสมมติฐาน</h3><ul><li>การคำนวณนี้เป็นตัวอย่างทางการศึกษา ไม่ใช่การวินิจฉัยสิทธิหรือแบบยื่นภาษี</li><li>จำนวนภาษีไทย (L) มาจากข้อมูลที่ผู้ใช้ระบุ ไม่ได้อนุมานจาก (J)</li><li>ระบบแสดงจำนวนภาษีต่างประเทศที่จ่ายจริงแยกจากจำนวน (E) ที่ใช้ในตัวอย่างคำนวณ</li><li>เมื่อยืนยันข้อมูล ผลคำนวณจะใช้ข้อมูลต้นทางและอัตราแลกเปลี่ยนที่แสดงในรายงาน</li></ul></div>
+    <div className="review-assumptions"><h3>ขอบเขตและสมมติฐาน</h3><ul><li>การคำนวณนี้เป็นตัวอย่างทางการศึกษา ไม่ใช่การวินิจฉัยสิทธิหรือแบบยื่นภาษี</li><li>จำนวนภาษีไทย (L) มาจากข้อมูลที่ผู้ใช้ระบุ ไม่ได้อนุมานจาก (J)</li><li>ภาษีที่จ่ายจริงจะแสดงแยกจาก (E) เมื่อมีการระบุการปรับจำนวน (E)</li><li>เมื่อยืนยันข้อมูล ผลคำนวณจะใช้ข้อมูลต้นทางและอัตราแลกเปลี่ยนที่แสดงในรายงาน</li></ul></div>
     <p className="field-hint">ยืนยันจำนวน L และ E ได้จากปุ่มด้านล่าง ระบบจะบันทึกการยืนยันร่วมกับร่าง</p>
   </section>;
 }

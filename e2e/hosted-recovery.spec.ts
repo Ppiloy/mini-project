@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { DEMO_POLICY, policyReference } from "../shared/policy.js";
 import { createCalculationSnapshot } from "../shared/snapshot.js";
 import { partialRemittanceFixture } from "../src/fixtures/index.js";
 
@@ -147,12 +148,12 @@ test("a submit conflict loads the newer draft and disables the stale preview", a
       lines: [],
       validationMessages: [],
       assumptions: [],
-      policyVersion: "test-policy",
-      engineVersion: "test-engine",
-      roundingPolicy: "test-rounding",
+      policyVersion: DEMO_POLICY.id,
+      engineVersion: DEMO_POLICY.engineVersion,
+      roundingPolicy: DEMO_POLICY.roundingPolicy,
     },
     evidence: [],
-    policy: { id: "test-policy", taxYear: 2025, effectiveFrom: null, effectiveTo: null, sourceUrls: [], reviewedAt: null, assumptions: [], roundingPolicy: "test-rounding" },
+    policy: policyReference(),
     createdAt: "2026-10-14T00:00:00.000Z",
   };
   let detailCalls = 0;
@@ -289,7 +290,7 @@ test("review controls stay locked until the hosted calculation request finishes"
 
   await page.goto(`/app/cases/${caseId}/edit`);
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป" }).click();
-  const confirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" });
+  const confirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" });
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await calculateRequest;
   await expect(confirmation).toBeDisabled();

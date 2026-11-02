@@ -16,7 +16,6 @@ test("country and currency choices stay searchable and usable within the source 
     page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }),
     page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }),
     page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }),
-    page.getByRole("textbox", { name: /^ภาษีต่างประเทศที่ชำระจริงทั้งหมด/ }),
   ];
   for (const field of moneyEntryFields) await expect(field).toBeDisabled();
 
@@ -33,6 +32,7 @@ test("country and currency choices stay searchable and usable within the source 
   await page.getByRole("option", { name: /จีน \(CN\)/ }).click();
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("original_currency");
   for (const field of moneyEntryFields) await expect(field).toBeEnabled();
+  await expect(page.getByRole("textbox", { name: /^ภาษีต่างประเทศที่ชำระจริงทั้งหมด/ })).toHaveCount(0);
 
   const currency = page.getByRole("combobox", { name: "สกุลเงินต้นทาง" });
   await expect(currency).toHaveValue("CNY · หยวนจีน");
@@ -86,8 +86,8 @@ test("editing residence periods refreshes the counted days and clears affected c
   await expect(page.getByRole("region", { name: "ช่วงเวลาที่พำนักในประเทศไทย" })).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
 
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  const thaiConfirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" });
-  const sourceConfirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" });
+  const thaiConfirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" });
+  const sourceConfirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" });
   await expect(thaiConfirmation).not.toBeChecked();
   await expect(sourceConfirmation).not.toBeChecked();
 
@@ -97,8 +97,8 @@ test("editing residence periods refreshes the counted days and clears affected c
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await page.reload();
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" })).toBeChecked();
 });
 
 test("missing source residence days link back to the dates that calculate them", async ({ page }) => {
@@ -147,7 +147,8 @@ test("one source card contains A–H and the next section does not repeat D/E/F"
   await expect(source.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toHaveValue("50000.00");
   await expect(source.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ })).toHaveValue("5000.00");
   await expect(source.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toHaveValue("25000.00");
-  await expect(source.getByLabel("เหตุผลของจำนวน (E)")).toHaveValue("ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ");
+  await expect(source.getByRole("textbox", { name: "เหตุผลของการปรับจำนวน (E)" })).toHaveCount(0);
+  await expect(source.getByText("หมายเหตุเดิมที่บันทึกไว้: ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ")).toBeVisible();
   await expect(source.getByText("2,500.00 บาท", { exact: true })).toBeVisible();
   await expect(source.getByText("50.00%", { exact: true })).toBeVisible();
   for (const label of [
@@ -180,7 +181,8 @@ test("one source card contains A–H and the next section does not repeat D/E/F"
 
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
-  await expect(page.getByLabel("ที่มาของจำนวน (L)")).toHaveValue("ตัวอย่างการจัดสรรนี้กำหนด (L) เป็นจำนวนที่ระบุไว้เพื่อสาธิตสูตร ไม่ใช่การคำนวณภาษีเงินได้บุคคลธรรมดาไทยครบถ้วน");
+  await expect(page.getByRole("textbox", { name: /ที่มาของจำนวน \(L\)/ })).toHaveCount(0);
+  await expect(page.getByText(/หมายเหตุเดิมที่บันทึกไว้: ตัวอย่างการจัดสรรนี้กำหนด/)).toBeVisible();
   await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toHaveCount(0);
@@ -198,17 +200,28 @@ test("known English worksheet notes from an older saved draft display in Thai wi
 
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   const sourceNote = "ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ";
-  await expect(page.getByLabel("เหตุผลของจำนวน (E)")).toHaveValue(sourceNote);
+  const source = page.locator(".source-card").first();
+  const adjustmentDetails = source.locator("details").filter({ hasText: "รายละเอียดเพิ่มเติมของภาษีที่ชำระจริงและจำนวน (E)" });
+  await expect(adjustmentDetails).not.toHaveAttribute("open", "");
+  await expect(source.getByText(`หมายเหตุเดิมที่บันทึกไว้: ${sourceNote}`)).toBeVisible();
+  await adjustmentDetails.locator("summary").click();
+  await expect(adjustmentDetails).toHaveAttribute("open", "");
+  await expect(page.getByLabel("เหตุผลของการปรับจำนวน (E)")).toHaveValue(sourceNote);
   const editedSourceNote = "บันทึกผู้ใช้: ยืนยันจากเอกสารตัวอย่างที่ตรวจแล้ว";
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill(editedSourceNote);
+  await page.getByLabel("เหตุผลของการปรับจำนวน (E)").fill(editedSourceNote);
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   const thaiTaxNote = "ตัวอย่างการจัดสรรนี้กำหนด (L) เป็นจำนวนที่ระบุไว้เพื่อสาธิตสูตร ไม่ใช่การคำนวณภาษีเงินได้บุคคลธรรมดาไทยครบถ้วน";
-  await expect(page.getByLabel("ที่มาของจำนวน (L)")).toHaveValue(thaiTaxNote);
+  await expect(page.getByText(`หมายเหตุเดิมที่บันทึกไว้: ${thaiTaxNote}`)).toBeVisible();
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await expect(page.getByLabel("เหตุผลของจำนวน (E)")).toHaveValue(editedSourceNote);
+  const reloadedSource = page.locator(".source-card").first();
+  const reloadedAdjustmentDetails = reloadedSource.locator("details").filter({ hasText: "รายละเอียดเพิ่มเติมของภาษีที่ชำระจริงและจำนวน (E)" });
+  await expect(reloadedSource.getByText(`หมายเหตุเดิมที่บันทึกไว้: ${editedSourceNote}`)).toBeVisible();
+  await reloadedAdjustmentDetails.locator("summary").click();
+  await expect(reloadedAdjustmentDetails).toHaveAttribute("open", "");
+  await expect(page.getByLabel("เหตุผลของการปรับจำนวน (E)")).toHaveValue(editedSourceNote);
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await expect(page.getByLabel("ที่มาของจำนวน (L)")).toHaveValue(thaiTaxNote);
+  await expect(page.getByText(`หมายเหตุเดิมที่บันทึกไว้: ${thaiTaxNote}`)).toBeVisible();
 });

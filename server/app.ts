@@ -3,6 +3,7 @@ import { getDatabase } from "@netlify/database";
 import connectPgSimple from "connect-pg-simple";
 import express, { type ErrorRequestHandler, type Express, type Request, type Response } from "express";
 import { withCanonicalThbAmounts } from "../shared/calculator.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../shared/foreignTax.js";
 import session from "express-session";
 import { createEmptyDraft, draftSchema } from "../shared/draft.js";
 import {
@@ -448,8 +449,8 @@ function addExplicitConfirmations(
   const savedSources = new Map(saved.sources.filter((source) => source.id).map((source) => [source.id as string, source]));
 
   if (flags.thaiTax) {
-    if (clean.thaiTax.amountBeforeFtc === null || !clean.thaiTax.provenance?.trim()) {
-      throw new ApiFailure(422, "invalid_input", "กรุณาระบุภาษีไทยและแหล่งที่มาก่อนยืนยัน");
+    if (clean.thaiTax.amountBeforeFtc === null) {
+      throw new ApiFailure(422, "invalid_input", "กรุณาระบุจำนวนภาษีไทยก่อนเครดิต");
     }
     clean.thaiTax.confirmedAt = new Date().toISOString();
     clean.thaiTax.confirmedInputFingerprint = taxInputFingerprint(clean);
@@ -465,8 +466,8 @@ function addExplicitConfirmations(
     const previous = source.id ? savedSources.get(source.id) : undefined;
     const askedToConfirm = Boolean((source.id && flags.eligibleSourceIds.includes(source.id)) || flags.eligibleSourceIndexes.includes(index));
     if (askedToConfirm) {
-      if (source.eligibleForeignTax === null || !source.eligibilityRationale?.trim()) {
-        throw new ApiFailure(422, "invalid_input", "กรุณาระบุภาษีที่ใช้เป็นฐานและเหตุผลก่อนยืนยัน");
+      if (effectiveForeignTaxAmount(source) === null || (hasEligibleTaxAdjustment(source) && !source.eligibilityRationale?.trim())) {
+        throw new ApiFailure(422, "invalid_input", "กรุณาระบุจำนวนภาษีต่างประเทศที่ใช้คำนวณให้ครบก่อนยืนยัน");
       }
       source.eligibilityConfirmedAt = new Date().toISOString();
       source.eligibilityConfirmedInputFingerprint = sourceEligibilityFingerprint(source);

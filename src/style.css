@@ -221,6 +221,26 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
 .result-total { margin: 18px 0; padding: 22px 24px; display: flex; justify-content: space-between; align-items: center; gap: 20px; background: linear-gradient(115deg, #fff, #f2f7ff); }
 .result-total h2 { margin: 0 0 4px; font-size: 17px; }
 .result-total p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: 10px; }
+.result-credit-summary { margin: 18px 0; padding: 20px 22px; border-color: #c7d7fe; background: linear-gradient(115deg, #fff, #f5f8ff); }
+.result-credit-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.result-credit-summary-head h2 { margin: 0 0 3px; color: #173b60; font-size: 16px; }
+.result-credit-summary-head p { margin: 0; color: #526b83; font-size: 10px; }
+.result-credit-total { color: #1849a9; font-size: clamp(23px, 3vw, 30px); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.result-rounding-note { margin: 12px 0 0; padding: 10px 12px; display: grid; gap: 3px; border: 1px solid #d5e2f0; border-radius: 8px; background: #fff; color: #405a73; font-size: 10px; line-height: 1.55; }
+.result-rounding-note strong { color: #173b60; font-variant-numeric: tabular-nums; }
+.result-country-summary-list { margin-top: 15px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.result-country-summary { min-width: 0; padding: 12px; border: 1px solid #dce5ef; border-radius: 10px; background: #fff; }
+.result-country-summary h3 { margin: 0 0 9px; color: #174c9b; font-size: 13px; }
+.result-country-values { margin: 0; display: grid; gap: 6px; }
+.result-country-values > div { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+.result-country-values dt { color: #526b83; font-size: 10px; line-height: 1.5; }
+.result-country-values dd { margin: 0; color: #173b60; font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.result-country-limiting { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid #e6edf4; color: #304b67; font-size: 10px; line-height: 1.55; }
+.result-summary-empty { margin: 12px 0 0; color: #526b83; font-size: 11px; }
+.result-worksheet-details { margin: 18px 0; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.result-worksheet-details > summary { padding: 13px 16px; color: #174c9b; cursor: pointer; font-weight: 650; }
+.result-worksheet-details[open] > summary { border-bottom: 1px solid var(--line); }
+.result-worksheet-details > .worksheet { padding: 14px; }
 .total-amount { color: #1849a9; white-space: nowrap; font: 700 clamp(26px, 4vw, 35px)/1.3 "Noto Sans Thai", sans-serif; font-variant-numeric: tabular-nums; }
 .total-amount small { font-size: 13px; font-weight: 500; }
 .result-facts { margin: 16px 0 25px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
@@ -443,6 +463,12 @@ input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; accent-color
   .officer-worklist-filters { grid-template-columns: 1fr 1fr; }
   .filter-panel .button { grid-column: 1 / -1; }
   .result-total { align-items: start; flex-direction: column; padding: 19px; }
+  .result-credit-summary { padding: 16px; }
+  .result-credit-summary-head { align-items: start; flex-direction: column; gap: 8px; }
+  .result-country-summary-list { grid-template-columns: 1fr; }
+  .result-country-values dt { font-size: 10px; }
+  .result-country-values dd { font-size: 11px; }
+  .result-worksheet-details > .worksheet { padding: 10px; }
   .total-amount { font-size: 30px; }
   .result-facts { grid-template-columns: 1fr 1fr; }
   .fact-card { padding: 11px; }

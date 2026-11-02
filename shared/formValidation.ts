@@ -33,7 +33,6 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   sourceLabel: "แหล่งที่มาอัตราแลกเปลี่ยน",
   domesticAssessableIncome: worksheetLabel("J"),
   amountBeforeFtc: worksheetLabel("L"),
-  provenance: "ที่มาของจำนวน (L)",
   unsupportedClassification: "ข้อเท็จจริงเพิ่มเติมที่ยังไม่รองรับ",
   countryName: worksheetLabel("B"),
   residencePeriods: "ช่วงวันที่พำนัก",

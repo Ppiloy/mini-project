@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import type { CalculationSnapshot, OfficerReviewPoint, ReviewPointCategory, UnsupportedClassification } from "./contracts.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "./foreignTax.js";
 import { EVIDENCE_LABELS } from "./labels.js";
 
 const reviewScope = "จุดตรวจนี้ช่วยชี้ข้อมูลเชิงโครงสร้างเท่านั้น ไม่ใช่การอนุมัติหรือคำวินิจฉัยสิทธิในเครดิตภาษี; การมีไฟล์แนบไม่ได้ยืนยันว่าเอกสารถูกต้องหรือครบถ้วน";
@@ -50,16 +51,6 @@ function positive(value: string | null): boolean {
   try { return new Decimal(value).gt(0); } catch { return false; }
 }
 
-function valuesDiffer(left: string | null, right: string | null): boolean {
-  if (left === null || right === null) return false;
-  try { return !new Decimal(left).eq(right); } catch { return left !== right; }
-}
-
-function actualVsEligibleTaxDiffer(snapshot: CalculationSnapshot["inputs"]["sources"][number]): boolean {
-  return valuesDiffer(snapshot.actualForeignTaxPaid, snapshot.eligibleForeignTax)
-    || valuesDiffer(snapshot.actualForeignTaxPaidThb, snapshot.eligibleForeignTaxThb);
-}
-
 /** Classifies only facts frozen in the submitted snapshot; it does not recalculate or approve a claim. */
 export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): OfficerReviewPoint[] {
   const points: OfficerReviewPoint[] = [];
@@ -96,7 +87,7 @@ export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): Office
         nextAction: "ตรวจสอบอัตราแลกเปลี่ยนกับแหล่งข้อมูลและวันที่ที่เกี่ยวข้อง" });
     }
 
-    if (actualVsEligibleTaxDiffer(source)) {
+    if (hasEligibleTaxAdjustment(source)) {
       add({ code: "source.actual_tax_differs_from_used", category: "substantive", ...location,
         title: "ยอดภาษีที่ใช้คำนวณต่างจากยอดที่ระบุว่าชำระจริง",
         reason: "ยอดภาษีต่างประเทศที่ใช้เป็นจำนวน (E) ที่ใช้คำนวณ ไม่เท่ากับยอดภาษีต่างประเทศที่บันทึกว่าชำระจริง; ความต่างนี้ไม่ได้ตัดสินสิทธิหรือความเหมาะสมโดยอัตโนมัติ",
@@ -105,8 +96,11 @@ export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): Office
 
     if (positive(source.remittedIncomeAmount) || positive(source.remittedIncomeThb)) {
       const requiredKinds = new Set<"foreign_income" | "remittance" | "foreign_tax">(["foreign_income", "remittance"]);
-      if (positive(source.actualForeignTaxPaid) || positive(source.actualForeignTaxPaidThb) ||
-          positive(source.eligibleForeignTax) || positive(source.eligibleForeignTaxThb)) requiredKinds.add("foreign_tax");
+      const effectiveTax = effectiveForeignTaxAmount(source);
+      const rawTaxFactsAbsent = source.actualForeignTaxPaid === null && source.eligibleForeignTax === null;
+      const hasLegacyCachedTax = rawTaxFactsAbsent
+        && (positive(source.actualForeignTaxPaidThb) || positive(source.eligibleForeignTaxThb));
+      if (positive(source.actualForeignTaxPaid) || positive(effectiveTax) || hasLegacyCachedTax) requiredKinds.add("foreign_tax");
       const presentKinds = new Set(snapshot.evidence.filter((evidence) => source.id !== null && evidence.sourceId === source.id)
         .map((evidence) => evidence.kind));
       const missingKinds = [...requiredKinds].filter((kind) => !presentKinds.has(kind));

@@ -71,10 +71,10 @@ export interface ForeignIncomeSourceDraft {
   grossIncomeAmount: DecimalString | null;
   currencyCode: string | null;
   grossIncomeThb: DecimalString | null;
-  /** Foreign tax actually paid, distinct from the amount assumed eligible. */
+  /** E ordinarily records tax actually paid. */
   actualForeignTaxPaid: DecimalString | null;
   actualForeignTaxPaidThb: DecimalString | null;
-  /** E: foreign tax treated as eligible under a stated demo assumption. */
+  /** Optional exceptional E adjustment; null means use actualForeignTaxPaid. */
   eligibleForeignTax: DecimalString | null;
   eligibleForeignTaxThb: DecimalString | null;
   eligibilityRationale: string | null;

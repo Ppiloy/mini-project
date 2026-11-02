@@ -114,6 +114,126 @@ describe("FTC calculator", () => {
     expect(result.countries.find(({ countryCode }) => countryCode === "VN")?.remittedIncome).toBe("750000");
   });
 
+  it("uses paid foreign tax as E when no exceptional adjustment is supplied", () => {
+    const draft = withSource(partialRemittanceFixture.draft, 0, {
+      actualForeignTaxPaid: "5000.00",
+      actualForeignTaxPaidThb: "999999.999999",
+      eligibleForeignTax: null,
+      eligibleForeignTaxThb: "999999.999999",
+      eligibilityRationale: null,
+    });
+
+    expect(isSourceEligibilityConfirmationCurrent(draft.sources[0]!)).toBe(true);
+    const result = calculateFTC(draft);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_E_paid")?.value).toBe("5000");
+    expect(result.lines.find(({ code }) => code === "source_E_eligible")?.value).toBe("5000");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(withCanonicalThbAmounts(draft).sources[0]?.eligibleForeignTaxThb).toBe("5000");
+  });
+
+  it("uses the paid amount for original-currency E when no adjustment is stored", () => {
+    const draft = withSource(quotationPerHundredFixture.draft, 0, {
+      eligibleForeignTax: null,
+      eligibleForeignTaxThb: null,
+      eligibilityRationale: null,
+    });
+    const result = calculateFTC(draft);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_E_paid")?.value).toBe("1050");
+    expect(result.lines.find(({ code }) => code === "source_E_eligible")?.value).toBe("1050");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("1050");
+    expect(withCanonicalThbAmounts(draft).sources[0]?.eligibleForeignTaxThb).toBe("1050");
+    expect(calculateFTC(draft).validationMessages).toEqual([]);
+    expect(draft.sources[0]?.eligibleForeignTax).toBeNull();
+  });
+
+  it("preserves a legacy E adjustment explicitly and requires a reason only for that difference", () => {
+    const adjusted = withSource(partialRemittanceFixture.draft, 0, {
+      actualForeignTaxPaid: "5000.00",
+      eligibleForeignTax: "3000.00",
+      eligibilityRationale: "Prior record documents the exceptional adjustment.",
+    });
+    const withoutReason = withSource(adjusted, 0, { eligibilityRationale: null });
+    const result = calculateFTC(adjusted);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_E_paid")?.value).toBe("5000");
+    expect(result.lines.find(({ code }) => code === "source_E_eligible")?.value).toBe("3000");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("1500");
+    expect(withCanonicalThbAmounts(adjusted).sources[0]?.eligibleForeignTaxThb).toBe("3000");
+    expect(calculateFTC(withoutReason).validationMessages.some(({ path }) => path?.join(".") === "sources.0.eligibilityRationale")).toBe(true);
+  });
+
+  it("accepts the supplied L amount without requiring free-text provenance", () => {
+    const withoutLNote = reconfirm({
+      ...partialRemittanceFixture.draft,
+      thaiTax: { ...partialRemittanceFixture.draft.thaiTax, provenance: null },
+    });
+
+    expect(isThaiTaxConfirmationCurrent(withoutLNote)).toBe(true);
+    expect(calculateFTC(withoutLNote).outcome).toBe("ready");
+  });
+
+  it("keeps I and K available when a source amount is known but E is incomplete", () => {
+    const source = partialRemittanceFixture.draft.sources[0]!;
+    const draft = reconfirm({
+      ...partialRemittanceFixture.draft,
+      domesticAssessableIncome: "1000000.00",
+      sources: [{
+        ...source,
+      actualForeignTaxPaid: null,
+      eligibleForeignTax: null,
+      eligibilityRationale: null,
+      }],
+    });
+
+    const result = calculateFTC(draft);
+
+    expect(result.outcome).toBe("incomplete");
+    expect(result.totalRemittedIncome).toBe("25000");
+    expect(result.totalAssessableIncome).toBe("1025000");
+    expect(result.allowableCredit).toBeNull();
+    expect(result.countries).toEqual([]);
+    expect(result.lines).toEqual([]);
+  });
+
+  it("shows an explicit zero remittance as zero and leaves unknown remittance totals blank", () => {
+    const source = partialRemittanceFixture.draft.sources[0]!;
+    const zeroF = reconfirm({
+      ...partialRemittanceFixture.draft,
+      domesticAssessableIncome: "100000.00",
+      sources: [{ ...source, actualForeignTaxPaid: null, eligibleForeignTax: null, remittedIncomeAmount: "0.00" }],
+    });
+    const unknownF = reconfirm({
+      ...partialRemittanceFixture.draft,
+      domesticAssessableIncome: "100000.00",
+      sources: [{ ...source, actualForeignTaxPaid: null, eligibleForeignTax: null, remittedIncomeAmount: null }],
+    });
+
+    expect(calculateFTC(zeroF)).toMatchObject({ totalRemittedIncome: "0", totalAssessableIncome: "100000" });
+    const unknownResult = calculateFTC(unknownF);
+    expect(unknownResult.totalRemittedIncome).toBeNull();
+    expect(unknownResult.totalAssessableIncome).toBeNull();
+    expect(unknownResult.validationMessages.some(({ path }) => path?.join(".") === "sources.0.remittedIncomeAmount")).toBe(true);
+  });
+
+  it("leaves I and K blank when an original-currency source has no numeric FX rate", () => {
+    const source = quotationPerHundredFixture.draft.sources[0]!;
+    const draft = reconfirm({
+      ...quotationPerHundredFixture.draft,
+      sources: [{ ...source, actualForeignTaxPaid: null, eligibleForeignTax: null, fxReference: { ...source.fxReference!, thbRate: null } }],
+    });
+
+    const result = calculateFTC(draft);
+
+    expect(result.totalRemittedIncome).toBeNull();
+    expect(result.totalAssessableIncome).toBeNull();
+    expect(result.validationMessages.some(({ path }) => path?.join(".") === "sources.0.fxReference.thbRate")).toBe(true);
+  });
+
   it("allocates tax to a partial remittance from original D/E and keeps the source contribution", () => {
     const result = calculateFTC(partialRemittanceFixture.draft);
     expect(result.lines.find(({ code }) => code === "source_share")?.value).toBe("0.5");
@@ -255,6 +375,9 @@ describe("FTC calculator", () => {
     const unverifiedBotQuote = withSource(draft, 0, {
       fxReference: { ...fx, rateType: "bot_average_buying", sourceKind: "bot", sourceLabel: "BOT average buying" },
     });
+    const dateMismatchedQuote = withSource(draft, 0, {
+      fxReference: { ...fx, effectiveDate: "2025-01-02" },
+    });
     const fixtureForDifferentRemittanceDate = withSource(draft, 0, {
       remittance: { ...source.remittance!, remittanceDate: "2025-01-02" },
     });
@@ -266,6 +389,11 @@ describe("FTC calculator", () => {
       expect(result.allowableCredit).toBeNull();
       expect(result.validationMessages.map(({ code }) => code)).toContain("fx.reference_unverified");
     }
+    const dateMismatchResult = calculateFTC(dateMismatchedQuote);
+    expect(dateMismatchResult.outcome).toBe("needs_review");
+    expect(dateMismatchResult.totalRemittedIncome).toBe("3500");
+    expect(dateMismatchResult.totalAssessableIncome).toBe("3500");
+    expect(dateMismatchResult.validationMessages.map(({ code }) => code)).toContain("fx.reference_unverified");
   });
 
   it("allows a clearly identified manual quote while keeping it distinct from a verified source", () => {

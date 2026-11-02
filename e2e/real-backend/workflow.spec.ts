@@ -29,10 +29,8 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
   await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
   await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill("หลักฐานสมมติระบุภาษีที่ชำระและสมมติให้เข้าเกณฑ์เต็มจำนวน");
   await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
-  await page.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
   const firstSourceSave = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
   await advance(page);
   const sourceSaveResponse = await firstSourceSave;
@@ -44,12 +42,11 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
   await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
   await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
-  await page.getByLabel("ที่มาของจำนวน (L)").fill("ตัวเลขสมมติสำหรับ acceptance ในเครื่อง");
   await advance(page);
   await advance(page);
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" }).check();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานเงินได้" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานภาษีต่างประเทศ" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
@@ -99,7 +96,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(calculateResponse.status()).toBe(200);
   expect(apiSuccessSchemas.snapshot.safeParse(await calculateResponse.json()).success).toBe(true);
   await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=[0-9a-f-]+$`, "i"));
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี", exact: true })).toContainText("2,500.00 บาท");
   const previewId = new URL(page.url()).searchParams.get("preview")!;
   const previewResponse = await browserApi(page, `/api/snapshots/${previewId}`);
   expect(previewResponse.status).toBe(200);
@@ -124,7 +121,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await assertFocusedSkipLinkIsScreenOnly(page, testInfo.outputPath("draft-report.pdf"));
   await page.goto(`/app/cases/${caseId}/result?preview=${previewId}`);
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี", exact: true })).toContainText("2,500.00 บาท");
   const sourceLines = preview.result.lines.filter((line) => line.sourceId === sourceId);
   expect(sourceLines.map((line) => line.code)).toEqual([
     "source_D", "source_E_paid", "source_E_eligible", "source_F", "source_share", "source_G",
@@ -275,18 +272,15 @@ test("real API rejects incomplete and unsupported input without inventing an ord
   await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
   await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("10000");
   await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("1000");
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill("ค่าทดสอบขอบเขต");
   await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("5000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2024-03-01");
-  await page.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
   await advance(page);
   await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("10000");
   await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("1000");
-  await page.getByLabel("ที่มาของจำนวน (L)").fill("ค่าทดสอบขอบเขต");
   await advance(page);
   await advance(page);
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" }).check();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
 
   // Unsupported input stays editable in the form. Exercise the immutable needs_review snapshot
@@ -336,14 +330,11 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     await first.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
     await first.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
     await first.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
-    await first.getByLabel("เหตุผลของจำนวน (E)").fill("ข้อมูลทดสอบสำหรับตรวจการบันทึกที่ขัดแย้ง");
     await first.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
     await first.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
-    await first.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
     await advance(first);
     await first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
     await first.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
-    await first.getByLabel("ที่มาของจำนวน (L)").fill("ข้อมูลทดสอบสำหรับตรวจการบันทึกที่ขัดแย้ง");
     const initialSave = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
     await first.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
     expect((await initialSave).status()).toBe(200);

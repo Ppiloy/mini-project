@@ -31,6 +31,9 @@ test("taxpayer result presents the Vietnam–China calculation as the canonical 
   await expect(page.getByRole("button", { name: "แก้ไขข้อมูล" })).toBeVisible();
   await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeVisible();
 
+  const worksheetDetails = page.locator(".result-worksheet-details");
+  await expect(worksheetDetails).not.toHaveAttribute("open", "");
+  await worksheetDetails.locator(":scope > summary").click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   for (const label of [
@@ -123,6 +126,9 @@ test("a missing earned-income year stays blank instead of borrowing the calculat
   }, { savedSnapshot: snapshot, caseRecord: record });
 
   await page.goto(`/demo/cases/${caseId}/result?preview=${snapshotId}`);
+  const worksheetDetails = page.locator(".result-worksheet-details");
+  await expect(worksheetDetails).not.toHaveAttribute("open", "");
+  await worksheetDetails.locator(":scope > summary").click();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   await expect(sourceTable.locator(".worksheet-source-values").getByRole("cell").first()).toHaveText("—");
 });
@@ -184,8 +190,8 @@ test("officer detail reuses the worksheet and groups frozen evidence by source a
     "แนบ: หลักฐานการนำเงินเข้าไทย",
   ]) await page.getByLabel(label).setInputFiles(file);
 
-  await page.getByLabel("ยืนยันจำนวนและที่มาของภาษีไทย (L)").check();
-  await page.getByLabel("ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1").check();
+  await page.getByLabel("ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)").check();
+  await page.getByLabel("ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1").check();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
@@ -197,7 +203,7 @@ test("officer detail reuses the worksheet and groups frozen evidence by source a
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   await expect(sourceTable.getByText("50.00%", { exact: true })).toBeVisible();
-  await expect(sourceTable.getByText("เหตุผลของ (E) ที่ผู้ใช้ระบุ:", { exact: false })).toBeVisible();
+  await expect(sourceTable.getByText("หมายเหตุเดิมที่บันทึกไว้:", { exact: false })).toBeVisible();
   await expect(page.getByRole("region", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toContainText("ก่อนใช้เครดิตภาษีต่างประเทศ");
   const evidence = page.getByRole("region", { name: "เอกสารประกอบที่บันทึกกับผลนี้" });
   await expect(page.getByRole("link", { name: "ดูรายงาน" })).toHaveCount(1);

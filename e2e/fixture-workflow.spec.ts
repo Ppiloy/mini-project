@@ -39,7 +39,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
 
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี" })).toContainText("2,500.00 บาท");
   const previewUrl = new URL(page.url());
   const caseId = previewUrl.pathname.split("/")[3]!;
   const previewId = previewUrl.searchParams.get("preview")!;
@@ -54,7 +54,7 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง")).toBeVisible();
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.goto(`/demo/cases/${caseId}/result?preview=${previewId}`);
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี" })).toContainText("2,500.00 บาท");
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
   await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
@@ -88,7 +88,7 @@ test("taxpayer dashboard never presents a stale draft preview or a ready amount 
   await advanceToReview(page);
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี" })).toContainText("2,500.00 บาท");
   const previewUrl = new URL(page.url());
   const caseId = previewUrl.pathname.split("/")[3]!;
   const card = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
@@ -129,10 +129,10 @@ test("editing Thai tax invalidates its confirmation and prevents a ready preview
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" })).not.toBeChecked();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
 
-  await expect(page.getByText("ข้อมูลรายได้ อัตราแลกเปลี่ยน หรือที่มาของภาษีไทยเปลี่ยนแล้ว กรุณายืนยันภาษีไทยอีกครั้ง")).toBeVisible();
+  await expect(page.getByText("จำนวนภาษีไทยก่อนเครดิตหรือข้อมูลรายได้เปลี่ยนแล้ว กรุณายืนยันอีกครั้ง")).toBeVisible();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
   await expect(page.getByRole("alert").filter({ hasText: "ยังสร้างผลคำนวณไม่ได้" })).toBeVisible();
@@ -144,8 +144,8 @@ test("each review confirmation is one keyboard-operable control that persists af
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await advanceToReview(page);
 
-  const thaiTaxConfirmation = page.getByRole("checkbox", { name: /ยืนยัน.*ภาษีไทย \(L\)/ });
-  const sourceConfirmation = page.getByRole("checkbox", { name: /ยืนยันจำนวน \(E\).*แหล่งเงินได้ 1/ });
+  const thaiTaxConfirmation = page.getByRole("checkbox", { name: /ยืนยันจำนวนภาษีไทยก่อนเครดิต \(L\)/ });
+  const sourceConfirmation = page.getByRole("checkbox", { name: /ยืนยันจำนวนภาษีต่างประเทศ \(E\).*แหล่งเงินได้ 1/ });
   await expect(thaiTaxConfirmation).toHaveCount(1);
   await expect(sourceConfirmation).toHaveCount(1);
   await thaiTaxConfirmation.focus();
@@ -163,8 +163,8 @@ test("each review confirmation is one keyboard-operable control that persists af
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
   await page.reload();
   await advanceToReview(page);
-  await expect(page.getByRole("checkbox", { name: /ยืนยัน.*ภาษีไทย \(L\)/ })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: /ยืนยันจำนวน \(E\).*แหล่งเงินได้ 1/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ยืนยันจำนวนภาษีไทยก่อนเครดิต \(L\)/ })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: /ยืนยันจำนวนภาษีต่างประเทศ \(E\).*แหล่งเงินได้ 1/ })).toBeChecked();
 });
 
 test("form actions have no disabled first Back, duplicate mobile actions, or revision status", async ({ page }) => {
@@ -241,12 +241,11 @@ test("source deletion keeps linked evidence reachable and asks before deleting a
 test("zero eligible tax permits one combined source file with income and remittance checklist only", async ({ page }) => {
   await openPartialRemittance(page);
   await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("0.00");
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill("ในตัวอย่างนี้ไม่ได้ขอใช้เครดิตภาษีต่างประเทศ");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" }).check();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานเงินได้" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
   await expect(page.getByRole("checkbox", { name: "หลักฐานภาษีต่างประเทศ" })).toHaveCount(0);
@@ -336,9 +335,7 @@ test("missing original-currency FX is linked to its source and remains saveable"
   await page.getByLabel("วันที่เกิดเงินได้").fill("2025-01-01");
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("original_currency");
   await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("100");
-  await page.getByRole("textbox", { name: /^ภาษีต่างประเทศที่ชำระจริงทั้งหมด/ }).fill("20");
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("10");
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill("สมมติฐานเพื่อทดสอบช่องอัตราแลกเปลี่ยนที่จำเป็น");
+  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("20");
   await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("50");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-01-01");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -425,9 +422,7 @@ test("Next explains the missing source while an incomplete draft can still be sa
   await grossIncomeLink.click();
   await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toBeFocused();
   await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
-  await page.getByRole("textbox", { name: /^ภาษีต่างประเทศที่ชำระจริงทั้งหมด/ }).fill("5000");
   await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("4000");
-  await page.getByLabel("เหตุผลของจำนวน (E)").fill("ระบุสมมติฐานภาษีที่เข้าเกณฑ์สำหรับตัวอย่างนี้");
   await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-02-15");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -440,7 +435,6 @@ test("Next explains the missing source while an incomplete draft can still be sa
   await expect(page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toBeFocused();
   await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
   await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("10000");
-  await page.getByLabel("ที่มาของจำนวน (L)").fill("ตัวเลขตัวอย่างที่ผู้ใช้จัดเตรียมไว้");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "เครดิตภาษีที่คำนวณได้ตามประเทศ" })).toBeVisible();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
