@@ -3,6 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyDraft, createEmptySource } from "../shared/draft.js";
+import { slideDiscrepancyFixture } from "../src/fixtures/domain.js";
 import { createApp } from "./app.js";
 import { hashPasswordForTest } from "./passwords.js";
 import type { PgPoolLike, PgQueryable } from "./postgres.js";
@@ -260,6 +261,44 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
       .send({expectedRevision:1,requestId:"preview-stale"});
     expect(stale.status).toBe(409);
     await expect(pool.query("UPDATE calculation_snapshots SET result='{}'::jsonb WHERE id=$1",[preview.body.data.snapshot.id])).rejects.toThrow();
+  });
+
+  it("returns a full-precision VN/CN golden preview through the authenticated HTTP snapshot contract", async () => {
+    const { app } = await setup();
+    const { agent, csrf } = await login(app);
+    const record = await createCase(agent, csrf, "golden-precision-case");
+    const draft = structuredClone(slideDiscrepancyFixture.draft);
+    draft.id = record.id;
+    draft.revision = record.draft.revision;
+    const trimMoney = (value: string | null) => value?.replace(/\.00$/, "") ?? null;
+    draft.domesticAssessableIncome = trimMoney(draft.domesticAssessableIncome);
+    draft.thaiTax.amountBeforeFtc = trimMoney(draft.thaiTax.amountBeforeFtc);
+    for (const source of draft.sources) {
+      source.id = null;
+      source.grossIncomeAmount = trimMoney(source.grossIncomeAmount);
+      source.actualForeignTaxPaid = trimMoney(source.actualForeignTaxPaid);
+      source.eligibleForeignTax = trimMoney(source.eligibleForeignTax);
+      source.remittedIncomeAmount = trimMoney(source.remittedIncomeAmount);
+      if (source.remittance) source.remittance.transferTotalAmount = trimMoney(source.remittance.transferTotalAmount);
+    }
+
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: record.draft.revision, requestId: "golden-precision-save", data: draft,
+        confirmations: { thaiTax: true, eligibleSourceIndexes: draft.sources.map((_source, index) => index) } });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+
+    const revision = saved.body.data.case.draft.revision as number;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: revision, requestId: "golden-precision-preview" });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.data.snapshot.result.outcome).toBe("ready");
+    expect(preview.body.data.snapshot.result.allowableCredit).toBe("143544.30");
+    expect(preview.body.data.snapshot.result.countries.find(({ countryCode }: { countryCode: string }) => countryCode === "VN")?.thaiTaxLimit)
+      .toBe("121044.3037974683544303797468354430379747");
+
+    const readBack = await agent.get(`/api/snapshots/${preview.body.data.snapshot.id}`).set("Origin", origin);
+    expect(readBack.status, JSON.stringify(readBack.body)).toBe(200);
+    expect(readBack.body.data.snapshot.result.unroundedCountryCreditTotal).toBe("143544.3037974683544303797468354430379747");
   });
 
   it("resumes an identical upload, advances evidence revisions, authorizes bytes, then tombstones and releases references", async () => {

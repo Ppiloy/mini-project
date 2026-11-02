@@ -270,7 +270,9 @@ export const apiErrorEnvelopeSchema: z.ZodType<ApiError> = z.object({
 
 const dateTime = z.string().datetime({ offset: true });
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const decimal = z.string().regex(/^-?\d{1,18}(?:\.\d{1,12})?$/);
+// Calculated values retain 40 significant digits; very small values may also
+// have leading fractional zeros. This bound applies only to response DTOs.
+const decimal = z.string().max(100).regex(/^-?\d{1,18}(?:\.\d{1,80})?$/);
 const nullableDecimal = decimal.nullable();
 
 export const apiUserSchema: z.ZodType<ApiUser> = z.object({

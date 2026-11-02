@@ -1,0 +1,40 @@
+# Combined FTC review implementation
+
+Source: `FTC-Combined-Review-Comments-2026-11-02.md`.
+Starting commit: `3e902ddb35d37ee0c9227629bd3cfd3a1e7a8ef8`, branch `codex/ftc-integration`.
+
+The user's separate implementation request authorizes this work. The source document's review-only restrictions describe the earlier report, not this later request.
+
+## Approved scope and test interfaces
+
+- Reuse the previously confirmed browser journeys, public calculation/validation interfaces, and authenticated HTTP interfaces. Implementation uses GPT-6-luna with maximum reasoning effort; the coordinating agent reviews the changes and release evidence before each commit/push.
+- Preserve the reviewed 2025 VN/CN calculation examples, formulas, rounding, immutable submitted records, original evidence bytes, and supplied Thai tax (L).
+- Officer decisions/supplements, broader country/type/year support, and cross-year/multiple-remittance modelling remain deferred under the previous scope agreement.
+- The user explicitly permits zero-file submission with an available-evidence declaration and officer flags.
+- The user explicitly permits declaration-only residence entry alongside date ranges. A computed below-180 result cannot be overridden by a contradictory declaration.
+- The final FX direction is manual entry with clear remittance-date guidance and BOT as an optional reference only. No live lookup or prepared-catalogue requirement is included.
+
+## Mapping to the current build
+
+| Review topic | Current evidence and next action |
+|---|---|
+| E and L entry, C07/C08 | Code still requires ordinary E rationale/equality controls and L prose. Simplify the ordinary path while preserving genuine adjusted-tax facts and saved provenance. |
+| I/K, C09 | Existing totals are present. The form routes them through full calculation readiness and temporary J/L values; reproduce the reported incomplete-state display before correcting it. |
+| Residence/support, C01/C03/C04 | Date ranges, threshold arithmetic, scope warnings, and selectable-vs-supported countries already exist. Add the approved declaration mode, early supported-flow gate, and clearer support presentation. |
+| FX, C05/C06 | Simplify manual original-currency entry, show readable quotation units, and bind the entered rate to the remittance date. Keep BOT as an optional reference; never relabel an old rate for a new date or invent a historical quote. |
+| Evidence, C12/C13 | Original bytes, preview/download, quotas, and immutable inventories already exist. Replace mandatory completeness with the approved inventory-bound declaration and immediate missing-evidence flags; retain validation/security and unresolved-upload guards. |
+| Result clarity, C15/C16 | Shared A–Q, PDF and XLSX are present. Lead the taxpayer result with saved credit/country limitations and make the full worksheet expandable. |
+| Wording/clutter, C10/C14/C19 | Shared labels and a single footer already exist. Follow the newer wording-first preference and clarify browser-local submission destination. |
+| Officer review, C17/C18 | Worklist filters/flags and frozen detail already exist. Reconcile flags with the new evidence declaration; do not duplicate the worklist or add decisions. |
+| Verification, C11/C20 | The starting build has recorded passing release/browser checks and a ready preview. Findings from other builds are not counted as current defects without reproduction. |
+
+## Release evidence
+
+Each completed increment will record the reproduced behavior, RED/GREEN results, review findings, checks, and deployment below.
+
+### 1. Full-precision authenticated calculation responses
+
+- Reproduced at the public snapshot validator and authenticated HTTP calculation endpoint: the supported Vietnam–China calculation returned a ready result, but response validation rejected its repeating country limit and the endpoint returned 503.
+- Widened only the response decimal-string bounds to retain the engine's 40 significant digits, including leading fractional zeros. No input limits, arithmetic, rounding, policy scope, or stored values were loosened or rounded to fit the transport.
+- RED/GREEN: public snapshot-contract tests cover the 143,544.30 golden result and small generated limits; the HTTP tracer saves a valid case, calculates, and reads back the exact unrounded result through authenticated routes.
+- Root reviewed the diff and verified an isolated copy of the exact staged files: 139 tests, eight ordered migrations, TypeScript, and the production build pass with CI's two-worker configuration.
