@@ -6,6 +6,7 @@ import { Worksheet } from "../../components/Worksheet.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoCases } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
+import { ExcelExportButton } from "./ExcelExportButton.js";
 
 type Mode = "demo" | "hosted";
 
@@ -45,7 +46,7 @@ export function ReportPage({ mode }: { mode: Mode }) {
   const outcomeText = snapshot.result.outcome === "ready" ? "คำนวณได้ตามข้อมูลและสมมติฐานที่ระบุ" : snapshot.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ" : "มีข้อมูลที่ต้องทบทวน";
   const caseReference = `FTC-${snapshot.caseId.replace(/[^a-z0-9]/gi, "").slice(-8).toUpperCase()}`;
   return <>
-    <div className="report-toolbar no-print"><a className="button button-quiet" href={mode === "demo" ? (user?.role === "officer" ? "/demo/officer" : "/demo/app") : (user?.role === "officer" ? "/officer" : "/app")}>กลับไปหน้ารายการ</a><button className="button button-primary" onClick={() => window.print()}>พิมพ์ / บันทึกเป็น PDF</button></div>
+    <div className="report-toolbar no-print"><a className="button button-quiet" href={mode === "demo" ? (user?.role === "officer" ? "/demo/officer" : "/demo/app") : (user?.role === "officer" ? "/officer" : "/app")}>กลับไปหน้ารายการ</a><ExcelExportButton snapshot={snapshot} /><button className="button button-primary" onClick={() => window.print()}>พิมพ์ / บันทึกเป็น PDF</button></div>
     <article className="print-report">
       <header className="report-header"><div><p className="report-kicker">รายงานผลการคำนวณ</p><h1>รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ</h1><p>ผลนี้ไม่ใช่แบบยื่นภาษีหรือการรับรองสิทธิ</p></div><div className="report-mark" aria-hidden="true">ภาษี</div></header>
       {draftReport && <div className="draft-watermark">ร่าง — ยังไม่ได้ส่ง</div>}
