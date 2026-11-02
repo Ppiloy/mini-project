@@ -19,8 +19,8 @@ async function freshCheckoutFixture(): Promise<string> {
   await writeFile(join(root, "netlify/database/migrations.lock.json"), lock);
   const names = JSON.parse(lock.toString("utf8")).files.map((file: { name: string }) => file.name) as string[];
   for (const name of names) {
-    const committedBytes = execFileSync("git", ["show", `HEAD:netlify/database/migrations/${name}`], { cwd: repoRoot });
-    await writeFile(join(migrationsDirectory, name), committedBytes);
+    const migrationBytes = await readFile(join(repoRoot, "netlify/database/migrations", name));
+    await writeFile(join(migrationsDirectory, name), migrationBytes);
   }
 
   execFileSync("git", ["init", "--quiet"], { cwd: root });
@@ -42,7 +42,7 @@ describe("the ordered migration release gate", () => {
   it("accepts exact committed bytes from a fresh checkout on Windows or Unix", async () => {
     const root = await freshCheckoutFixture();
 
-    await expect(verifyMigrations(root)).resolves.toBe(7);
+    await expect(verifyMigrations(root)).resolves.toBe(8);
   }, 20_000);
 
   it.each([
@@ -53,6 +53,7 @@ describe("the ordered migration release gate", () => {
     "20261014000500_operator_operations.sql",
     "20261014000600_demo_reset_authorization.sql",
     "20261014000700_restore_initialization_gate.sql",
+    "20261102000100_residence_periods_allow_leap_year.sql",
   ])("rejects CRLF conversion of the committed %s bytes", async (name) => {
     const root = await freshCheckoutFixture();
     const path = join(root, "netlify/database/migrations", name);

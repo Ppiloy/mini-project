@@ -16,13 +16,23 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const caseId = await createCase(page);
 
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
+  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-12-31");
   await advance(page);
   await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
-  await page.getByLabel("ประเทศที่เกิดเงินได้").selectOption("VN");
-  await page.locator(".source-card").first().locator("select").nth(1).selectOption("salary_40_1");
+  const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
+  await country.fill("VN");
+  await page.getByRole("option", { name: /เวียดนาม \(VN\)/ }).click();
+  await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2025-01-15");
-  await page.getByLabel("วันพำนักในประเทศไทยในปีที่เกิดเงินได้").fill("365");
-  await page.getByLabel("รูปแบบการกรอก").selectOption("worksheet_thb");
+  await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
+  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
+  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
+  await page.getByLabel("เหตุผลของจำนวน (E)").fill("หลักฐานสมมติระบุภาษีที่ชำระและสมมติให้เข้าเกณฑ์เต็มจำนวน");
+  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
+  await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
+  await page.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
   const firstSourceSave = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
   await advance(page);
   const sourceSaveResponse = await firstSourceSave;
@@ -31,32 +41,23 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(apiSuccessSchemas.case.safeParse(sourceEnvelope).success).toBe(true);
   const sourceId = sourceEnvelope.data?.case?.draft?.sources?.[0]?.id;
   expect(sourceId).toMatch(/^[0-9a-f-]{36}$/i);
-  await expect(page.getByRole("heading", { name: "การนำเงินเข้าและภาษีต่างประเทศ" })).toBeVisible();
-
-  await page.getByLabel("D · เงินได้พึงประเมินต้นทาง").fill("50000");
-  await page.getByLabel("ภาษีต่างประเทศที่ชำระจริง").fill("5000");
-  await page.getByLabel("E · ภาษีที่สมมติว่าเข้าเกณฑ์").fill("5000");
-  await page.getByLabel("เหตุผลของสมมติฐาน E").fill("หลักฐานสมมติระบุภาษีที่ชำระและสมมติให้เข้าเกณฑ์เต็มจำนวน");
-  await page.getByLabel("F · ส่วนเงินได้ที่นำเข้าไทย").fill("25000");
-  await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
-  await page.getByLabel("ยอดโอนทั้งหมด (ข้อมูลประกอบ)").fill("25000");
-  await page.getByLabel("ลักษณะการโอน").selectOption("income_only");
+  await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
+  await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
+  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
+  await page.getByLabel("ที่มาของจำนวน (L)").fill("ตัวเลขสมมติสำหรับ acceptance ในเครื่อง");
   await advance(page);
-  await page.getByLabel("J · เงินได้พึงประเมินในประเทศก่อนหักรายการ").fill("100000");
-  await page.getByLabel("L · ภาษีไทยก่อนเครดิตภาษีต่างประเทศ").fill("20000");
-  await page.getByLabel("ที่มาของจำนวน L").fill("ตัวเลขสมมติสำหรับ acceptance ในเครื่อง");
   await advance(page);
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย L" }).check();
-  await page.getByRole("checkbox", { name: "ยืนยัน E และเหตุผล · แหล่งเงินได้ 1" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานเงินได้ต่างประเทศ" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานภาษีที่ชำระในต่างประเทศ" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("checkbox", { name: "หลักฐานเงินได้" }).check();
+  await page.getByRole("checkbox", { name: "หลักฐานภาษีต่างประเทศ" }).check();
   await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
 
   const uploadedFiles = [
     { name: "thai-tax.pdf", label: "แนบหลักฐานภาษีไทย", kind: "thai_tax" },
-    { name: "foreign-income.pdf", label: "แนบ: หลักฐานเงินได้ต่างประเทศ", kind: "foreign_income" },
-    { name: "foreign-tax.pdf", label: "แนบ: หลักฐานภาษีที่ชำระในต่างประเทศ", kind: "foreign_tax" },
+    { name: "foreign-income.pdf", label: "แนบ: หลักฐานเงินได้", kind: "foreign_income" },
+    { name: "foreign-tax.pdf", label: "แนบ: หลักฐานภาษีต่างประเทศ", kind: "foreign_tax" },
     { name: "remittance.pdf", label: "แนบ: หลักฐานการนำเงินเข้าไทย", kind: "remittance" },
   ] as const;
   for (const file of uploadedFiles) {
@@ -93,7 +94,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(Buffer.concat(pieces)).toEqual(proofBytes("foreign-income.pdf"));
 
   const calculateResponsePromise = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/calculate`) && response.request().method() === "POST");
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   const calculateResponse = await calculateResponsePromise;
   expect(calculateResponse.status()).toBe(200);
   expect(apiSuccessSchemas.snapshot.safeParse(await calculateResponse.json()).success).toBe(true);
@@ -107,8 +108,10 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(preview.result.allowableCredit).toBe("2500.00");
   const taxpayerCard = page.locator(".case-card").filter({ hasText: caseId.slice(-8).toUpperCase() });
   await page.route(`**/api/cases/${caseId}`, (route) => route.abort(), { times: 1 });
-  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
-  await expect(taxpayerCard.getByRole("alert")).toContainText("รุ่นนโยบาย");
+  await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
+  await expect(taxpayerCard.getByRole("alert")).toBeVisible();
+  await expect(taxpayerCard.getByRole("alert")).toContainText(/fetch|ไม่สามารถ|โหลด/i);
+  await expect(taxpayerCard.getByRole("alert")).not.toContainText("rd-ftc-demo-2568-v1");
   await expect(taxpayerCard).not.toContainText("2,500.00");
   await taxpayerCard.getByRole("button", { name: "ลองโหลดผลคำนวณอีกครั้ง" }).click();
   await expect(taxpayerCard).toContainText("2,500.00");
@@ -166,8 +169,8 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(submittedSourceLines.map((line) => line.value)).toEqual(sourceLines.map((line) => line.value));
   expect(submittedSnapshot.evidence.map((item) => ({ ...item })).sort((left, right) => left.id.localeCompare(right.id))).toEqual(uploadedEvidence);
 
-  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
-  await expect(taxpayerCard).toContainText("ส่งแล้ว · คิวตรวจสอบ");
+  await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
+  await expect(taxpayerCard).toContainText("ส่งแล้ว · รอการตรวจทาน");
   await expect(taxpayerCard).toContainText("2,500.00");
   await taxpayerCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/reports/${submittedSnapshotId}$`));
@@ -246,39 +249,66 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
 
 test("real API rejects incomplete and unsupported input without inventing an ordinary credit", async ({ page }) => {
   const seed = await operatorSeed();
-  await login(page, seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!);
+  const session = await login(page, seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!);
   const caseId = await createCase(page);
-  for (let step = 0; step < 4; step += 1) await advance(page);
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
-  await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=`));
-  await expect(page.locator('.alert[role="status"]').filter({ hasText: "ข้อมูลยังไม่ครบสำหรับคำนวณ" })).toBeVisible();
-  await expect(page.getByText("2,500.00", { exact: true })).toHaveCount(0);
-  const incompleteId = new URL(page.url()).searchParams.get("preview")!;
+  const incompleteCalculation = await browserApi(page, `/api/cases/${caseId}/calculate`, {
+    method: "POST", csrfToken: session.csrfToken,
+    body: { expectedRevision: 0, requestId: crypto.randomUUID() },
+  });
+  expect(incompleteCalculation.status).toBe(200);
+  const incompleteId = (incompleteCalculation.json as { data: { snapshot: { id: string } } }).data.snapshot.id;
   const incomplete = await browserApi(page, `/api/snapshots/${incompleteId}`);
   expect((incomplete.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "incomplete", allowableCredit: null });
 
-  await page.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+  await page.goto(`/app/cases/${caseId}/edit`);
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
+  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2024-01-01");
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2024-12-31");
   await advance(page);
   await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
-  await page.getByLabel("ประเทศที่เกิดเงินได้").selectOption("XX");
-  await page.locator(".source-card").first().locator("select").nth(1).selectOption("other");
+  const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
+  await country.fill("XX");
+  await page.getByRole("option", { name: /ประเทศอื่น \(XX\)/ }).click();
+  await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("other_unclassified");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2024-03-01");
-  await page.getByLabel("วันพำนักในประเทศไทยในปีที่เกิดเงินได้").fill("179");
-  await page.getByLabel("รูปแบบการกรอก").selectOption("worksheet_thb");
+  await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
+  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("10000");
+  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("1000");
+  await page.getByLabel("เหตุผลของจำนวน (E)").fill("ค่าทดสอบขอบเขต");
+  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("5000");
+  await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2024-03-01");
+  await page.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
+  await advance(page);
+  await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("10000");
+  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("1000");
+  await page.getByLabel("ที่มาของจำนวน (L)").fill("ค่าทดสอบขอบเขต");
   await advance(page);
   await advance(page);
-  await page.getByLabel("J · เงินได้พึงประเมินในประเทศก่อนหักรายการ").fill("10000");
-  await page.getByLabel("L · ภาษีไทยก่อนเครดิตภาษีต่างประเทศ").fill("1000");
-  await page.getByLabel("ที่มาของจำนวน L").fill("ค่าทดสอบขอบเขต");
-  await advance(page);
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
-  await expect(page).toHaveURL(/\/app\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByText("ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)")).toBeVisible();
-  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
-  const unsupportedId = new URL(page.url()).searchParams.get("preview")!;
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวนและที่มาของภาษีไทย (L)" }).check();
+  await page.getByRole("checkbox", { name: "ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1" }).check();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
+
+  // Unsupported input stays editable in the form. Exercise the immutable needs_review snapshot
+  // through the authenticated API after saving, rather than expecting the editor to create it.
+  await expect(page.getByRole("alert").filter({ hasText: "ยังสร้างผลคำนวณไม่ได้ กรุณาแก้ไขรายการที่ระบุ" })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/edit$`));
+  const unsupportedDraftSave = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
+  await page.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
+  expect((await unsupportedDraftSave).status()).toBe(200);
+  const savedUnsupportedCase = (await browserApi(page, `/api/cases/${caseId}`)).json as { data: { case: { draft: { revision: number } } } };
+  const unsupportedCalculation = await browserApi(page, `/api/cases/${caseId}/calculate`, {
+    method: "POST", csrfToken: session.csrfToken,
+    body: { expectedRevision: savedUnsupportedCase.data.case.draft.revision, requestId: crypto.randomUUID() },
+  });
+  expect(unsupportedCalculation.status).toBe(200);
+  const unsupportedId = (unsupportedCalculation.json as { data: { snapshot: { id: string } } }).data.snapshot.id;
   const unsupported = await browserApi(page, `/api/snapshots/${unsupportedId}`);
   expect((unsupported.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "needs_review", allowableCredit: null });
+  await page.goto(`/app/cases/${caseId}/result?preview=${unsupportedId}`);
+  await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=`));
+  await expect(page.getByText("ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)")).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
 });
 
 test("real stale save offers deliberate reapply and keeps typed values until saved", async ({ browser }) => {
@@ -292,8 +322,32 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     const caseId = await createCase(first);
     const second = await secondContext.newPage();
     const secondSession = await login(second, credential);
-    for (let step = 0; step < 3; step += 1) await advance(first);
-    await first.getByLabel("J · เงินได้พึงประเมินในประเทศก่อนหักรายการ").fill("111111");
+    await first.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
+    await first.getByRole("button", { name: "เพิ่มช่วงเวลา", exact: true }).click();
+    await first.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
+    await first.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-12-31");
+    await advance(first);
+    await first.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก", exact: true }).click();
+    const country = first.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
+    await country.fill("VN");
+    await first.getByRole("option", { name: /เวียดนาม \(VN\)/ }).click();
+    await first.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
+    await first.getByLabel("วันที่เกิดเงินได้").fill("2025-01-15");
+    await first.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
+    await first.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
+    await first.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
+    await first.getByLabel("เหตุผลของจำนวน (E)").fill("ข้อมูลทดสอบสำหรับตรวจการบันทึกที่ขัดแย้ง");
+    await first.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
+    await first.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
+    await first.getByRole("checkbox", { name: /ยืนยันว่าจำนวนภาษีต่างประเทศที่จ่ายจริงเท่ากับ \(E\)/ }).check();
+    await advance(first);
+    await first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
+    await first.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
+    await first.getByLabel("ที่มาของจำนวน (L)").fill("ข้อมูลทดสอบสำหรับตรวจการบันทึกที่ขัดแย้ง");
+    const initialSave = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
+    await first.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
+    expect((await initialSave).status()).toBe(200);
+    await first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("111111");
     const latestEnvelope = (await browserApi(second, `/api/cases/${caseId}`)).json as { data: { case: { draft: Record<string, unknown> & { revision: number } } } };
     const latestDraft = latestEnvelope.data.case.draft;
     const independentSave = await browserApi(second, `/api/cases/${caseId}/draft`, {
@@ -309,19 +363,19 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     const conflictResponsePromise = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
     await first.getByRole("button", { name: "บันทึกร่าง" }).click();
     expect((await conflictResponsePromise).status()).toBe(409);
-    await expect(first.locator(".conflict-panel")).toContainText("ไม่บันทึกทับข้อมูลล่าสุดโดยอัตโนมัติ");
+    await expect(first.locator(".conflict-panel")).toContainText("ไม่บันทึกทับข้อมูลที่บันทึกจากอีกหน้าต่างโดยอัตโนมัติ");
     await first.getByRole("button", { name: "นำการแก้ไขปัจจุบันไปใช้ต่อ" }).click();
-    await expect(first.getByLabel("J · เงินได้พึงประเมินในประเทศก่อนหักรายการ")).toHaveValue("111111");
+    await expect(first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toHaveValue("111111");
     await expect(first.locator(".conflict-panel")).toBeHidden();
     const reapplyResponsePromise = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
     await first.getByRole("button", { name: "บันทึกร่าง" }).click();
     const reapplyResponse = await reapplyResponsePromise;
     const reapplyRequest = reapplyResponse.request().postDataJSON() as { expectedRevision?: number };
     expect(reapplyResponse.status(), `reapply save used revision ${reapplyRequest.expectedRevision}`).toBe(200);
-    await expect(first.getByRole("status").filter({ hasText: /บันทึกแล้ว · รุ่นข้อมูล/ })).toBeVisible();
+    await expect(first.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
     await first.reload();
-    for (let step = 0; step < 3; step += 1) await advance(first);
-    await expect(first.getByLabel("J · เงินได้พึงประเมินในประเทศก่อนหักรายการ")).toHaveValue("111111");
+    for (let step = 0; step < 2; step += 1) await advance(first);
+    await expect(first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toHaveValue("111111");
     const saved = await browserApi(first, `/api/cases/${caseId}`);
     const savedDraft = (saved.json as { data: { case: { draft: { domesticAssessableIncome: string } } } }).data.case.draft;
     expect(savedDraft.domesticAssessableIncome).toBe("111111");
@@ -343,7 +397,7 @@ test("real same-browser logout and account switch clear the previous account's c
   await expect(page).toHaveURL(/\/login$/);
   expect(await page.evaluate((key) => sessionStorage.getItem(key), cacheKey)).toBeNull();
   await login(page, taxpayerB);
-  await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "รายการคำนวณเครดิตภาษี" })).toBeVisible();
   const bCases = await browserApi(page, "/api/cases");
   expect((bCases.json as { data: { cases: Array<{ id: string }> } }).data.cases.some((record) => record.id === caseId)).toBe(false);
   expect(await page.evaluate((key) => sessionStorage.getItem(key), cacheKey)).toBeNull();
@@ -352,7 +406,7 @@ test("real same-browser logout and account switch clear the previous account's c
 test("real hosted and fixture identities cannot cross route modes; fixture choice revokes hosted session and hosted login restores it", async ({ page }) => {
   const seed = await operatorSeed();
   const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
-  await login(page, credential);
+  const session = await login(page, credential);
 
   // A live server identity cannot render the fixture UI at fixture-only URLs.
   await page.goto("/demo/app");
@@ -365,17 +419,21 @@ test("real hosted and fixture identities cannot cross route modes; fixture choic
   // Create a real server snapshot so the report boundary is exercised against a real id.
   await page.goto("/app");
   const caseId = await createCase(page);
-  for (let step = 0; step < 4; step += 1) await advance(page);
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  const snapshotResponse = await browserApi(page, `/api/cases/${caseId}/calculate`, {
+    method: "POST", csrfToken: session.csrfToken,
+    body: { expectedRevision: 0, requestId: crypto.randomUUID() },
+  });
+  expect(snapshotResponse.status).toBe(200);
+  const realSnapshotId = (snapshotResponse.json as { data: { snapshot: { id: string } } }).data.snapshot.id;
+  await page.goto(`/app/cases/${caseId}/result?preview=${realSnapshotId}`);
   await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=`));
-  const realSnapshotId = new URL(page.url()).searchParams.get("preview")!;
   const snapshotProbe = await browserApi(page, `/api/snapshots/${realSnapshotId}`);
   expect(snapshotProbe.status).toBe(200);
 
   // Selecting the fixture persona from a hosted session confirms server logout first.
   await page.goto("/demo");
   const logoutResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
   expect((await logoutResponse).status()).toBe(200);
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.locator(".mode-tag")).toBeVisible();
@@ -430,12 +488,12 @@ test("fixture chooser waits for the real initial hosted session response before 
     await page.goto("/demo");
     await realSessionReady;
     await expect(page.getByRole("status").filter({ hasText: "กำลังตรวจสอบเซสชัน" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toHaveCount(0);
 
     releaseSession();
-    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeVisible();
     const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
     expect((await logoutResponsePromise).status()).toBe(200);
     await expect(page).toHaveURL(/\/demo\/app$/);
     expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
@@ -457,12 +515,12 @@ test("offline fixture fallback discloses that an existing hosted session could n
     const page = await offlineContext.newPage();
     await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"));
     await page.goto("/demo");
-    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeEnabled();
     const sessionWarning = page.getByRole("alert");
     await expect(sessionWarning).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
-    await expect(sessionWarning).toContainText("rd-ftc-demo-2568-v1");
+    await expect(sessionWarning).not.toContainText("rd-ftc-demo-2568-v1");
 
-    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
     await expect(page).toHaveURL(/\/demo\/app$/);
     await expect(page.locator(".mode-tag")).toBeVisible();
     const persistentWarning = page.getByRole("alert");
@@ -474,7 +532,7 @@ test("offline fixture fallback discloses that an existing hosted session could n
     await expect(page.getByRole("alert").filter({ hasText: "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว" })).toBeVisible();
     await page.goto("/demo");
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
-    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
+    await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
     await expect(page).toHaveURL(/\/demo\/officer$/);
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
     await page.unroute("**/api/auth/session");
@@ -508,7 +566,7 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
     await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"), { times: 1 });
     await page.goto("/demo");
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
-    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
     await expect(page).toHaveURL(/\/demo\/app$/);
 
     let oldResponseFetched!: () => void;
@@ -565,9 +623,9 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
       browser.history.pushState({}, "", "/demo");
       browser.dispatchEvent(new browser.PopStateEvent("popstate", { state: null }));
     });
-    await expect(page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeVisible();
     const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
     expect((await logoutResponsePromise).status()).toBe(200);
     await expect(page).toHaveURL(/\/demo\/app$/);
     expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
@@ -643,7 +701,7 @@ test("hosted editor guards Back/Forward and sign-out while preserving dirty valu
   const credential = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
   await login(page, credential);
   await createCase(page);
-  await page.getByRole("link", { name: "หน้าหลักระบบต้นแบบ" }).click();
+  await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
   await expect(page).toHaveURL(/\/app$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/app\/cases\/[0-9a-f-]+\/edit$/i);
@@ -716,7 +774,7 @@ test("fixture mode switch keeps the hosted session visible after a real logout r
   }, { times: 1 });
 
   const failedLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
   const failedLogout = await failedLogoutPromise;
   expect(failedLogout.status()).toBe(403);
   const failureEnvelope = await failedLogout.json() as { error?: { requestId?: string } };
@@ -724,12 +782,12 @@ test("fixture mode switch keeps the hosted session visible after a real logout r
   expect(requestId).toMatch(/^[0-9a-f-]{36}$/i);
   const failureAlert = page.getByRole("alert");
   await expect(failureAlert).toContainText(requestId!);
-  await expect(failureAlert).toContainText("rd-ftc-demo-2568-v1");
+  await expect(failureAlert).not.toContainText("rd-ftc-demo-2568-v1");
   await expect(page).toHaveURL(/\/demo$/);
   expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
 
   const retryLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
   expect((await retryLogoutPromise).status()).toBe(200);
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.locator(".mode-tag")).toBeVisible();

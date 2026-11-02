@@ -2,6 +2,7 @@ import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "../../shared/contra
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../../shared/confirmations.js";
 import type { ExchangeRateReference, IncomeType } from "../../shared/contracts.js";
 import { createEmptyDraft, createEmptySource, emptyDraft, emptySource } from "../../shared/draft.js";
+import { displayKnownExampleNote } from "../../shared/labels.js";
 import { SYNTHETIC_USD_PER_100_FX_REFERENCE } from "../../shared/policy.js";
 
 export { createEmptyDraft, createEmptySource, emptyDraft, emptySource };
@@ -45,7 +46,7 @@ function sourceFixture(input: SourceFixtureInput): ForeignIncomeSourceDraft {
     currencyCode,
     actualForeignTaxPaid: input.actualForeignTaxPaid,
     eligibleForeignTax: input.eligibleForeignTax,
-    eligibilityRationale: input.eligibilityRationale ?? "Assumed eligible solely for this mathematical educational example.",
+    eligibilityRationale: displayKnownExampleNote(input.eligibilityRationale) ?? "สมมติให้จำนวน (E) นี้ใช้แสดงตัวอย่างทางคณิตศาสตร์เพื่อการศึกษาเท่านั้น ไม่ใช่การยืนยันสิทธิตามกฎหมาย",
     eligibilityConfirmedAt: FIXTURE_CONFIRMATION_TIME,
     remittance: {
       remittanceDate,

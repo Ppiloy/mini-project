@@ -2,8 +2,8 @@ import { expect, test } from "@playwright/test";
 
 test("a taxpayer confirms deletion of a draft from the dashboard", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
   await page.goto("/demo/app");
@@ -39,8 +39,8 @@ test("loading a worked example leaves the browser clipboard unchanged", async ({
     });
   });
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
 
   const clipboard = await page.evaluate(() => (globalThis as unknown as { __FTC_CLIPBOARD_TEST__: { writes: number; text: string } }).__FTC_CLIPBOARD_TEST__);

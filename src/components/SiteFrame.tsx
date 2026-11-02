@@ -1,4 +1,5 @@
 import type { ApiUser } from "../../shared/contracts.js";
+import { EDUCATIONAL_NOTICE, PRODUCT_NAME } from "../../shared/labels.js";
 import { Link } from "react-router-dom";
 
 export function SiteFrame({ children, user, demo, onSignOut, signOutError, signingOut,
@@ -17,12 +18,12 @@ export function SiteFrame({ children, user, demo, onSignOut, signOutError, signi
     <div className="app-frame">
       <a className="skip-link" href="#main-content">ข้ามไปยังเนื้อหาหลัก</a>
       <header className="topbar">
-        <Link className="brand" to={user.role === "officer" ? (demo ? "/demo/officer" : "/officer") : (demo ? "/demo/app" : "/app")} aria-label="หน้าหลักระบบต้นแบบ">
+        <Link className="brand" to={user.role === "officer" ? (demo ? "/demo/officer" : "/officer") : (demo ? "/demo/app" : "/app")} aria-label={`หน้าหลัก${PRODUCT_NAME}`}>
           <span className="brand-mark" aria-hidden="true">FTC</span>
-          <span><strong>เครดิตภาษีต่างประเทศ</strong><small>Foreign Tax Credit prototype</small></span>
+          <span><strong>{PRODUCT_NAME}</strong></span>
         </Link>
         <div className="topbar-actions">
-          {demo && <span className="mode-tag">โหมดสาธิตข้อมูลจำลอง</span>}
+          {demo && <span className="mode-tag">ข้อมูลตัวอย่าง</span>}
           <span className="user-name">{user.displayName}</span>
           {onSignOut && <button className="button button-quiet button-small" disabled={signingOut} onClick={() => void onSignOut()}>{signingOut ? "กำลังออกจากระบบ…" : signOutError ? "ลองออกจากระบบอีกครั้ง" : "ออกจากระบบ"}</button>}
         </div>
@@ -39,7 +40,7 @@ export function SiteFrame({ children, user, demo, onSignOut, signOutError, signi
         {signOutError && <div className="alert alert-error" role="alert"><strong>ออกจากระบบยังไม่สำเร็จ</strong><span>{signOutError}</span></div>}
         {children}
       </main>
-      <footer className="site-footer"><span>ระบบต้นแบบเพื่อการศึกษา</span><span>ข้อมูลตัวอย่างสำหรับปีภาษี 2568</span></footer>
+      <footer className="site-footer">{EDUCATIONAL_NOTICE}</footer>
     </div>
   );
 }

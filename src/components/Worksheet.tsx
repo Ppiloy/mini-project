@@ -5,6 +5,7 @@ import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABEL
 import { EvidenceFileActions } from "./EvidenceFileActions.js";
 import { FieldLabel } from "./FieldLabel.js";
 import { formatDate, formatMoney } from "./money.js";
+import { calculateResidenceDaysInYear, validateResidencePeriods } from "../../shared/residence.js";
 
 type Mode = "demo" | "hosted";
 
@@ -208,6 +209,44 @@ function CountryCards({ snapshot }: { snapshot: CalculationSnapshot }) {
   </div>;
 }
 
+function ResidencePeriodSummary({ snapshot }: { snapshot: CalculationSnapshot }) {
+  const periods = snapshot.inputs.residencePeriods;
+  if (periods === undefined) return null;
+
+  const years = new Set<number>(snapshot.inputs.sources.flatMap((source) =>
+    source.earnedTaxYear !== null && Number.isInteger(source.earnedTaxYear) ? [source.earnedTaxYear] : []));
+  const periodIssues = validateResidencePeriods(periods);
+  if (periodIssues.length === 0) {
+    for (const period of periods) {
+      const firstYear = Number(period.startDate?.slice(0, 4));
+      const lastYear = Number(period.endDate?.slice(0, 4));
+      if (!Number.isInteger(firstYear) || !Number.isInteger(lastYear) || lastYear < firstYear) continue;
+      for (let year = firstYear; year <= lastYear; year += 1) years.add(year);
+    }
+  }
+
+  return <section className="worksheet-residence-summary" aria-label="สรุปช่วงเวลาที่พำนัก">
+    <h3>สรุปช่วงเวลาที่พำนัก</h3>
+    {periods.length > 0
+      ? <ul className="worksheet-residence-periods">{periods.map((period, index) => <li key={`saved-residence-period-${index}`}>
+        <strong>ช่วงที่ {index + 1}:</strong> {period.startDate ?? "ไม่ระบุวันเริ่มต้น"} – {period.endDate ?? "ไม่ระบุวันสิ้นสุด"}
+      </li>)}</ul>
+      : <p>ไม่มีช่วงวันที่พำนักที่บันทึกไว้ในผลนี้</p>}
+    {years.size > 0
+      ? <dl className="worksheet-residence-years">{[...years].sort((left, right) => left - right).map((year) => {
+        const days = periodIssues.length === 0 ? calculateResidenceDaysInYear(periods, year) : null;
+        const earnedYear = snapshot.inputs.sources.some((source) => source.earnedTaxYear === year);
+        return <div key={year}>
+          <dt>ปี พ.ศ. {year + 543} (ค.ศ. {year}){earnedYear ? " · ปีที่เกิดเงินได้" : " · ปีปฏิทินในช่วงพำนัก"}</dt>
+          <dd>{days === null ? "ช่วงวันที่ไม่ครบหรือไม่ถูกต้อง จึงยังสรุปจำนวนวันไม่ได้"
+            : `${days} วัน · ${days >= 180 ? "ครบเกณฑ์ 180 วันตามมาตรา 41" : "ต่ำกว่าเกณฑ์ 180 วันตามมาตรา 41"}`}</dd>
+        </div>;
+      })}</dl>
+      : <p>ยังไม่มีปีปฏิทินสำหรับสรุปจำนวนวันพำนัก</p>}
+    <p className="worksheet-residence-note">นับวันเริ่มต้นและวันสิ้นสุดรวมกัน และนับวันปฏิทินที่ซ้ำกันเพียงครั้งเดียว สรุปวันพำนักนี้แยกจากปีภาษีที่ใช้ยื่น และไม่ได้ยืนยันการรองรับการคำนวณ สิทธิ FTC หรือสิทธิตาม DTA</p>
+  </section>;
+}
+
 function WorksheetEvidence({ snapshot, attachments = [], mode }: { snapshot: CalculationSnapshot; attachments?: AttachmentMetadata[]; mode?: Mode }) {
   const metadataById = new Map(attachments.map((attachment) => [attachment.id, attachment]));
   const frozen = snapshot.evidence;
@@ -224,7 +263,7 @@ function WorksheetEvidence({ snapshot, attachments = [], mode }: { snapshot: Cal
   const otherCaseFiles = frozen.filter((file) => file.sourceId === null && file.kind !== "thai_tax");
   const sourceFiles = snapshot.inputs.sources.map((source, index) => ({ source, index, files: frozen.filter((file) => file.sourceId === source.id && source.id !== null) }));
 
-  if (frozen.length === 0) return <section className="content-section card worksheet-section worksheet-evidence" aria-labelledby="worksheet-evidence-heading">
+  if (frozen.length === 0) return <section className="content-section card worksheet-section worksheet-evidence worksheet-evidence-empty" aria-labelledby="worksheet-evidence-heading">
     <h2 id="worksheet-evidence-heading">เอกสารประกอบที่บันทึกกับผลนี้</h2>
     <p className="empty-evidence">ไม่มีหลักฐานแนบในผลคำนวณที่บันทึกไว้นี้</p>
   </section>;
@@ -289,13 +328,14 @@ export function Worksheet({ snapshot, attachments, evidenceMode, showEvidence = 
       </>}
     </section>
 
-    <section className="content-section card worksheet-section" aria-labelledby="worksheet-summary-heading">
+    <section className="content-section card worksheet-section worksheet-tax-summary" aria-labelledby="worksheet-summary-heading">
       <h2 id="worksheet-summary-heading">{WORKSHEET_SECTIONS[1]}</h2>
       <div className="table-scroll worksheet-summary-table-wrap"><table aria-labelledby="worksheet-summary-heading" className="data-table worksheet-summary-table"><tbody>
         {SUMMARY_LETTERS.map((letter) => <tr key={letter}><th scope="row"><FieldLabel letter={letter} /></th><td>{formatMoney(summaryValues[letter])} บาท</td></tr>)}
       </tbody></table></div>
       <div className="worksheet-provenance"><strong>ที่มาของข้อมูล (L) ที่ผู้ใช้ระบุ:</strong><p>{displayKnownExampleNote(snapshot.inputs.thaiTax.provenance) ?? "ไม่ได้ระบุ"}</p></div>
       <p className="worksheet-explanation">(L) คือภาษีไทยที่ผู้ใช้ระบุว่าคำนวณหลังหักค่าใช้จ่ายและค่าลดหย่อนแล้ว และก่อนใช้เครดิตภาษีต่างประเทศ ระบบไม่ได้คำนวณยอดนี้หรือยืนยันรายการหักจากเอกสารที่ให้ไว้</p>
+      <ResidencePeriodSummary snapshot={snapshot} />
     </section>
 
     <section className="content-section card worksheet-section" aria-labelledby="worksheet-country-heading">
@@ -319,7 +359,6 @@ export function Worksheet({ snapshot, attachments, evidenceMode, showEvidence = 
           <li>รวม (Q) จากประเทศต่าง ๆ แล้วปัดยอดรวมเป็นสองตำแหน่งตามวิธีที่บันทึกไว้</li>
         </ul>
       </details>
-      <p className="worksheet-disclaimer">ระบบต้นแบบเพื่อการศึกษา ไม่ใช่ระบบของกรมสรรพากร ผลคำนวณใช้ประกอบการกรอก ภ.ง.ด.90/91 เท่านั้น</p>
     </section>
 
     {showEvidence && <WorksheetEvidence snapshot={snapshot} attachments={attachments} mode={evidenceMode} />}

@@ -27,6 +27,10 @@
     {
       "name": "20261014000700_restore_initialization_gate.sql",
       "sha256": "cdffb602f835fa1ec7eb7a7abfa911a9672f150e91a6771aaf66082843815e2d"
+    },
+    {
+      "name": "20261102000100_residence_periods_allow_leap_year.sql",
+      "sha256": "96a88abe9446d8c967d42e35fecc389ee98f355d90d124c48019cd6a1aa0e5d0"
     }
   ]
 }

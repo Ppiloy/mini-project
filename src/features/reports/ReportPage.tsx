@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { CalculationSnapshot } from "../../../shared/contracts.js";
+import { EDUCATIONAL_NOTICE } from "../../../shared/labels.js";
 import { Worksheet } from "../../components/Worksheet.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { findDemoCase, findDemoSnapshot, listDemoCases } from "../../data/demoRepository.js";
@@ -46,14 +47,14 @@ export function ReportPage({ mode }: { mode: Mode }) {
   return <>
     <div className="report-toolbar no-print"><a className="button button-quiet" href={mode === "demo" ? (user?.role === "officer" ? "/demo/officer" : "/demo/app") : (user?.role === "officer" ? "/officer" : "/app")}>กลับไปหน้ารายการ</a><button className="button button-primary" onClick={() => window.print()}>พิมพ์ / บันทึกเป็น PDF</button></div>
     <article className="print-report">
-      <header className="report-header"><div><p className="report-kicker">รายงานผลการคำนวณ · ระบบต้นแบบเพื่อการศึกษา</p><h1>รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ</h1><p>ไม่ใช่แบบยื่นภาษีหรือการยืนยันสิทธิ</p></div><div className="report-mark" aria-hidden="true">ภาษี</div></header>
+      <header className="report-header"><div><p className="report-kicker">รายงานผลการคำนวณ</p><h1>รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ</h1><p>ผลนี้ไม่ใช่แบบยื่นภาษีหรือการรับรองสิทธิ</p></div><div className="report-mark" aria-hidden="true">ภาษี</div></header>
       {draftReport && <div className="draft-watermark">ร่าง — ยังไม่ได้ส่ง</div>}
       {!draftReport && <div className="submitted-report-label">รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว</div>}
       <div className="report-meta"><div><span>ปีภาษี</span><strong>{snapshot.inputs.taxYear ? snapshot.inputs.taxYear + 543 : "—"} ({snapshot.inputs.taxYear ?? "—"})</strong></div><div><span>เลขอ้างอิง</span><strong>{caseReference}</strong></div><div><span>ผลคำนวณบันทึกเมื่อ</span><strong>{new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt))}</strong></div><div><span>สถานะผล</span><strong>{outcomeText}</strong></div></div>
       <p className="report-timestamp-note">เวลาที่แสดงคือเวลาบันทึกผลคำนวณ ไม่ใช่เวลายื่นแบบภาษีต่อกรมสรรพากร</p>
       {snapshot.result.validationMessages.length > 0 && <section className="report-section"><h2>ข้อมูลที่ขาดหรือควรทบทวน</h2><ul className="report-list">{snapshot.result.validationMessages.map((message, index) => <li key={index}>{message.message}</li>)}</ul></section>}
       <Worksheet snapshot={snapshot} showEvidence />
-      <footer className="report-footer"><span>ระบบต้นแบบเพื่อการศึกษา · ปีภาษี {snapshot.inputs.taxYear ? snapshot.inputs.taxYear + 543 : "ไม่ระบุ"}</span><span>รายงานนี้ไม่ใช่เอกสารรับรองหรือผลการประเมินภาษี</span></footer>
+      <footer className="report-footer">{EDUCATIONAL_NOTICE}</footer>
     </article>
   </>;
 }

@@ -17,5 +17,7 @@ export function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("th-TH", { dateStyle: "medium" }).format(date);
+  const options: Intl.DateTimeFormatOptions = { dateStyle: "medium" };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) options.timeZone = "UTC";
+  return new Intl.DateTimeFormat("th-TH", options).format(date);
 }

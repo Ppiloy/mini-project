@@ -115,7 +115,7 @@ export function apiFailureMessages(errors: readonly unknown[], fallback: string)
 
 function apiFailureContextFor(errors: readonly unknown[]): string {
   const requestIds = [...new Set(errors.flatMap((error) => error instanceof ApiClientError && error.requestId ? [error.requestId] : []))];
-  return `${requestIds.length ? ` (รหัสคำขอ: ${requestIds.join(", ")})` : ""} · รุ่นนโยบาย: rd-ftc-demo-2568-v1`;
+  return requestIds.length ? ` (รหัสคำขอ: ${requestIds.join(", ")})` : "";
 }
 
 function isJsonResponse(response: Response): boolean {

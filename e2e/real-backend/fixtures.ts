@@ -34,7 +34,7 @@ export async function login(page: Page, credential: DemoCredential, officer = fa
 
 export async function createCase(page: Page): Promise<string> {
   const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/cases") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
+  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   const response = await responsePromise;
   expect(response.status()).toBe(201);
   const envelope = await response.json() as { data?: { case?: { id?: string } } };
@@ -46,7 +46,7 @@ export async function createCase(page: Page): Promise<string> {
 }
 
 export async function advance(page: Page) {
-  await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 }
 
 export async function browserApi(page: Page, path: string, init?: { method?: string; csrfToken?: string; body?: unknown }) {

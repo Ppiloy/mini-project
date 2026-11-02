@@ -6,19 +6,19 @@ import { createCalculationSnapshot } from "../shared/snapshot.js";
 
 async function enterVietnamChinaResult(page: import("@playwright/test").Page) {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
-  await page.getByRole("button", { name: "ตัวอย่างเวียดนามและจีน · 143,544.30" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   for (let step = 0; step < 4; step += 1) {
-    await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+    await page.getByRole("button", { name: "ถัดไป" }).click();
   }
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
 }
 
 async function advanceToReview(page: import("@playwright/test").Page) {
-  const headings = ["แหล่งเงินได้จากต่างประเทศ", "การนำเงินเข้าและภาษีต่างประเทศ", "เงินได้ในประเทศและภาษีไทย", "หลักฐานและตรวจทาน"];
+  const headings = ["ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ", "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี", "เครดิตภาษีที่คำนวณได้ตามประเทศ", "หลักฐานและตรวจทาน"];
   for (const heading of headings) {
-    await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+    await page.getByRole("button", { name: "ถัดไป" }).click();
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
   }
 }
@@ -172,27 +172,27 @@ test("printable report uses the same Thai A–Q worksheet for the saved calculat
 
 test("officer detail reuses the worksheet and groups frozen evidence by source and Thai tax", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await advanceToReview(page);
 
   const file = { name: "หลักฐานตัวอย่าง.pdf", mimeType: "application/pdf", buffer: Buffer.from("fixture evidence preview") };
   for (const label of [
     "แนบหลักฐานภาษีไทย",
-    "แนบ: หลักฐานเงินได้ต่างประเทศ",
-    "แนบ: หลักฐานภาษีที่ชำระในต่างประเทศ",
+    "แนบ: หลักฐานเงินได้",
+    "แนบ: หลักฐานภาษีต่างประเทศ",
     "แนบ: หลักฐานการนำเงินเข้าไทย",
   ]) await page.getByLabel(label).setInputFiles(file);
 
-  await page.getByLabel("ยืนยันจำนวนและที่มาของภาษีไทย L").check();
-  await page.getByLabel("ยืนยัน E และเหตุผล · แหล่งเงินได้ 1").check();
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await page.getByLabel("ยืนยันจำนวนและที่มาของภาษีไทย (L)").check();
+  await page.getByLabel("ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ 1").check();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
 
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
+  await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
   await page.getByRole("link", { name: "ตรวจทาน" }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });

@@ -12,6 +12,8 @@ import type {
 import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent } from "./confirmations.js";
 import { draftSchema } from "./draft.js";
 import { DEMO_POLICY, type DemoPolicy } from "./policy.js";
+import { deriveResidenceDaysForDraft, validateResidencePeriods } from "./residence.js";
+import { worksheetLabel } from "./labels.js";
 
 const CalcDecimal = Decimal.clone({ precision: DEMO_POLICY.precision, rounding: Decimal.ROUND_HALF_UP });
 type Outcome = CalculationResult["outcome"];
@@ -33,12 +35,19 @@ function assess(draft: FtcCaseDraft, policy: DemoPolicy): Assessment {
       messages: parsed.error.issues.map((issue) => msg("draft.invalid", "ข้อมูลร่างมีรูปแบบไม่ถูกต้อง กรุณาตรวจสอบช่องที่ระบุ", issuePath(issue.path))),
     };
   }
-  const value = parsed.data;
+  const value = deriveResidenceDaysForDraft(parsed.data);
   const messages: ValidationMessage[] = [];
   let incomplete = false;
   let needsReview = false;
   const addIncomplete = (message: ValidationMessage) => { incomplete = true; messages.push(message); };
   const addReview = (message: ValidationMessage) => { needsReview = true; messages.push(message); };
+
+  for (const issue of validateResidencePeriods(value.residencePeriods ?? [])) {
+    const message = issue.code === "required" ? "กรุณาระบุวันแรกและวันสุดท้ายของช่วงพำนักให้ครบถ้วน"
+      : issue.code === "reversed" ? "วันสิ้นสุดต้องไม่มาก่อนวันเริ่มต้น"
+        : "วันที่ในช่วงพำนักไม่ถูกต้อง";
+    addIncomplete(msg(`residence.period_${issue.code}`, message, ["residencePeriods", issue.periodIndex, issue.field]));
+  }
 
   if (value.taxYear === null) addIncomplete(required(["taxYear"]));
   else if (value.taxYear !== policy.taxYear) addReview(msg("case.unsupported_year", "ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)", ["taxYear"]));
@@ -114,7 +123,7 @@ function assessSource(
   if (source.inputMode === "original_currency") assessFx(source, policy, path, addIncomplete, addReview);
 
   if (source.eligibleForeignTax !== null && source.actualForeignTaxPaid !== null && new CalcDecimal(source.eligibleForeignTax).gt(source.actualForeignTaxPaid)) {
-    addReview(msg("source.eligible_tax_exceeds_paid", "ภาษีที่สมมติว่าเข้าเกณฑ์ต้องไม่เกินภาษีที่ชำระจริง", path("eligibleForeignTax")));
+    addReview(msg("source.eligible_tax_exceeds_paid", `จำนวนที่ใช้คำนวณตาม ${worksheetLabel("E")} ต้องไม่เกินภาษีต่างประเทศที่ชำระจริง`, path("eligibleForeignTax")));
   }
   if (source.grossIncomeAmount !== null && source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(source.grossIncomeAmount)) {
     addReview(msg("source.remitted_exceeds_income", "เงินได้ที่นำเข้าต้องไม่เกินเงินได้ต้นทางในกรณีตัวอย่างนี้", path("remittedIncomeAmount")));
@@ -122,11 +131,11 @@ function assessSource(
   if (source.grossIncomeAmount !== null && new CalcDecimal(source.grossIncomeAmount).isZero()) {
     addReview(msg("source.zero_income_denominator", "เงินได้ต้นทางต้องมากกว่าศูนย์เพื่อใช้เป็นตัวหาร แม้ไม่มีเงินได้นำเข้า", path("grossIncomeAmount")));
     if (source.eligibleForeignTax !== null && !new CalcDecimal(source.eligibleForeignTax).isZero()) {
-      addReview(msg("source.tax_without_income", "ไม่มีเงินได้ต้นทาง แต่ระบุภาษีต่างประเทศที่เข้าเกณฑ์มากกว่าศูนย์", path("eligibleForeignTax")));
+      addReview(msg("source.tax_without_income", `ไม่มีเงินได้ต้นทาง แต่ระบุจำนวนภาษีต่างประเทศที่ใช้คำนวณตาม ${worksheetLabel("E")} มากกว่าศูนย์`, path("eligibleForeignTax")));
     }
   }
   if (source.eligibilityRationale === null || source.eligibilityRationale.trim() === "") addIncomplete(required(path("eligibilityRationale")));
-  else if (source.eligibleForeignTax !== null && !isSourceEligibilityConfirmationCurrent(source)) addReview(msg("confirmation.eligibility_stale", "กรุณายืนยันสมมติฐานภาษีต่างประเทศที่เข้าเกณฑ์และเหตุผลของรายการนี้", path("eligibilityRationale")));
+  else if (source.eligibleForeignTax !== null && !isSourceEligibilityConfirmationCurrent(source)) addReview(msg("confirmation.eligibility_stale", `ข้อมูลหรือเหตุผลของจำนวนที่ใช้คำนวณตาม ${worksheetLabel("E")} เปลี่ยนแล้ว กรุณาตรวจทานและยืนยันอีกครั้ง`, path("eligibilityRationale")));
 
   const remittance = source.remittance;
   if (remittance === null) return;
@@ -195,7 +204,7 @@ function sourceAmounts(source: ForeignIncomeSourceDraft): SourceAmounts {
 
 /** Rebuilds cached THB fields from raw inputs for server persistence and snapshots. */
 export function withCanonicalThbAmounts(draft: FtcCaseDraft): FtcCaseDraft {
-  const parsed = draftSchema.parse(draft);
+  const parsed = deriveResidenceDaysForDraft(draftSchema.parse(draft));
   return {
     ...parsed,
     sources: parsed.sources.map((source) => {
@@ -273,7 +282,7 @@ export function calculateFTC(draft: FtcCaseDraft, policy: DemoPolicy = DEMO_POLI
     const values: Array<[string, string, Decimal]> = [
       ["source_D", "D — เงินได้ต่างประเทศที่เกี่ยวข้อง (THB)", converted.income],
       ["source_E_paid", "ภาษีต่างประเทศที่ชำระจริง (THB)", converted.actualTax],
-      ["source_E_eligible", "E — ภาษีต่างประเทศตามสมมติฐานที่ยืนยัน (THB)", converted.eligibleTax],
+      ["source_E_eligible", `${worksheetLabel("E")} · จำนวนที่ใช้คำนวณ (บาท)`, converted.eligibleTax],
       ["source_F", "F — เงินได้ที่นำเข้าไทย (THB)", converted.remittedIncome],
       ["source_share", "สัดส่วน F/D", share],
       ["source_G", "G — ภาษีต่างประเทศที่จัดสรรให้ F (THB)", attributableTax],
@@ -365,7 +374,7 @@ export function validateSubmission(
   if (result.outcome !== "ready") messages.push(msg("submit.calculation_not_ready", "กรุณาแก้ไขข้อมูลให้คำนวณได้ครบถ้วนก่อนส่งตรวจ", []));
   if (!isThaiTaxConfirmationCurrent(draft)) messages.push(msg("confirmation.thai_tax_stale", "กรุณายืนยันจำนวนและที่มาของภาษีไทยกับข้อมูลปัจจุบัน", ["thaiTax"]));
   draft.sources.forEach((source, index) => {
-    if (!isSourceEligibilityConfirmationCurrent(source)) messages.push(msg("confirmation.eligibility_stale", "กรุณายืนยันจำนวนภาษีต่างประเทศที่เข้าเกณฑ์และเหตุผลของแหล่งเงินได้นี้", ["sources", index, "eligibilityRationale"]));
+    if (!isSourceEligibilityConfirmationCurrent(source)) messages.push(msg("confirmation.eligibility_stale", `กรุณายืนยันจำนวนภาษีต่างประเทศที่ใช้คำนวณตาม ${worksheetLabel("E")} และเหตุผลของแหล่งเงินได้นี้`, ["sources", index, "eligibilityRationale"]));
   });
   const hasPositiveRemittance = draft.sources.some((source) => source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(0));
   if (!hasPositiveRemittance) messages.push(msg("submit.no_positive_remittance", "ต้องมีแหล่งเงินได้ที่รองรับและมีจำนวนเงินนำเข้าไทยมากกว่าศูนย์", ["sources"]));

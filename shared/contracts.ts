@@ -98,12 +98,20 @@ export interface ThaiTaxConfirmation {
   confirmedInputFingerprint: string | null;
 }
 
+/** A stay interval, with both endpoint dates counted as days physically present. */
+export interface ResidencePeriodDraft {
+  startDate: IsoDate | null;
+  endDate: IsoDate | null;
+}
+
 export interface FtcCaseDraft {
   id: CaseId | null;
   taxYear: number | null;
   domesticAssessableIncome: DecimalString | null;
   thaiTax: ThaiTaxConfirmation;
   sources: ForeignIncomeSourceDraft[];
+  /** Optional for backward compatibility with drafts and snapshots saved before period entry. */
+  residencePeriods?: ResidencePeriodDraft[];
   revision: number;
   createdAt: IsoDateTime | null;
   updatedAt: IsoDateTime | null;

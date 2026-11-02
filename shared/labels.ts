@@ -29,6 +29,14 @@ export const WORKSHEET_SECTIONS = [
   "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย",
 ] as const;
 
+export const PRODUCT_NAME = "เครดิตภาษีต่างประเทศ";
+export const DEMO_ENTRY_LABEL = "ทดลองใช้ด้วยข้อมูลตัวอย่าง";
+export const EDUCATIONAL_NOTICE = "ระบบต้นแบบเพื่อการศึกษา ไม่ใช่ระบบของกรมสรรพากร ผลคำนวณใช้ประกอบการกรอก ภ.ง.ด.90/91 เท่านั้น";
+export const DEMO_EXAMPLE_LABELS = {
+  partialRemittance: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน",
+  vietnamAndChina: "ตัวอย่าง: เงินได้จากเวียดนามและจีน",
+} as const;
+
 export const EVIDENCE_LABELS: Readonly<Record<EvidenceKind, string>> = {
   foreign_income: "หลักฐานเงินได้",
   foreign_tax: "หลักฐานภาษีต่างประเทศ",
@@ -78,7 +86,7 @@ const KNOWN_EXAMPLE_NOTES: Readonly<Record<string, string>> = {
   "Deliberately synthetic quote to demonstrate conversion per 100 units; not a historical market rate.": "อัตราสมมติในตัวอย่างเพื่อสาธิตการแปลงต่อ 100 หน่วย ไม่ใช่อัตราตลาดย้อนหลัง",
   "Prepared educational slide example; supplied L is not inferred from J.": "ตัวอย่างระบุจำนวน (L) เป็นภาษีไทยก่อนเครดิตภาษีต่างประเทศหลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง โดยไม่ได้คำนวณจากเงินได้ในประเทศเพียงรายการเดียว",
   "Prepared allocation example; L is supplied.": "ตัวอย่างการจัดสรรนี้กำหนด (L) เป็นจำนวนที่ระบุไว้เพื่อสาธิตสูตร ไม่ใช่การคำนวณภาษีเงินได้บุคคลธรรมดาไทยครบถ้วน",
-  "Assumed eligible solely for this mathematical educational example.": "ผู้ใช้ยืนยันจำนวนภาษีที่นำไปคำนวณเพื่อใช้ในตัวอย่างการศึกษาเท่านั้น",
+  "Assumed eligible solely for this mathematical educational example.": "สมมติให้จำนวน (E) นี้ใช้แสดงตัวอย่างทางคณิตศาสตร์เพื่อการศึกษาเท่านั้น ไม่ใช่การยืนยันสิทธิตามกฎหมาย",
   "Manual-derived D/E row; eligible tax is still an explicit educational assumption.": "ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ",
   "No remittance in the educational example; D remains positive so the allocation denominator is defined.": "ตัวอย่างนี้ไม่มีการนำเงินเข้า แต่ (D) ยังมีจำนวนเงินได้เพื่อแสดงวิธีคำนวณสัดส่วน",
 };

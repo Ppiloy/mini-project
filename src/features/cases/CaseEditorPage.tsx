@@ -5,7 +5,9 @@ import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, s
 import { draftSchema } from "../../../shared/draft.js";
 import { validateFormStep, formatCalculationIssues, stepForCalculationIssue } from "../../../shared/formValidation.js";
 import { calculateFTC } from "../../../shared/calculator.js";
+import { WORKSHEET_SECTIONS } from "../../../shared/labels.js";
 import { DEMO_POLICY } from "../../../shared/policy.js";
+import { deriveResidenceDaysForDraft } from "../../../shared/residence.js";
 import { createCalculationSnapshot } from "../../../shared/snapshot.js";
 import { ApiClientError, apiFailureMessage, hostedApi } from "../../data/api.js";
 import { addDemoAttachment, deleteDemoAttachment, findDemoCase, getDemoAttachmentFile, listDemoAttachments, saveDemoDraft, saveDemoSnapshot } from "../../data/demoRepository.js";
@@ -15,7 +17,7 @@ import { StepFive, StepFour, StepOne, StepThree, StepTwo } from "./FormSteps.js"
 
 type Mode = "demo" | "hosted";
 type UploadOperation = { sourceId: string | null; sourceIndex?: number; kind: EvidenceKind; file: File; expectedRevision: number; requestId: string };
-const stepLabels = ["ปีภาษี", "เงินได้", "นำเข้าและภาษี", "ภาษีไทย", "หลักฐานและทบทวน"];
+const stepLabels = ["ข้อมูลเบื้องต้น", WORKSHEET_SECTIONS[0], WORKSHEET_SECTIONS[1], WORKSHEET_SECTIONS[2], "หลักฐานและตรวจทาน"];
 
 function reachableSavedSteps(draft: FtcCaseDraft): Set<number> {
   const steps = new Set<number>();
@@ -125,7 +127,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
   }, [isDirty]);
 
   const updateDraft = (next: FtcCaseDraft) => {
-    const current = stripStaleConfirmations(next);
+    const current = stripStaleConfirmations(deriveResidenceDaysForDraft(next));
     setDraft(current);
     setSavedMessage(null);
     setSaveFailed(false);
@@ -222,23 +224,25 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
 
   const toggleThaiConfirmation = (checked: boolean) => {
     if (!draft) return;
+    const derivedDraft = deriveResidenceDaysForDraft(draft);
     const thaiTax = checked
-      ? { ...draft.thaiTax, confirmedAt: new Date().toISOString(), confirmedInputFingerprint: taxInputFingerprint(draft) }
-      : { ...draft.thaiTax, confirmedAt: null, confirmedInputFingerprint: null };
-    setDraft({ ...draft, thaiTax });
+      ? { ...derivedDraft.thaiTax, confirmedAt: new Date().toISOString(), confirmedInputFingerprint: taxInputFingerprint(derivedDraft) }
+      : { ...derivedDraft.thaiTax, confirmedAt: null, confirmedInputFingerprint: null };
+    setDraft(stripStaleConfirmations({ ...derivedDraft, thaiTax }));
     setSavedMessage(null);
     setSaveFailed(false);
   };
 
   const toggleEligibilityConfirmation = (index: number, checked: boolean) => {
     if (!draft) return;
-    const sources = draft.sources.map((source, currentIndex) => {
+    const derivedDraft = deriveResidenceDaysForDraft(draft);
+    const sources = derivedDraft.sources.map((source, currentIndex) => {
       if (currentIndex !== index) return source;
       return checked
         ? { ...source, eligibilityConfirmedAt: new Date().toISOString(), eligibilityConfirmedInputFingerprint: sourceEligibilityFingerprint(source) }
         : { ...source, eligibilityConfirmedAt: null, eligibilityConfirmedInputFingerprint: null };
     });
-    setDraft({ ...draft, sources });
+    setDraft(stripStaleConfirmations({ ...derivedDraft, sources }));
     setSavedMessage(null);
     setSaveFailed(false);
   };
@@ -444,7 +448,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
   ][step];
 
   return <>
-    <PageHeading eyebrow={`FTC CASE · ${record.id.slice(-8).toUpperCase()}`} title="กรอกข้อมูลกรณีเครดิตภาษี">
+    <PageHeading eyebrow={`รหัสกรณี · ${record.id.slice(-8).toUpperCase()}`} title="กรอกข้อมูลกรณีเครดิตภาษี">
       บันทึกแต่ละขั้นได้ ร่างที่ข้อมูลยังไม่ครบหรืออยู่นอกขอบเขตก็เก็บไว้แก้ไขได้
     </PageHeading>
     <nav className="stepper" aria-label="ขั้นตอนแบบฟอร์ม">
@@ -461,8 +465,8 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
       <fieldset disabled={isFormBusy} aria-busy={isFormBusy} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         {stepContent}
       {step === 4 && <div className="confirmation-controls">
-        <label className="confirm-card"><input type="checkbox" checked={taxCurrent} onChange={(event) => toggleThaiConfirmation(event.target.checked)} /><span><strong>ยืนยันจำนวนและที่มาของภาษีไทย L</strong><small>ผูกกับรายได้ แหล่งเงินได้ และอัตราแลกเปลี่ยนปัจจุบัน</small></span></label>
-        {draft.sources.map((source, index) => <label className="confirm-card" key={source.id ?? `confirm-${index}`}><input type="checkbox" checked={isSourceEligibilityConfirmationCurrent(source)} onChange={(event) => toggleEligibilityConfirmation(index, event.target.checked)} /><span><strong>ยืนยัน E และเหตุผล · แหล่งเงินได้ {index + 1}</strong><small>{source.eligibilityRationale || "กรุณากรอกเหตุผลในขั้นการนำเงินเข้าและภาษี"}</small></span></label>)}
+        <label className="confirm-card"><input type="checkbox" checked={taxCurrent} onChange={(event) => toggleThaiConfirmation(event.target.checked)} /><span><strong>ยืนยันจำนวนและที่มาของภาษีไทย (L)</strong><small>ผูกกับรายได้ แหล่งเงินได้ และอัตราแลกเปลี่ยนปัจจุบัน</small></span></label>
+        {draft.sources.map((source, index) => <label className="confirm-card" key={source.id ?? `confirm-${index}`}><input type="checkbox" checked={isSourceEligibilityConfirmationCurrent(source)} onChange={(event) => toggleEligibilityConfirmation(index, event.target.checked)} /><span><strong>ยืนยันจำนวน (E) และเหตุผล · แหล่งเงินได้ {index + 1}</strong><small>{source.eligibilityRationale || "กรุณากรอกเหตุผลของจำนวน (E) ในขั้นข้อมูลเงินได้จากต่างประเทศ"}</small></span></label>)}
       </div>}
       </fieldset>
       <div className="form-actions">
@@ -470,7 +474,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
         <div className="form-actions-right">
           <span className="save-status" role="status" aria-live="polite">{saving ? "กำลังบันทึก…" : calculating ? "กำลังคำนวณ…" : uploading ? evidenceOperation === "delete" ? "กำลังลบไฟล์…" : "กำลังแนบไฟล์…" : evidenceActionFailed === "upload" ? "แนบไฟล์ไม่สำเร็จ" : evidenceActionFailed === "delete" ? "ลบไฟล์ไม่สำเร็จ" : saveFailed ? "บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง" : isDirty ? "มีการแก้ไขที่ยังไม่บันทึก" : savedMessage ?? "บันทึกแล้ว"}</span>
           <button type="button" className="button button-secondary" onClick={() => void saveDraft()} disabled={isFormBusy}>{saving ? "กำลังบันทึก…" : "บันทึกร่าง"}</button>
-          {step < 4 ? <button type="button" className="button button-primary" onClick={() => void goNext()} disabled={isFormBusy}>บันทึกและถัดไป <span aria-hidden="true">→</span></button> : <button type="button" className="button button-primary" onClick={() => void calculate()} disabled={isFormBusy}>บันทึกและคำนวณตัวอย่าง</button>}
+          {step < 4 ? <button type="button" className="button button-primary" onClick={() => void goNext()} disabled={isFormBusy}>ถัดไป <span aria-hidden="true">→</span></button> : <button type="button" className="button button-primary" onClick={() => void calculate()} disabled={isFormBusy}>คำนวณเครดิตภาษี</button>}
         </div>
       </div>
     </div>

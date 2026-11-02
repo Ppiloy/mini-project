@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
 import { z } from "zod";
-import type { FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
+import type { FtcCaseDraft, ForeignIncomeSourceDraft, ResidencePeriodDraft } from "./contracts.js";
 
 const decimalInputPattern = /^\d{1,9}(?:\.\d{1,2})?$/;
 const decimalDerivedPattern = /^\d{1,18}(?:\.\d{1,12})?$/;
@@ -85,7 +85,7 @@ const foreignIncomeSourceBaseSchema = z.object({
   subtype: nullableText(100),
   earnedTaxYear: nullable(z.number().int().min(1900).max(2200)),
   earnedDate: nullable(isoDate),
-  residenceDaysInEarnedYear: nullable(z.number().int().min(0).max(365)),
+  residenceDaysInEarnedYear: nullable(z.number().int().min(0).max(366)),
   inputMode: z.enum(["worksheet_thb", "original_currency"]).nullable(),
   grossIncomeAmount: nullable(moneyInput),
   currencyCode: nullable(z.string().regex(/^[A-Z]{3}$/)),
@@ -126,12 +126,22 @@ export const thaiTaxConfirmationSchema = z.object({
   confirmedInputFingerprint: nullable(safeText.max(2000000)),
 }).strict();
 
+const residencePeriodSchema: z.ZodType<ResidencePeriodDraft> = z.object({
+  startDate: nullable(isoDate),
+  endDate: nullable(isoDate),
+}).strict().superRefine((period, context) => {
+  if (period.startDate !== null && period.endDate !== null && period.endDate < period.startDate) {
+    context.addIssue({ code: "custom", path: ["endDate"], message: "วันสิ้นสุดต้องไม่มาก่อนวันเริ่มต้น" });
+  }
+});
+
 export const draftSchema = z.object({
   id: nullable(safeText.min(1).max(100)),
   taxYear: nullable(z.number().int().min(1900).max(2200)),
   domesticAssessableIncome: nullable(moneyInput),
   thaiTax: thaiTaxConfirmationSchema,
   sources: z.array(foreignIncomeSourceDraftSchema).max(20),
+  residencePeriods: z.array(residencePeriodSchema).max(100).optional(),
   revision: z.number().int().min(0),
   createdAt: nullable(isoDateTime),
   updatedAt: nullable(isoDateTime),

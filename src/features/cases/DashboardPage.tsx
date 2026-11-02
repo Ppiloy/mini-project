@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import type { CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
+import { DEMO_EXAMPLE_LABELS } from "../../../shared/labels.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { createDemoCase, createDemoCaseFromDraft, deleteDemoCase, findDemoCase, findDemoSnapshot, latestDemoPreview, listDemoCases } from "../../data/demoRepository.js";
@@ -63,7 +64,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
       let record: FtcCaseRecord;
       if (mode === "demo") record = createDemoCase();
       else {
-        if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง ข้อมูลที่กรอกในหน้าปัจจุบันยังอยู่");
+        if (!csrfToken) throw new Error("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง ข้อมูลที่กรอกในหน้ายังอยู่");
         record = (await hostedApi.createCase(csrfToken, createRequestId.current)).case;
         createRequestId.current = crypto.randomUUID();
       }
@@ -83,24 +84,24 @@ export function DashboardPage({ mode }: { mode: Mode }) {
   return (
     <>
       <div className="dashboard-heading">
-        <PageHeading eyebrow="TAXPAYER WORKSPACE" title="กรณีของผู้เสียภาษีตัวอย่าง">
-          เริ่มกรณีใหม่หรือกลับไปทำร่างที่บันทึกไว้ ข้อมูลสาธิตนี้เป็นข้อมูลสมมติสำหรับปีภาษี 2568
+        <PageHeading title="รายการคำนวณเครดิตภาษี">
+          {mode === "demo" ? "เริ่มคำนวณใหม่หรือทำร่างตัวอย่างที่บันทึกไว้ต่อ" : "เริ่มคำนวณใหม่หรือทำร่างที่บันทึกไว้ต่อ"}
         </PageHeading>
         <button className="button button-primary" onClick={startCase} disabled={creating}>
-          <span aria-hidden="true">＋</span> {creating ? "กำลังสร้าง…" : "สร้างกรณีใหม่"}
+          <span aria-hidden="true">＋</span> {creating ? "กำลังสร้าง…" : "เริ่มคำนวณใหม่"}
         </button>
       </div>
-      <section className="summary-strip" aria-label="ข้อมูลบัญชีตัวอย่าง">
+      <section className="summary-strip" aria-label="ข้อมูลบัญชี">
         <div><span className="summary-label">ผู้ใช้</span><strong>{user?.displayName ?? "ผู้เสียภาษีตัวอย่าง"}</strong></div>
         <div><span className="summary-label">ปีภาษีที่รองรับ</span><strong>2568 <span className="muted-inline">(2025)</span></strong></div>
-        <div><span className="summary-label">นโยบายคำนวณ</span><strong>rd-ftc-demo-2568-v1</strong></div>
+        <div><span className="summary-label">ตัวอย่างคำนวณ</span><strong>เวียดนามและจีน · 40(1), เงินปันผล 40(4)</strong></div>
       </section>
-      {mode === "demo" && <section className="fixture-launch card"><div><p className="eyebrow">WORKED EXAMPLES</p><h2>เริ่มจากข้อมูลคำนวณตัวอย่าง</h2><p>เปิดตัวอย่างเป็นร่างใหม่เพื่อสำรวจ D/E/F การจัดสรรภาษี และความคลาดเคลื่อนต้นทาง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>ตัวอย่างนำเข้า 50% · G = 2,500</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>ตัวอย่างเวียดนามและจีน · 143,544.30</button></div></section>}
+      {mode === "demo" && <section className="fixture-launch card"><div><h2>ตัวอย่างที่เตรียมไว้</h2><p>เลือกตัวอย่างเพื่อดูการนำเงินได้บางส่วนเข้าไทย หรือเปรียบเทียบเงินได้จากเวียดนามและจีน</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>{DEMO_EXAMPLE_LABELS.partialRemittance}</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>{DEMO_EXAMPLE_LABELS.vietnamAndChina}</button></div></section>}
       <section className="content-section">
-        <div className="section-heading"><div><p className="eyebrow">MY CASES</p><h2>กรณีคำนวณเครดิตภาษี</h2></div></div>
+        <div className="section-heading"><div><h2>กรณีที่บันทึกไว้</h2></div></div>
         {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{mode === "hosted" && <Link to="/login">เข้าสู่ระบบอีกครั้ง</Link>}</div>}
         {busy ? <div className="loading-card" role="status">กำลังโหลดรายการ…</div> : cases.length === 0 ? (
-          <div className="empty-state card"><div className="empty-icon" aria-hidden="true">＋</div><h3>ยังไม่มีกรณีคำนวณ</h3><p>สร้างกรณีเพื่อเริ่มบันทึกรายได้และข้อมูลการนำเงินเข้าประเทศ</p><button className="button button-secondary" onClick={startCase} disabled={creating}>สร้างกรณีแรก</button></div>
+          <div className="empty-state card"><div className="empty-icon" aria-hidden="true">＋</div><h3>ยังไม่มีกรณีคำนวณ</h3><p>เริ่มบันทึกรายได้และข้อมูลการนำเงินเข้าประเทศ</p><button className="button button-secondary" onClick={startCase} disabled={creating}>เริ่มคำนวณ</button></div>
         ) : (
           <div className="case-list">
             {cases.map((record) => <CaseCard key={record.id} record={record} mode={mode}
@@ -108,7 +109,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
           </div>
         )}
       </section>
-      {mode === "demo" && <p className="demo-storage-note">บันทึกแยกเฉพาะข้อมูลสมมติในเบราว์เซอร์นี้ การบันทึกที่แสดงว่าสำเร็จเป็นการจำลองในโหมดสาธิต</p>}
+      {mode === "demo" && <p className="demo-storage-note">ข้อมูลตัวอย่างบันทึกไว้ในเบราว์เซอร์นี้เท่านั้นและไม่เชื่อมกับบัญชีออนไลน์</p>}
     </>
   );
 }
@@ -195,7 +196,7 @@ function CaseCard({ record, mode, pendingDeleteRequestId, onDeleted, onDeletionP
   const snapshot = current.state === "snapshot" ? current.snapshot : null;
   const reportHref = snapshot ? `${mode === "demo" ? "/demo" : ""}/reports/${encodeURIComponent(snapshot.id)}` : null;
   const resultStatus = snapshot?.result.outcome === "incomplete" ? "ข้อมูลยังไม่ครบสำหรับคำนวณ"
-    : snapshot?.result.outcome === "needs_review" ? "มีข้อเท็จจริงที่ต้องตรวจสอบ / อยู่นอกขอบเขตตัวอย่าง"
+    : snapshot?.result.outcome === "needs_review" ? "มีข้อมูลที่ควรตรวจสอบ หรืออยู่นอกขอบเขตที่ระบบคำนวณได้"
       : snapshot?.result.outcome === "ready" ? "ผลคำนวณพร้อมแล้ว แต่ไม่มียอดเครดิตที่แสดงได้" : "";
   const deleteDraft = async () => {
     if (deleting || record.status !== "draft" || !user) return;
@@ -209,7 +210,7 @@ function CaseCard({ record, mode, pendingDeleteRequestId, onDeleted, onDeletionP
         onDeleted(record.id);
         return;
       }
-      if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+      if (!csrfToken) throw new Error("การเข้าสู่ระบบหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
       const result = await hostedApi.deleteDraftCase(record.id, record.draft.revision, csrfToken, requestId);
       if (result.deleted) onDeleted(record.id);
       else onDeletionPending(record.id, requestId);
@@ -233,14 +234,14 @@ function CaseCard({ record, mode, pendingDeleteRequestId, onDeleted, onDeletionP
 
   return (
     <article className="case-card card">
-      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {currentRecord.draft.taxYear ? currentRecord.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${currentRecord.status === "submitted" ? "status-submitted" : "status-draft"}`}>{pendingDeleteRequestId ? "กำลังลบ" : currentRecord.status === "submitted" ? (mode === "demo" ? "ส่งแล้ว · คิวจำลอง" : "ส่งแล้ว · คิวตรวจสอบ") : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิงตัวอย่าง {currentRecord.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p>
+      <div className="case-card-main"><div className="case-title-row"><h3>กรณีปีภาษี {currentRecord.draft.taxYear ? currentRecord.draft.taxYear + 543 : 2568}</h3><span className={`status-badge ${currentRecord.status === "submitted" ? "status-submitted" : "status-draft"}`}>{pendingDeleteRequestId ? "กำลังลบ" : currentRecord.status === "submitted" ? (mode === "demo" ? "ส่งแล้ว · ข้อมูลตัวอย่าง" : "ส่งแล้ว · รอการตรวจทาน") : "ร่าง"}</span></div><p className="case-ref">เลขอ้างอิง {currentRecord.id.slice(-8).toUpperCase()}</p><p className="case-updated">แก้ไขล่าสุด {updated}</p>
         {pendingDeleteRequestId
           ? <p className="case-calculation-note" role="status">รอลบไฟล์แนบให้เสร็จ คุณลองดำเนินการต่อได้จากปุ่มด้านล่าง</p>
           : current.state === "loading" && <p className="case-calculation-note" role="status">กำลังตรวจผลคำนวณที่บันทึกไว้…</p>}
         {deleteProblem && <p className="case-calculation-note" role="alert">{deleteProblem}</p>}
-        {!pendingDeleteRequestId && current.state === "none" && <p className="case-calculation-note">ยังไม่มีผลคำนวณสำหรับร่างรุ่นปัจจุบัน</p>}
+        {!pendingDeleteRequestId && current.state === "none" && <p className="case-calculation-note">ยังไม่มีผลคำนวณที่บันทึกไว้สำหรับร่างนี้</p>}
         {current.state === "failed" && <div className="case-calculation-note" role="alert"><span>{current.error}</span><button className="button button-quiet button-small" onClick={() => setAttempt((value) => value + 1)}>ลองโหลดผลคำนวณอีกครั้ง</button></div>}
-        {!pendingDeleteRequestId && snapshot && <div className="case-calculation-note"><span>ผลคำนวณรุ่น {snapshot.revision}</span>{snapshot.result.outcome === "ready" && snapshot.result.allowableCredit !== null
+        {!pendingDeleteRequestId && snapshot && <div className="case-calculation-note"><span>ผลคำนวณที่บันทึกไว้</span>{snapshot.result.outcome === "ready" && snapshot.result.allowableCredit !== null
           ? <strong>เครดิตภาษีที่ใช้ได้ {formatMoney(snapshot.result.allowableCredit)} บาท</strong>
           : <span>{resultStatus}</span>}</div>}
       </div>

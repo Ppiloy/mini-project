@@ -18,8 +18,9 @@ test("a malformed hosted success response shows a recoverable error and support 
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("ระบบส่งข้อมูลกลับมาไม่ครบ");
   await expect(alert).toContainText("malformed-cases-request");
-  await expect(alert).toContainText("rd-ftc-demo-2568-v1");
-  await expect(page.getByRole("heading", { name: "กรณีของผู้เสียภาษีตัวอย่าง" })).toBeVisible();
+  await expect(alert).not.toContainText("รุ่นนโยบาย");
+  await expect(alert).not.toContainText("rd-ftc-demo-2568-v1");
+  await expect(page.getByRole("heading", { name: "รายการคำนวณเครดิตภาษี" })).toBeVisible();
 });
 
 test("printable reports retain the frozen manual FX URL and assumption", async ({ page }) => {

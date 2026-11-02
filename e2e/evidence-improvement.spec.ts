@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 
 async function enterTaxpayerDemo(page: import("@playwright/test").Page) {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
 }
 
 async function advanceToReview(page: import("@playwright/test").Page) {
   for (let step = 0; step < 4; step += 1) {
-    await page.getByRole("button", { name: "บันทึกและถัดไป" }).click();
+    await page.getByRole("button", { name: "ถัดไป" }).click();
   }
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
 }
@@ -31,15 +31,15 @@ async function verifyDownload(
 
 test("demo evidence previews and downloads the original file after reload and officer review", async ({ page }, testInfo) => {
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await advanceToReview(page);
 
   const name = "หลักฐานรายได้.pdf";
   const bytes = await readFile(new URL("../server/fixtures/fictional-preview-evidence.pdf", import.meta.url));
   const imageName = "หลักฐานประกอบ.png";
   const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+nm3kAAAAASUVORK5CYII=", "base64");
-  await page.getByLabel("แนบ: หลักฐานเงินได้ต่างประเทศ").setInputFiles({ name, mimeType: "application/pdf", buffer: bytes });
-  await page.getByLabel("แนบ: หลักฐานเงินได้ต่างประเทศ").setInputFiles({ name: imageName, mimeType: "image/png", buffer: imageBytes });
+  await page.getByLabel("แนบ: หลักฐานเงินได้").setInputFiles({ name, mimeType: "application/pdf", buffer: bytes });
+  await page.getByLabel("แนบ: หลักฐานเงินได้").setInputFiles({ name: imageName, mimeType: "image/png", buffer: imageBytes });
   let row = page.locator(".file-list li").filter({ hasText: name });
 
   await expect(row.getByRole("button", { name: "ดูตัวอย่าง", exact: true })).toBeVisible();
@@ -71,18 +71,18 @@ test("demo evidence previews and downloads the original file after reload and of
 
   for (const [label, filename] of [
     ["แนบหลักฐานภาษีไทย", "thai-tax.pdf"],
-    ["แนบ: หลักฐานภาษีที่ชำระในต่างประเทศ", "foreign-tax.pdf"],
+    ["แนบ: หลักฐานภาษีต่างประเทศ", "foreign-tax.pdf"],
     ["แนบ: หลักฐานการนำเงินเข้าไทย", "remittance.pdf"],
   ] as const) {
     await page.getByLabel(label).setInputFiles({ name: filename, mimeType: "application/pdf", buffer: bytes });
   }
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
 
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะเจ้าหน้าที่" }).click();
+  await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
   await page.getByRole("link", { name: "ตรวจทาน" }).click();
   const officerRow = page.locator(".file-list li").filter({ hasText: name });
   await expect(officerRow).toBeVisible();
@@ -96,18 +96,18 @@ test("demo evidence previews and downloads the original file after reload and of
 
 test("demo submission rejects stale evidence metadata after browser file bytes are removed", async ({ page }) => {
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await advanceToReview(page);
   const bytes = await readFile(new URL("../server/fixtures/fictional-preview-evidence.pdf", import.meta.url));
   for (const [label, name] of [
     ["แนบหลักฐานภาษีไทย", "thai-tax.pdf"],
-    ["แนบ: หลักฐานเงินได้ต่างประเทศ", "foreign-income.pdf"],
-    ["แนบ: หลักฐานภาษีที่ชำระในต่างประเทศ", "foreign-tax.pdf"],
+    ["แนบ: หลักฐานเงินได้", "foreign-income.pdf"],
+    ["แนบ: หลักฐานภาษีต่างประเทศ", "foreign-tax.pdf"],
     ["แนบ: หลักฐานการนำเงินเข้าไทย", "remittance.pdf"],
   ] as const) {
     await page.getByLabel(label).setInputFiles({ name, mimeType: "application/pdf", buffer: bytes });
   }
-  await page.getByRole("button", { name: "บันทึกและคำนวณตัวอย่าง" }).click();
+  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
 

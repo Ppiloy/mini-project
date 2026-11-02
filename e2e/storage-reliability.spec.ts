@@ -4,8 +4,8 @@ const FAULT_KEY = "__FTC_TEST_LOCAL_STORAGE_READ__";
 
 async function createKnownDraft(page: import("@playwright/test").Page): Promise<string> {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "เข้าสู่สาธิตในฐานะผู้เสียภาษี" }).click();
-  await page.getByRole("button", { name: "ตัวอย่างนำเข้า 50% · G = 2,500" }).click();
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   return new URL(page.url()).pathname.split("/")[3]!;
 }
@@ -41,7 +41,7 @@ test("local storage read failures stay visible and cannot replace a saved draft"
   await page.goto("/demo/app");
   await expect(page.getByRole("alert")).toContainText("พื้นที่จัดเก็บ");
   await expect(page.getByRole("alert")).toContainText("โหลดหน้านี้ใหม่");
-  await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
+  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await expect(page.getByRole("alert")).toContainText("ไม่ได้ถูกลบหรือเขียนทับ");
 
   await page.evaluate((key) => {
@@ -62,7 +62,7 @@ test("malformed storage reads cannot silently hide or overwrite saved draft hist
 
   await page.goto("/demo/app");
   await expect(page.getByRole("alert")).toContainText("ข้อมูลสาธิต");
-  await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
+  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await expect(page.getByRole("alert")).toContainText("ไม่ได้ถูกลบหรือเขียนทับ");
 
   await page.evaluate((key) => {
@@ -71,7 +71,7 @@ test("malformed storage reads cannot silently hide or overwrite saved draft hist
   }, FAULT_KEY);
   await page.reload();
   await expect(page.getByRole("alert")).toContainText("ข้อมูลสาธิต");
-  await page.getByRole("button", { name: "สร้างกรณีใหม่" }).click();
+  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await expect(page.getByRole("alert")).toContainText("ไม่ได้ถูกลบหรือเขียนทับ");
 
   await page.evaluate((key) => {

@@ -821,6 +821,34 @@ describe("hosted authentication and durable draft API", () => {
     expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBeNull();
   });
 
+  it("persists inclusive residence periods and derives the source total from its earned year", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "residence-case-1" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const source = createEmptySource();
+    source.earnedTaxYear = 2024;
+    source.earnedDate = "2024-02-29";
+    source.residenceDaysInEarnedYear = 1;
+    const periods = [
+      { startDate: "2024-01-01", endDate: "2024-12-31" },
+      { startDate: "2024-02-01", endDate: "2024-02-29" },
+    ];
+    draft.sources = [source];
+    draft.residencePeriods = periods;
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0, requestId: "residence-save-1", data: draft,
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.case.draft.residencePeriods).toEqual(periods);
+    expect(saved.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
+
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.residencePeriods).toEqual(periods);
+    expect(reloaded.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
+  });
 
   it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {
     const { app } = await setup();
