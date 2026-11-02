@@ -20,6 +20,7 @@ export default defineConfig({
     include: ["**/*.test.{ts,tsx}"],
     exclude: [...configDefaults.exclude, "tmp/**", "e2e/**"],
     restoreMocks: true,
-    maxWorkers: 4,
+    // Bound concurrent DB/filesystem integration suites on constrained CI builders to avoid Vitest's 5s timeout.
+    maxWorkers: process.env.CI ? 2 : 4,
   },
 });
