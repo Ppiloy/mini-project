@@ -107,10 +107,6 @@ function RequiredMark() {
   return <span className="required-mark" aria-hidden="true"> *</span>;
 }
 
-function worksheetTitle(letter: WorksheetLetter, required = false) {
-  return <><FieldLabel letter={letter} />{required && <RequiredMark />}</>;
-}
-
 interface SearchOption { value: string; label: string; searchText?: string; }
 
 function SearchableChoice({ id, label, value, options, onChange, required = false, hiddenLabel = false }: {
@@ -430,7 +426,7 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
               <td data-label={worksheetLabel("H")}><output className="readonly-value" aria-label={worksheetLabel("H")}>{formatPercentage(computedShare)}</output></td>
             </tr>
             <tr><td className="worksheet-source-details" colSpan={8}><div className="field-grid">
-              <label className="field"><span>วันที่เกิดเงินได้ <RequiredMark /></span><input id={`source-${index}-earnedDate`} type="date" required aria-required="true" aria-invalid={earnedDateIssues.length > 0} aria-describedby={`source-${index}-earnedDate-help${earnedDateIssues.length ? ` source-${index}-earnedDate-errors` : ""}`} value={source.earnedDate ?? ""} onChange={(event) => updateSource(index, { earnedDate: nullableText(event.target.value), earnedTaxYear: event.target.value ? Number(event.target.value.slice(0, 4)) : null })} /><small id={`source-${index}-earnedDate-help`} className="field-hint">ปี (A) คำนวณจากวันที่นี้ ใช้ตรวจวันพำนักในปีที่เกิดเงินได้และช่วงเงินได้ตามคู่มือ แยกจากปีที่นำเงินเข้าไทย</small>
+              <label className="field"><span>วันที่เกิดเงินได้ <RequiredMark /></span><input id={`source-${index}-earnedDate`} aria-label="วันที่เกิดเงินได้" type="date" required aria-required="true" aria-invalid={earnedDateIssues.length > 0} aria-describedby={`source-${index}-earnedDate-help${earnedDateIssues.length ? ` source-${index}-earnedDate-errors` : ""}`} value={source.earnedDate ?? ""} onChange={(event) => updateSource(index, { earnedDate: nullableText(event.target.value), earnedTaxYear: event.target.value ? Number(event.target.value.slice(0, 4)) : null })} /><small id={`source-${index}-earnedDate-help`} className="field-hint">ปี (A) คำนวณจากวันที่นี้ ใช้ตรวจวันพำนักในปีที่เกิดเงินได้และช่วงเงินได้ตามคู่มือ แยกจากปีที่นำเงินเข้าไทย</small>
                 {earnedDateIssues.length > 0 && <span id={`source-${index}-earnedDate-errors`} className="field-error">{earnedDateIssues.map((issue) => <span key={issue.code} style={{ display: "block" }}>{issue.code === "source.remittance_before_earned" ? "วันที่เกิดเงินได้ต้องไม่หลังวันที่นำเงินเข้าไทย" : issue.message}</span>)}</span>}
               </label>
               <label className="field"><span>วันพำนักในปีที่เกิดเงินได้</span>
@@ -522,17 +518,34 @@ export function StepThree({ draft, onChange, onNavigateStep, validationErrors = 
   const remittanceIssues = formatCalculationIssues(draft, rawRemittanceIssues);
   return <section className="step-panel" aria-labelledby="step-title">
     <h2 id="step-title">{WORKSHEET_SECTIONS[1]}</h2>
-    <p className="muted">ระบุเงินได้ในประเทศ (J) และภาษีไทยก่อนเครดิต (L) ระบบรวมเงินได้ที่นำเข้าจากทุกแหล่งเป็น (I) และแสดง (K) = (I) + (J)</p>
+    <p className="muted">กรอกเงินได้ในประเทศและภาษีไทยก่อนเครดิตจากข้อมูลที่เตรียมไว้ ระบบรวมเงินได้ต่างประเทศให้โดยอัตโนมัติ</p>
     {issues.length > 0 && <div className="alert alert-error" role="alert"><ul>{issues.map((issue, index) => <li key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></li>)}</ul></div>}
-    <div className="field-grid field-grid-single">
-      <div className="field"><span>{worksheetTitle("I")}</span><output className="readonly-value" aria-label={WORKSHEET_LABELS.I}>{totalRemitted === null ? "—" : `${formatMoney(totalRemitted)} บาท`}</output></div>
+    <div className="assessable-income-grid">
+      <article className="assessable-amount assessable-computed" aria-labelledby="amount-heading-i">
+        <p className="assessable-kind">คำนวณจากแหล่งเงินได้</p>
+        <h3 id="amount-heading-i">เงินได้ต่างประเทศที่นำเข้าไทย <span>(I)</span></h3>
+        <div className="field"><span><span className="sr-only">{worksheetLabel("I")}</span></span><output className="readonly-value assessable-output" aria-label={WORKSHEET_LABELS.I}>{totalRemitted === null ? "—" : <><strong>{formatMoney(totalRemitted)}</strong>{" "}<span>บาท</span></>}</output><small className="field-hint">ผลรวมเงินได้ที่นำเข้าจากทุกแหล่ง ตามอัตราที่บันทึกไว้</small></div>
+      </article>
+      <article className="assessable-amount" aria-labelledby="amount-heading-j">
+        <p className="assessable-kind">ผู้ใช้กรอกจำนวน</p>
+        <h3 id="amount-heading-j">เงินได้พึงประเมินในประเทศ <span>(J)</span><RequiredMark /></h3>
+        <MoneyField id="case-domesticAssessableIncome" label={<span className="sr-only">{worksheetLabel("J")}</span>} required formatOnBlur value={draft.domesticAssessableIncome} onChange={(value) => onChange({ ...draft, domesticAssessableIncome: value })} hint="จำนวนก่อนหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง" />
+      </article>
+      <article className="assessable-amount assessable-computed" aria-labelledby="amount-heading-k">
+        <p className="assessable-kind">คำนวณจาก I + J</p>
+        <h3 id="amount-heading-k">เงินได้พึงประเมินรวม <span>(K)</span></h3>
+        <div className="field"><span><span className="sr-only">{worksheetLabel("K")}</span></span><output className="readonly-value assessable-output" aria-label={WORKSHEET_LABELS.K}>{totalAssessable === null ? "—" : <><strong>{formatMoney(totalAssessable)}</strong>{" "}<span>บาท</span></>}</output><small className="field-hint">ยอดรวมเงินได้ต่างประเทศที่นำเข้าและเงินได้ในประเทศ</small></div>
+      </article>
+      <article className="assessable-amount" aria-labelledby="amount-heading-l">
+        <p className="assessable-kind">ผู้ใช้กรอกจากแบบภาษีที่เตรียมไว้</p>
+        <h3 id="amount-heading-l">ภาษีไทยก่อนเครดิตภาษีต่างประเทศ <span>(L)</span><RequiredMark /></h3>
+        <MoneyField id="case-thaiTax-amountBeforeFtc" label={<span className="sr-only">{worksheetLabel("L")} · ภาษีไทยก่อนเครดิตภาษีต่างประเทศ</span>} required formatOnBlur value={draft.thaiTax.amountBeforeFtc} onChange={(value) => onChange({ ...draft, thaiTax: { ...draft.thaiTax, amountBeforeFtc: value } })} hint="ระบุจำนวนหลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง แต่ก่อนใช้เครดิตภาษีต่างประเทศ ไม่คำนวณจาก J เพียงอย่างเดียว" />
+      </article>
       {totalRemitted === null && remittanceIssues.length > 0 && <div className="field field-span" role="status"><strong>ยังสรุปยอด (I) ไม่ได้</strong><ul>{remittanceIssues.map((issue, index) => <li key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} sourceIndex={typeof issue.path?.[1] === "number" ? issue.path[1] : undefined} onNavigateStep={onNavigateStep} targetStep={stepForCalculationIssue(rawRemittanceIssues[index]!)} /></li>)}</ul></div>}
-      <MoneyField id="case-domesticAssessableIncome" label={worksheetTitle("J", true)} required value={draft.domesticAssessableIncome} onChange={(value) => onChange({ ...draft, domesticAssessableIncome: value })} hint="(J) คือเงินได้ในประเทศก่อนหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง" />
-      <div className="field"><span>{worksheetTitle("K")}</span><output className="readonly-value" aria-label={WORKSHEET_LABELS.K}>{totalAssessable === null ? "—" : `${formatMoney(totalAssessable)} บาท`}</output><small className="field-hint">คำนวณจาก (I) + (J)</small></div>
-      <MoneyField id="case-thaiTax-amountBeforeFtc" label={worksheetTitle("L", true)} required value={draft.thaiTax.amountBeforeFtc} onChange={(value) => onChange({ ...draft, thaiTax: { ...draft.thaiTax, amountBeforeFtc: value } })} hint="ระบุจำนวนหลังหักค่าใช้จ่ายและค่าลดหย่อนที่เกี่ยวข้อง แต่ก่อนใช้เครดิตภาษีต่างประเทศ" />
       {draft.thaiTax.provenance && <p className="field-hint field-span">หมายเหตุเดิมที่บันทึกไว้: {displayKnownExampleNote(draft.thaiTax.provenance)}</p>}
     </div>
-    <div className="info-callout"><strong>ยืนยันภาษีไทยในขั้นตรวจทาน</strong><p>การเปลี่ยน (J), แหล่งเงินได้, ช่วงพำนัก หรืออัตราแลกเปลี่ยน จะทำให้ต้องตรวจทานการยืนยันอีกครั้ง</p></div>
+    <p className="assessable-formula">เงินได้รวม <strong>(K) = (I) + (J)</strong> · ใช้ยอดก่อนหักค่าใช้จ่ายและค่าลดหย่อน</p>
+    <div className="info-callout assessable-confirmation"><strong>ยืนยันภาษีไทยในขั้นตรวจทาน</strong><p>เมื่อข้อมูลรายได้ วันพำนัก หรืออัตราเปลี่ยน ให้ตรวจทานการยืนยันอีกครั้ง</p></div>
   </section>;
 }
 
@@ -606,8 +619,16 @@ function UnsupportedEditor({ source, sourceIndex, onChange }: { source: ForeignI
   </div></details>;
 }
 
-export function MoneyField({ id, label, value, onChange, hint, unit = "บาท", required = false, disabled = false }: { id?: string; label: ReactNode; value: string | null; onChange: (value: string | null) => void; hint?: string; unit?: string; required?: boolean; disabled?: boolean }) {
-  return <label className="field"><span>{label}</span><span className="input-unit"><input id={id} inputMode="decimal" autoComplete="off" value={value ?? ""} onChange={(event) => onChange(nullableText(event.target.value))} placeholder="0.00" aria-required={required} required={required} disabled={disabled} /><span>{unit}</span></span>{hint && <small className="field-hint">{hint}</small>}</label>;
+export function MoneyField({ id, label, value, onChange, hint, unit = "บาท", required = false, disabled = false, formatOnBlur = false }: { id?: string; label: ReactNode; value: string | null; onChange: (value: string | null) => void; hint?: string; unit?: string; required?: boolean; disabled?: boolean; formatOnBlur?: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const formattedValue = formatOnBlur && value !== null && /^\d{1,9}(?:\.\d{1,2})?$/.test(value) ? formatMoney(value) : null;
+  const showFormatted = !editing && formattedValue !== null;
+  // Keep the input's canonical text stable during focus and selection; grouping is display-only.
+  return <label className="field"><span>{label}</span><span className="input-unit">
+    <input id={id} inputMode="decimal" autoComplete="off" value={value ?? ""} style={showFormatted ? { color: "transparent" } : undefined} onFocus={() => { if (formatOnBlur) setEditing(true); }} onBlur={() => setEditing(false)} onChange={(event) => onChange(nullableText(event.target.value))} placeholder="0.00" aria-required={required} required={required} disabled={disabled} />
+    {showFormatted && <span className="money-display" aria-hidden="true">{formattedValue}</span>}
+    <span>{unit}</span>
+  </span>{hint && <small className="field-hint">{hint}</small>}</label>;
 }
 
 function evidenceMediaType(mediaType: string): string {

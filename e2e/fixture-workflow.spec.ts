@@ -370,7 +370,7 @@ test("missing original-currency FX is linked to its source and remains saveable"
   const fxErrorLink = page.getByRole("button", { name: "ไปยังอัตราแลกเปลี่ยนของแหล่งเงินได้ 1" });
   await expect(fxErrorLink).toBeVisible();
   await fxErrorLink.click();
-  await expect(page.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
 });

@@ -126,5 +126,6 @@ test("I and K follow edited source amounts and remain visible after save and rel
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(iValue).toContainText("10,000.00");
   await expect(jValue).toHaveValue("1000000.00");
+  await expect(page.getByText("1,000,000.00", { exact: true })).toBeVisible();
   await expect(kValue).toContainText("1,010,000.00");
 });

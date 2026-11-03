@@ -447,7 +447,7 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
     <StepFive key="five" {...stepProps} mode={mode} />,
   ][step];
 
-  return <>
+  return <div className="case-editor-page">
     <PageHeading eyebrow={`รหัสกรณี · ${record.id.slice(-8).toUpperCase()}`} title="กรอกข้อมูลกรณีเครดิตภาษี">
       บันทึกแต่ละขั้นได้ ร่างที่ข้อมูลยังไม่ครบหรืออยู่นอกขอบเขตก็เก็บไว้แก้ไขได้
     </PageHeading>
@@ -478,5 +478,5 @@ export function CaseEditorPage({ mode }: { mode: Mode }) {
         </div>
       </div>
     </div>
-  </>;
+  </div>;
 }
