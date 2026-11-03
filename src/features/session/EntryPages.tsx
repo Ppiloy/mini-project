@@ -150,8 +150,8 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
       <section className="entry-card card demo-card">
         <a className="entry-brand" href="/login" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
         <h1>{DEMO_ENTRY_LABEL}</h1>
-        <p className="muted">เลือกบทบาทเพื่อเริ่มใช้ข้อมูลตัวอย่าง</p>
-        <div className="alert alert-info"><strong>ข้อมูลตัวอย่างแยกจากบัญชีออนไลน์</strong><span>ข้อมูลเก็บไว้ในเบราว์เซอร์นี้เท่านั้น ผู้เสียภาษีและเจ้าหน้าที่ในโหมดตัวอย่างใช้ข้อมูลชุดเดียวกัน</span></div>
+        <p className="muted">เลือกบทบาทเพื่อเริ่มใช้ข้อมูลสาธิต</p>
+        <div className="alert alert-info"><strong>โหมดสาธิตแยกจากบัญชีออนไลน์</strong><span>กรณีและไฟล์ที่สร้างจะเก็บไว้ในเบราว์เซอร์นี้เท่านั้น ทั้งสองบทบาทใช้ข้อมูลสาธิตชุดเดียวกัน</span></div>
         {sessionNotice && <div className="alert alert-error" role="alert">
           <span>{sessionNotice}</span>
           <div className="form-actions-right">
@@ -162,10 +162,10 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         <div className="demo-role-list">
           <button className="role-card" aria-label="ผู้เสียภาษี" onClick={() => void select("taxpayer")} disabled={busy}>
-            <span className="role-icon" aria-hidden="true">ผ</span><span><strong>ผู้เสียภาษี</strong><small>สร้างและแก้ไขกรณีตัวอย่าง ส่งให้เจ้าหน้าที่ผู้สอบทาน</small></span><span aria-hidden="true">→</span>
+            <span className="role-icon" aria-hidden="true">ผ</span><span><strong>ผู้เสียภาษี</strong><small>สร้างและแก้ไขกรณีสาธิต ส่งเข้าคิวตรวจทานในโหมดสาธิต</small></span><span aria-hidden="true">→</span>
           </button>
           <button className="role-card" aria-label="เจ้าหน้าที่" onClick={() => void select("officer")} disabled={busy}>
-            <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เจ้าหน้าที่</strong><small>ดูกรณีตัวอย่างที่ส่งเข้าตรวจทาน</small></span><span aria-hidden="true">→</span>
+            <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เจ้าหน้าที่</strong><small>ดูกรณีสาธิตที่ส่งเข้าคิวตรวจทาน</small></span><span aria-hidden="true">→</span>
           </button>
         </div>
         <a className="text-link" href="/login">เข้าสู่ระบบออนไลน์</a>

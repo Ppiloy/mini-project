@@ -81,13 +81,40 @@ function validDraft(caseId: string): FtcCaseDraft {
   return Object.assign(createEmptyDraft(),{id:caseId,taxYear:2025,domesticAssessableIncome:"1000000",thaiTax:{amountBeforeFtc:"318750",provenance:"Test supplied tax amount",confirmedAt:null,confirmedInputFingerprint:null},sources:[source]});
 }
 
-async function uploadPdf(agent: ReturnType<typeof request.agent>, csrf: string, caseId: string, expectedRevision: number, id: string, sourceId: string) {
+async function uploadPdf(agent: ReturnType<typeof request.agent>, csrf: string, caseId: string, expectedRevision: number, id: string, sourceId: string, kind: "foreign_income" | "foreign_tax" | "remittance" | "thai_tax" | "other" = "other") {
   return agent.post(`/api/cases/${caseId}/attachments`).set("Origin",origin).set("X-CSRF-Token",csrf)
     .field("expectedRevision",String(expectedRevision)).field("requestId",id).field("sourceId",sourceId)
-    .field("kind","other").field("displayName",`${id}.pdf`).attach("file",pdfBytes(id),{filename:`${id}.pdf`,contentType:"application/pdf"});
+    .field("kind",kind).field("displayName",`${id}.pdf`).attach("file",pdfBytes(id),{filename:`${id}.pdf`,contentType:"application/pdf"});
 }
 
 describe("hosted evidence, preview and submission HTTP workflows", () => {
+  it.each([
+    { mode: "periods", residence: { earnedTaxYear: 2025, mode: "periods" as const, periods: [{ startDate: "2025-01-01", endDate: "2025-12-31" }] }, expectedDays: 365 },
+    { mode: "declaration", residence: { earnedTaxYear: 2025, mode: "declared" as const, declaration: "at_least_180_days" as const }, expectedDays: null },
+  ])("keeps confirmed $mode residence submit-ready after durable readback", async ({ residence, expectedDays }) => {
+    const { app } = await setup();
+    const { agent, csrf } = await login(app);
+    const record = await createCase(agent, csrf, "residence-confirmation-readback");
+    const draft = validDraft(record.id);
+    delete draft.residencePeriods;
+    draft.residenceYears = [residence];
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: 0, requestId: "residence-confirmation-save", data: draft, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const revision = saved.body.data.case.draft.revision;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: revision, requestId: "residence-confirmation-preview" });
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.data.snapshot.result).toMatchObject({ outcome: "ready", allowableCredit: "106250.00" });
+    const submitted = await agent.post(`/api/cases/${record.id}/submit`).set("Origin", origin).set("X-CSRF-Token", csrf)
+      .send({ expectedRevision: revision, previewSnapshotId: preview.body.data.snapshot.id, requestId: "residence-confirmation-submit",
+        evidenceAcknowledgement: { version: 1, acknowledged: true, revision, previewSnapshotId: preview.body.data.snapshot.id } });
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+    expect(submitted.body.data.case.status).toBe("submitted");
+    expect(submitted.body.data.snapshot.inputs.residenceYears).toEqual([residence]);
+    expect(submitted.body.data.snapshot.inputs.sources[0].residenceDaysInEarnedYear).toBe(expectedDays);
+  });
+
   it("accepts ordinary E and L amounts without rationale text over the authenticated API", async () => {
     const { app } = await setup();
     const { agent, csrf } = await login(app);
@@ -447,6 +474,36 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
     expect((await pool.query<{count:number}>("SELECT count(*)::int AS count FROM attachments WHERE case_id=$1",[record.id])).rows[0]?.count).toBe(1);
   });
 
+  it("blocks submission while a failed upload still needs retry or deletion", async () => {
+    const durable=storage();
+    const blobs:BlobIO={
+      async put(){throw new Error("temporary blob fault");},
+      get:(marker,key)=>durable.get(marker,key),delete:(marker,key)=>durable.delete(marker,key),
+    };
+    const {app}=await setup(undefined,blobs);
+    const {agent,csrf}=await login(app);
+    const record=await createCase(agent,csrf,"submit-failed-upload");
+    const saved=await agent.put(`/api/cases/${record.id}/draft`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:0,requestId:"submit-failed-save",data:validDraft(record.id),confirmations:{thaiTax:true,eligibleSourceIndexes:[0]}});
+    expect(saved.status).toBe(200);
+    const source=saved.body.data.case.draft.sources[0];
+    const failedUpload=await uploadPdf(agent,csrf,record.id,saved.body.data.case.draft.revision,"submit-failed-file",source.id,"foreign_income");
+    expect(failedUpload.status).toBe(503);
+    const latest=await agent.get(`/api/cases/${record.id}`).set("Origin",origin);
+    const revision=latest.body.data.case.draft.revision as number;
+    const preview=await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,requestId:"submit-failed-preview"});
+    expect(preview.status).toBe(200);
+
+    const submission=await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-failed-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision,previewSnapshotId:preview.body.data.snapshot.id}});
+
+    expect(submission.status).toBe(422);
+    expect(submission.body.error.fields.map((field:{code:string})=>field.code)).toContain("submit.evidence_unresolved");
+    expect(submission.body.error.fields.find((field:{code:string})=>field.code==="submit.evidence_unresolved").message).toContain("submit-failed-file.pdf");
+  });
+
   it("cleans up a late Blob write after a pending upload is canceled", async () => {
     const blobs=new Map<string,Uint8Array>(); let startPut!:()=>void; let resolvePut!:()=>void;
     const started=new Promise<void>((resolve)=>{startPut=resolve;}); const finish=new Promise<void>((resolve)=>{resolvePut=resolve;});
@@ -470,7 +527,7 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
     expect((await pool.query<{cleanup_pending:boolean;status:string}>("SELECT cleanup_pending,status FROM attachments WHERE id=$1",[pending.rows[0]!.id])).rows[0]).toMatchObject({cleanup_pending:false,status:"deleted"});
   });
 
-  it("serializes a deferred upload finalization against submit and only submits a ready current revision", async () => {
+  it("blocks submission while an upload is unresolved and accepts the current revision after it finalizes", async () => {
     const durable=storage(); let holdNext=false; let startedResolve!:()=>void; let finishResolve!:()=>void;
     const started=new Promise<void>((resolve)=>{startedResolve=resolve;});
     const finish=new Promise<void>((resolve)=>{finishResolve=resolve;});
@@ -495,18 +552,22 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
       .send({expectedRevision:reservedRevision,requestId:"race-pending-preview"});
     expect(pendingPreview.status).toBe(200);
     const submitTask=agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
-      .send({expectedRevision:reservedRevision,previewSnapshotId:pendingPreview.body.data.snapshot.id,requestId:"race-submit"}).then((response)=>response);
+      .send({expectedRevision:reservedRevision,previewSnapshotId:pendingPreview.body.data.snapshot.id,requestId:"race-submit",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision:reservedRevision,previewSnapshotId:pendingPreview.body.data.snapshot.id}}).then((response)=>response);
+    const submitResult=await submitTask;
+    expect(submitResult.status).toBe(422);
+    expect(submitResult.body.error.fields.map((field:{code:string})=>field.code)).toContain("submit.evidence_unresolved");
     finishResolve();
-    const [uploadResult,submitResult]=await Promise.all([uploadTask,submitTask]);
+    const uploadResult=await uploadTask;
     expect(uploadResult.status).toBe(201);
-    expect([409,422]).toContain(submitResult.status);
     const current=await agent.get(`/api/cases/${record.id}`).set("Origin",origin);
     expect(current.body.data.case.status).toBe("draft");
     expect(current.body.data.case.draft.revision).toBe(uploadResult.body.data.revision);
     const freshPreview=await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
       .send({expectedRevision:uploadResult.body.data.revision,requestId:"race-ready-preview"});
     const submitted=await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
-      .send({expectedRevision:uploadResult.body.data.revision,previewSnapshotId:freshPreview.body.data.snapshot.id,requestId:"race-submit-ready"});
+      .send({expectedRevision:uploadResult.body.data.revision,previewSnapshotId:freshPreview.body.data.snapshot.id,requestId:"race-submit-ready",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision:uploadResult.body.data.revision,previewSnapshotId:freshPreview.body.data.snapshot.id}});
     expect(submitted.status).toBe(200);
   });
 
@@ -518,20 +579,48 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
     expect(saved.status).toBe(200);
     let revision = saved.body.data.case.draft.revision as number;
     for (const [index,source] of saved.body.data.case.draft.sources.entries()) {
-      const uploaded = await uploadPdf(agent,csrf,record.id,revision,`submit-upload-${index}`,source.id);
-      expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(201); revision=uploaded.body.data.revision;
+      for (const kind of ["foreign_income","foreign_tax","remittance"] as const) {
+        const uploaded = await uploadPdf(agent,csrf,record.id,revision,`submit-upload-${index}-${kind}`,source.id,kind);
+        expect(uploaded.status, JSON.stringify(uploaded.body)).toBe(201); revision=uploaded.body.data.revision;
+      }
     }
+    const thaiTaxUpload = await uploadPdf(agent,csrf,record.id,revision,"submit-upload-thai-tax","","thai_tax");
+    expect(thaiTaxUpload.status, JSON.stringify(thaiTaxUpload.body)).toBe(201); revision=thaiTaxUpload.body.data.revision;
     const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
       .send({expectedRevision:revision,requestId:"submit-preview"});
     expect(preview.status).toBe(200);
+    const withoutAcknowledgement = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-without-evidence-ack"});
+    expect(withoutAcknowledgement.status).toBe(422);
+    expect(withoutAcknowledgement.body.error.fields.map((field: { code: string }) => field.code)).toContain("submit.evidence_acknowledgement_required");
     const submission = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
-      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once"});
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision,previewSnapshotId:preview.body.data.snapshot.id}});
     expect(submission.status,JSON.stringify(submission.body)).toBe(200);
     expect(submission.body.data.case.status).toBe("submitted");
     expect(submission.body.data.snapshot.kind).toBe("submitted");
+    expect(submission.body.data.snapshot.submissionMetadata).toMatchObject({
+      version: 1,
+      statement: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม",
+      acknowledgedBy: taxpayerId,
+      revision,
+      previewSnapshotId: preview.body.data.snapshot.id,
+      missingEvidence: [],
+    });
+    expect(Date.parse(submission.body.data.snapshot.submissionMetadata.acknowledgedAt)).not.toBeNaN();
     const replay = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
-      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once"});
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision,previewSnapshotId:preview.body.data.snapshot.id}});
     expect(replay.status).toBe(200); expect(replay.body.data.snapshot.id).toBe(submission.body.data.snapshot.id);
+    const reorderedAcknowledgementReplay = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once",
+        evidenceAcknowledgement:{previewSnapshotId:preview.body.data.snapshot.id,revision,acknowledged:true,version:1}});
+    expect(reorderedAcknowledgementReplay.status).toBe(200);
+    expect(reorderedAcknowledgementReplay.body.data.snapshot.id).toBe(submission.body.data.snapshot.id);
+    const changedAcknowledgementReplay = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision:revision+1,previewSnapshotId:preview.body.data.snapshot.id}});
+    expect(changedAcknowledgementReplay.status).toBe(409);
     const officer = await login(app,"officer-a");
     const queue = await officer.agent.get("/api/officer/cases").set("Origin",origin);
     expect(queue.status).toBe(200); expect(queue.body.data.cases.map((item:{id:string})=>item.id)).toContain(record.id);
@@ -547,5 +636,122 @@ describe("hosted evidence, preview and submission HTTP workflows", () => {
     const auditFailure = await officer.agent.get(`/api/officer/cases/${record.id}`).set("Origin",origin);
     expect(auditFailure.status).toBe(503);
     expect(auditFailure.body.data).toBeUndefined();
+  });
+
+  it("allows a ready zero-file submission only after the current available-evidence declaration and freezes missing categories", async () => {
+    const { app } = await setup();
+    const { agent,csrf } = await login(app);
+    const record = await createCase(agent,csrf,"submit-zero-files");
+    const draft = validDraft(record.id);
+    draft.sources[0]!.evidenceChecklist = [];
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:0,requestId:"submit-zero-files-save",data:draft,confirmations:{thaiTax:true,eligibleSourceIndexes:[0]}});
+    expect(saved.status).toBe(200);
+    const revision = saved.body.data.case.draft.revision as number;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,requestId:"submit-zero-files-preview"});
+    expect(preview.status).toBe(200);
+    const submission = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-zero-files-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision,previewSnapshotId:preview.body.data.snapshot.id}});
+
+    expect(submission.status,JSON.stringify(submission.body)).toBe(200);
+    expect(submission.body.data.snapshot.evidence).toEqual([]);
+    expect(submission.body.data.snapshot.submissionMetadata.missingEvidence).toEqual([
+      {sourceId:null,sourceIndex:null,missingKinds:["thai_tax"]},
+      {sourceId:saved.body.data.case.draft.sources[0].id,sourceIndex:0,missingKinds:["foreign_income","foreign_tax","remittance"]},
+    ]);
+  });
+
+  it("refuses to freeze a ready attachment when its hosted bytes are unavailable", async () => {
+    let unavailable = false;
+    const backing = storage();
+    const blobs: BlobIO = { ...backing, async get(marker, key) { return unavailable ? null : backing.get(marker, key); } };
+    const { app } = await setup(undefined,blobs);
+    const { agent,csrf } = await login(app);
+    const record = await createCase(agent,csrf,"submit-unavailable-bytes");
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:0,requestId:"submit-unavailable-save",data:validDraft(record.id),confirmations:{thaiTax:true,eligibleSourceIndexes:[0]}});
+    expect(saved.status).toBe(200);
+    let revision = saved.body.data.case.draft.revision as number;
+    const source = saved.body.data.case.draft.sources[0];
+    const uploaded = await uploadPdf(agent,csrf,record.id,revision,"submit-unavailable-file",source.id);
+    expect(uploaded.status).toBe(201);
+    revision = uploaded.body.data.revision;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,requestId:"submit-unavailable-preview"});
+    expect(preview.status).toBe(200);
+    unavailable = true;
+
+    const submission = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:revision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-unavailable-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision,previewSnapshotId:preview.body.data.snapshot.id}});
+
+    expect(submission.status).toBe(422);
+    expect(submission.body.error.fields.map((field: { code: string }) => field.code)).toContain("submit.evidence_unavailable");
+  });
+
+  it("refuses to freeze hosted bytes whose digest changed despite matching the saved size", async () => {
+    let corrupt = false;
+    const backing = storage();
+    const blobs: BlobIO = { ...backing, async get(marker, key) {
+      const bytes = await backing.get(marker, key);
+      if (!corrupt || !bytes) return bytes;
+      const altered = Uint8Array.from(bytes);
+      altered[altered.length - 1] = altered[altered.length - 1]! ^ 1;
+      return altered;
+    } };
+    const { app } = await setup(undefined,blobs);
+    const { agent,csrf } = await login(app);
+    const record = await createCase(agent,csrf,"submit-corrupt-digest");
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:0,requestId:"submit-corrupt-save",data:validDraft(record.id),confirmations:{thaiTax:true,eligibleSourceIndexes:[0]}});
+    expect(saved.status).toBe(200);
+    const revision = saved.body.data.case.draft.revision as number;
+    const source = saved.body.data.case.draft.sources[0];
+    const uploaded = await uploadPdf(agent,csrf,record.id,revision,"submit-corrupt-file",source.id);
+    expect(uploaded.status).toBe(201);
+    const currentRevision = uploaded.body.data.revision as number;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:currentRevision,requestId:"submit-corrupt-preview"});
+    expect(preview.status).toBe(200);
+    corrupt = true;
+
+    const submission = await agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:currentRevision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-corrupt-once",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision:currentRevision,previewSnapshotId:preview.body.data.snapshot.id}});
+
+    expect(submission.status).toBe(422);
+    expect(submission.body.error.fields.map((field: { code: string }) => field.code)).toContain("submit.evidence_integrity_mismatch");
+    expect(submission.body.error.fields[0].message).toContain("submit-corrupt-file.pdf");
+    expect(submission.body.error.fields[0].message).not.toContain("SHA-256");
+  });
+
+  it("checks case ownership before reading any hosted evidence bytes", async () => {
+    let blobReads = 0;
+    const backing = storage();
+    const blobs: BlobIO = { ...backing, async get(marker, key) { blobReads += 1; return backing.get(marker, key); } };
+    const { app } = await setup(undefined,blobs);
+    const { agent,csrf } = await login(app);
+    const record = await createCase(agent,csrf,"submit-owner-preflight");
+    const saved = await agent.put(`/api/cases/${record.id}/draft`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:0,requestId:"submit-owner-save",data:validDraft(record.id),confirmations:{thaiTax:true,eligibleSourceIndexes:[0]}});
+    expect(saved.status).toBe(200);
+    const revision = saved.body.data.case.draft.revision as number;
+    const source = saved.body.data.case.draft.sources[0];
+    const uploaded = await uploadPdf(agent,csrf,record.id,revision,"submit-owner-file",source.id);
+    expect(uploaded.status).toBe(201);
+    const currentRevision = uploaded.body.data.revision as number;
+    const preview = await agent.post(`/api/cases/${record.id}/calculate`).set("Origin",origin).set("X-CSRF-Token",csrf)
+      .send({expectedRevision:currentRevision,requestId:"submit-owner-preview"});
+    expect(preview.status).toBe(200);
+    const otherTaxpayer = await login(app,"taxpayer-b");
+
+    const submission = await otherTaxpayer.agent.post(`/api/cases/${record.id}/submit`).set("Origin",origin).set("X-CSRF-Token",otherTaxpayer.csrf)
+      .send({expectedRevision:currentRevision,previewSnapshotId:preview.body.data.snapshot.id,requestId:"submit-owner-other-user",
+        evidenceAcknowledgement:{version:1,acknowledged:true,revision:currentRevision,previewSnapshotId:preview.body.data.snapshot.id}});
+
+    expect(submission.status).toBe(404);
+    expect(blobReads).toBe(0);
   });
 });

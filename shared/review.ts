@@ -1,6 +1,6 @@
-import Decimal from "decimal.js";
 import type { CalculationSnapshot, OfficerReviewPoint, ReviewPointCategory, UnsupportedClassification } from "./contracts.js";
-import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "./foreignTax.js";
+import { hasEligibleTaxAdjustment } from "./foreignTax.js";
+import { missingEvidenceInventory } from "./evidenceInventory.js";
 import { EVIDENCE_LABELS } from "./labels.js";
 
 const reviewScope = "จุดตรวจนี้ช่วยชี้ข้อมูลเชิงโครงสร้างเท่านั้น ไม่ใช่การอนุมัติหรือคำวินิจฉัยสิทธิในเครดิตภาษี; การมีไฟล์แนบไม่ได้ยืนยันว่าเอกสารถูกต้องหรือครบถ้วน";
@@ -46,11 +46,6 @@ function nextActionFor(category: ReviewPointCategory): string {
   }
 }
 
-function positive(value: string | null): boolean {
-  if (value === null) return false;
-  try { return new Decimal(value).gt(0); } catch { return false; }
-}
-
 /** Classifies only facts frozen in the submitted snapshot; it does not recalculate or approve a claim. */
 export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): OfficerReviewPoint[] {
   const points: OfficerReviewPoint[] = [];
@@ -62,12 +57,30 @@ export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): Office
     points.push(point);
   };
 
-  if (positive(snapshot.inputs.thaiTax.amountBeforeFtc) &&
-      !snapshot.evidence.some((evidence) => evidence.kind === "thai_tax" && evidence.sourceId === null)) {
-    add({ code: "case.missing_thai_tax_evidence", category: "missingEvidence", sourceId: null, sourceIndex: null,
-      title: "ยังไม่พบหลักฐานภาษีไทยที่เชื่อมกับกรณีนี้",
-      reason: "มีการระบุภาษีไทยก่อนเครดิต (L) เป็นจำนวนบวก แต่ยังไม่พบเอกสารภาษีไทยในฉบับที่ส่ง; การไม่พบไฟล์เพียงอย่างเดียวไม่ได้บอกว่าจำนวนนี้ถูกหรือผิด",
-      nextAction: "ตรวจสอบที่มาและจำนวน (L) พร้อมเอกสารประกอบ หรือบันทึกเหตุผลที่เกี่ยวข้อง" });
+  for (const group of missingEvidenceInventory(snapshot.inputs, snapshot.evidence)) {
+    const names = group.missingKinds.map((kind) => EVIDENCE_LABELS[kind]).join(", ");
+    if (group.sourceIndex === null) {
+      add({ code: "case.missing_thai_tax_evidence", category: "missingEvidence", sourceId: null, sourceIndex: null,
+        title: "ยังไม่พบหลักฐานภาษีไทยที่เชื่อมกับกรณีนี้",
+        reason: `มีการระบุภาษีไทยก่อนเครดิต (L) เป็นจำนวนบวก แต่ยังไม่พบ ${names} ในฉบับที่ส่ง; การไม่พบไฟล์เพียงอย่างเดียวไม่ได้บอกว่าจำนวนนี้ถูกหรือผิด`,
+        nextAction: "ตรวจสอบที่มาและจำนวน (L) พร้อมเอกสารประกอบ หรือบันทึกเหตุผลที่เกี่ยวข้อง" });
+    } else {
+      add({ code: "source.missing_evidence", category: "missingEvidence", sourceId: group.sourceId, sourceIndex: group.sourceIndex,
+        title: "ยังไม่พบหลักฐานทุกชนิดที่เชื่อมกับรายการนี้",
+        reason: `ในฉบับที่ส่งยังไม่พบหลักฐานที่ผูกกับรายการนี้สำหรับ: ${names}. การพบไฟล์ไม่ได้ยืนยันความถูกต้องของเอกสาร`,
+        nextAction: nextActionFor("missingEvidence") });
+    }
+  }
+
+  const reviewedResidenceYears = new Set<number>();
+  for (const record of snapshot.inputs.residenceYears ?? []) {
+    if (record.mode !== "declared" || reviewedResidenceYears.has(record.earnedTaxYear)) continue;
+    reviewedResidenceYears.add(record.earnedTaxYear);
+    const thaiYear = record.earnedTaxYear + 543;
+    add({ code: `residence.declaration_unverified.${record.earnedTaxYear}`, category: "substantive", sourceId: null, sourceIndex: null,
+      title: `คำยืนยันวันพำนักในปี พ.ศ. ${thaiYear} ยังไม่ผ่านการตรวจสอบ`,
+      reason: `ฉบับที่ส่งมีคำยืนยันของผู้ใช้ว่าพำนักในประเทศไทยอย่างน้อย 180 วันในปี พ.ศ. ${thaiYear} โดยไม่มีช่วงวันที่หรือจำนวนวันแน่นอน จุดตรวจนี้ไม่ได้ตรวจสอบข้อเท็จจริงหรือวินิจฉัยสิทธิ FTC หรือ DTA`,
+      nextAction: `ตรวจสอบข้อเท็จจริงวันพำนักและเอกสารของปี พ.ศ. ${thaiYear} ด้วยตนเองก่อนพิจารณารายการ` });
   }
 
   for (const [index, source] of snapshot.inputs.sources.entries()) {
@@ -94,23 +107,6 @@ export function classifySubmittedSnapshot(snapshot: CalculationSnapshot): Office
         nextAction: "ตรวจสอบการแยกยอด เหตุผล และเอกสารภาษีที่เกี่ยวข้อง" });
     }
 
-    if (positive(source.remittedIncomeAmount) || positive(source.remittedIncomeThb)) {
-      const requiredKinds = new Set<"foreign_income" | "remittance" | "foreign_tax">(["foreign_income", "remittance"]);
-      const effectiveTax = effectiveForeignTaxAmount(source);
-      const rawTaxFactsAbsent = source.actualForeignTaxPaid === null && source.eligibleForeignTax === null;
-      const hasLegacyCachedTax = rawTaxFactsAbsent
-        && (positive(source.actualForeignTaxPaidThb) || positive(source.eligibleForeignTaxThb));
-      if (positive(source.actualForeignTaxPaid) || positive(effectiveTax) || hasLegacyCachedTax) requiredKinds.add("foreign_tax");
-      const presentKinds = new Set(snapshot.evidence.filter((evidence) => source.id !== null && evidence.sourceId === source.id)
-        .map((evidence) => evidence.kind));
-      const missingKinds = [...requiredKinds].filter((kind) => !presentKinds.has(kind));
-      if (missingKinds.length > 0) {
-        add({ code: "source.missing_evidence", category: "missingEvidence", ...location,
-          title: "ยังไม่พบหลักฐานทุกชนิดที่เชื่อมกับรายการนี้",
-          reason: `ในฉบับที่ส่งยังไม่พบหลักฐานที่ผูกกับรายการนี้สำหรับ: ${missingKinds.map((kind) => EVIDENCE_LABELS[kind]).join(", ")}. การพบไฟล์ไม่ได้ยืนยันความถูกต้องของเอกสาร`,
-          nextAction: nextActionFor("missingEvidence") });
-      }
-    }
   }
 
   for (const message of snapshot.result.validationMessages) {

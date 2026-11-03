@@ -1,6 +1,6 @@
 import { Decimal } from "decimal.js";
 import { z } from "zod";
-import type { FtcCaseDraft, ForeignIncomeSourceDraft, ResidencePeriodDraft } from "./contracts.js";
+import type { FtcCaseDraft, ForeignIncomeSourceDraft, ResidencePeriodDraft, ResidenceYearDraft } from "./contracts.js";
 
 const decimalInputPattern = /^\d{1,9}(?:\.\d{1,2})?$/;
 const decimalDerivedPattern = /^\d{1,18}(?:\.\d{1,12})?$/;
@@ -135,6 +135,19 @@ const residencePeriodSchema: z.ZodType<ResidencePeriodDraft> = z.object({
   }
 });
 
+const residenceYearSchema: z.ZodType<ResidenceYearDraft> = z.discriminatedUnion("mode", [
+  z.object({
+    earnedTaxYear: z.number().int().min(1900).max(2200),
+    mode: z.literal("periods"),
+    periods: z.array(residencePeriodSchema).max(100),
+  }).strict(),
+  z.object({
+    earnedTaxYear: z.number().int().min(1900).max(2200),
+    mode: z.literal("declared"),
+    declaration: z.literal("at_least_180_days"),
+  }).strict(),
+]);
+
 export const draftSchema = z.object({
   id: nullable(safeText.min(1).max(100)),
   taxYear: nullable(z.number().int().min(1900).max(2200)),
@@ -142,10 +155,22 @@ export const draftSchema = z.object({
   thaiTax: thaiTaxConfirmationSchema,
   sources: z.array(foreignIncomeSourceDraftSchema).max(20),
   residencePeriods: z.array(residencePeriodSchema).max(100).optional(),
+  residenceYears: z.array(residenceYearSchema).max(20).optional(),
   revision: z.number().int().min(0),
   createdAt: nullable(isoDateTime),
   updatedAt: nullable(isoDateTime),
-}).strict();
+}).strict().superRefine((draft, context) => {
+  if (draft.residenceYears !== undefined && draft.residencePeriods !== undefined) {
+    context.addIssue({ code: "custom", path: ["residenceYears"], message: "เลือกรูปแบบข้อมูลวันพำนักแบบเดิมหรือแยกตามปีอย่างใดอย่างหนึ่ง" });
+  }
+  const years = new Set<number>();
+  draft.residenceYears?.forEach((record, index) => {
+    if (years.has(record.earnedTaxYear)) {
+      context.addIssue({ code: "custom", path: ["residenceYears", index, "earnedTaxYear"], message: "ปีที่เกิดเงินได้มีข้อมูลวันพำนักซ้ำกัน" });
+    }
+    years.add(record.earnedTaxYear);
+  });
+});
 
 /** Parse the transport shape without filling nulls or coercing decimal inputs. */
 export function parseDraft(value: unknown): FtcCaseDraft {

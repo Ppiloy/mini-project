@@ -2,11 +2,17 @@ import type {
   ApiUser,
   AttachmentMetadata,
   CalculationSnapshot,
+  FrozenEvidenceReference,
   FtcCaseDraft,
   FtcCaseRecord,
+  SubmissionAcknowledgement,
+  SubmissionMetadata,
 } from "../../shared/contracts.js";
-import { withCanonicalThbAmounts } from "../../shared/calculator.js";
+import { validateSubmission, withCanonicalThbAmounts } from "../../shared/calculator.js";
+import { missingEvidenceInventory } from "../../shared/evidenceInventory.js";
+import { AVAILABLE_EVIDENCE_STATEMENT_V1 } from "../../shared/labels.js";
 import { DEMO_POLICY } from "../../shared/policy.js";
+import { createCalculationSnapshot } from "../../shared/snapshot.js";
 import { deleteDemoEvidenceFiles, readDemoEvidenceFile, storeDemoEvidenceFile } from "./demoEvidenceStore.js";
 
 const STORE_KEY = "ftc.prototype.fixture.v1";
@@ -87,7 +93,7 @@ export function findDemoCase(id: string, persona: DemoPersona): FtcCaseRecord | 
   return listDemoCases(persona).find((record) => record.id === id);
 }
 
-async function evidenceFingerprint(file: File): Promise<string> {
+async function evidenceFingerprint(file: Blob): Promise<string> {
   if (!crypto.subtle) return Promise.reject(new Error("ไม่สามารถตรวจสอบไฟล์ในเบราว์เซอร์นี้ได้"));
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -121,6 +127,7 @@ export function createDemoCase(): FtcCaseRecord {
     domesticAssessableIncome: null,
     thaiTax: { amountBeforeFtc: null, provenance: null, confirmedAt: null, confirmedInputFingerprint: null },
     sources: [],
+    residenceYears: [],
     revision: 0,
     createdAt: now,
     updatedAt: now,
@@ -266,6 +273,7 @@ function markDemoEvidenceUnavailable(id: string): void {
   if (!attachment || !store.cases.some((record) => record.id === attachment.caseId && record.status === "draft")) return;
   store.attachments = store.attachments.map((item) => item.id === id ? { ...item, status: "failed" } : item);
   store.storedEvidenceIds = store.storedEvidenceIds.filter((value) => value !== id);
+  if (attachment.status === "ready") touchCase(store, attachment.caseId);
   try { writeStore(store); } catch { /* The caller still reports the missing file without claiming it is usable. */ }
 }
 
@@ -288,52 +296,97 @@ export async function deleteDemoAttachment(id: string): Promise<void> {
   }
 }
 
-export async function submitDemoCase(id: string, snapshot: CalculationSnapshot): Promise<FtcCaseRecord> {
+export async function submitDemoCase(id: string, acknowledgement: SubmissionAcknowledgement): Promise<{ case: FtcCaseRecord; snapshot: CalculationSnapshot }> {
   let store = readStore();
-  let index = store.cases.findIndex((record) => record.id === id && record.status === "draft");
+  let index = store.cases.findIndex((record) => record.id === id && record.ownerId === demoUser("taxpayer").id && record.status === "draft");
   if (index < 0) throw new Error("กรณีนี้ส่งแล้วหรือไม่อยู่ในคิวสาธิต");
-  const currentDraft = withCanonicalThbAmounts(store.cases[index]!.draft);
-  const currentPreview = store.snapshots.find((item) => item.caseId === id && item.kind === "preview" && item.revision === store.cases[index]!.draft.revision);
-  if (snapshot.kind !== "submitted" || snapshot.caseId !== id || snapshot.revision !== store.cases[index]!.draft.revision
-    || JSON.stringify(snapshot.inputs) !== JSON.stringify(currentDraft)
-    || !currentPreview || JSON.stringify(snapshot.result) !== JSON.stringify(currentPreview.result)
-    || JSON.stringify(snapshot.evidence) !== JSON.stringify(currentPreview.evidence)
-    || store.snapshots.some((item) => item.id === snapshot.id)) {
-    throw new Error("ผลส่งตรวจไม่ตรงกับฉบับคำนวณล่าสุด");
+  if (acknowledgement.version !== 1 || acknowledgement.acknowledged !== true
+    || !Number.isSafeInteger(acknowledgement.revision) || typeof acknowledgement.previewSnapshotId !== "string") {
+    throw new Error("กรุณายืนยันเอกสารที่มีอยู่ก่อนส่งตรวจ");
   }
-  const missingEvidence = await Promise.all(snapshot.evidence.map(async (evidence) =>
-    await readDemoEvidenceFile(evidence.id).catch(() => null) ? null : evidence.id,
-  ));
-  const missingEvidenceIds = missingEvidence.filter((evidenceId): evidenceId is string => evidenceId !== null);
-  if (missingEvidenceIds.length > 0) {
-    store.attachments = store.attachments.map((item) => missingEvidenceIds.includes(item.id) ? { ...item, status: "failed" } : item);
-    store.storedEvidenceIds = store.storedEvidenceIds.filter((evidenceId) => !missingEvidenceIds.includes(evidenceId));
+
+  const findPreview = (currentStore: DemoStore, currentIndex: number): CalculationSnapshot | undefined => currentStore.snapshots.find((item) =>
+    item.id === acknowledgement.previewSnapshotId && item.caseId === id && item.kind === "preview"
+      && item.revision === currentStore.cases[currentIndex]!.draft.revision);
+  const collectEvidence = (currentStore: DemoStore): FrozenEvidenceReference[] => currentStore.attachments
+    .filter((item) => item.caseId === id && item.status === "ready")
+    .map(({ id: evidenceId, sourceId, kind, displayName, mediaType, byteSize, sha256 }) => ({ id: evidenceId, sourceId, kind, displayName, mediaType, byteSize, sha256 }));
+  const computeCurrentPreview = (currentStore: DemoStore, currentIndex: number) => {
+    const record = currentStore.cases[currentIndex]!;
+    const draft = withCanonicalThbAmounts(record.draft);
+    const evidence = collectEvidence(currentStore);
+    const preview = createCalculationSnapshot({ id: acknowledgement.previewSnapshotId, caseId: id, revision: record.draft.revision,
+      kind: "preview", inputs: draft, evidence, createdAt: new Date().toISOString(), policy: DEMO_POLICY });
+    return { preview, draft, evidence };
+  };
+  const isCurrentVersion = (snapshot: CalculationSnapshot) => snapshot.policy.id === DEMO_POLICY.id
+    && snapshot.result.policyVersion === DEMO_POLICY.id && snapshot.result.engineVersion === DEMO_POLICY.engineVersion;
+  const ensureCurrent = (currentStore: DemoStore, currentIndex: number) => {
+    const record = currentStore.cases[currentIndex]!;
+    if (acknowledgement.revision !== record.draft.revision) throw new Error("ข้อมูลเปลี่ยนไปแล้ว กรุณาคำนวณใหม่และยืนยันรายการเอกสารอีกครั้ง");
+    const savedPreview = findPreview(currentStore, currentIndex);
+    if (!savedPreview || !isCurrentVersion(savedPreview)) throw new Error("ผลคำนวณไม่ใช่รุ่นปัจจุบัน กรุณาคำนวณใหม่ก่อนส่งตรวจ");
+    const current = computeCurrentPreview(currentStore, currentIndex);
+    if (JSON.stringify(current.draft) !== JSON.stringify(savedPreview.inputs)
+      || JSON.stringify(current.preview.result) !== JSON.stringify(savedPreview.result)
+      || JSON.stringify(current.evidence) !== JSON.stringify(savedPreview.evidence)) {
+      throw new Error("ร่าง ผลคำนวณ หรือรายการไฟล์เปลี่ยนไป กรุณาคำนวณใหม่ก่อนส่งตรวจ");
+    }
+    const validation = validateSubmission(record.draft, current.preview.result, {
+      currentRevision: record.draft.revision,
+      previewRevision: savedPreview.revision,
+      attachments: currentStore.attachments.filter((item) => item.caseId === id && item.status !== "deleted"),
+    });
+    if (validation.length) throw new Error(validation.map((item) => item.message).join(" · "));
+    return { record, savedPreview, ...current };
+  };
+
+  const initial = ensureCurrent(store, index);
+  if (initial.evidence.reduce((sum, item) => sum + item.byteSize, 0) > 30 * 1024 * 1024) throw new Error("ไฟล์รวมมีขนาดเกิน 30 MiB ต่อกรณี");
+  const unavailableIds: string[] = [];
+  for (const evidence of initial.evidence) {
+    try {
+      const blob = await readDemoEvidenceFile(evidence.id);
+      if (!blob || blob.size !== evidence.byteSize || blob.size < 1 || blob.size > 3 * 1024 * 1024
+        || blob.type !== evidence.mediaType || await evidenceFingerprint(blob) !== evidence.sha256) unavailableIds.push(evidence.id);
+    } catch { unavailableIds.push(evidence.id); }
+  }
+  if (unavailableIds.length > 0) {
+    store.attachments = store.attachments.map((item) => unavailableIds.includes(item.id) ? { ...item, status: "failed" } : item);
+    store.storedEvidenceIds = store.storedEvidenceIds.filter((value) => !unavailableIds.includes(value));
+    touchCase(store, id);
     writeStore(store);
-    throw new Error("ไฟล์ต้นฉบับบางรายการไม่มีอยู่ในอุปกรณ์นี้ กรุณาแนบไฟล์เหล่านั้นอีกครั้งก่อนส่งตรวจ");
+    throw new Error("ไฟล์ต้นฉบับบางรายการไม่มีอยู่หรือข้อมูลไม่ตรงกับไฟล์ในอุปกรณ์นี้ กรุณาแนบไฟล์เหล่านั้นอีกครั้งก่อนส่งตรวจ");
   }
+
   store = readStore();
-  index = store.cases.findIndex((record) => record.id === id && record.status === "draft");
-  const latestPreview = index < 0 ? null : store.snapshots.find((item) => item.caseId === id && item.kind === "preview" && item.revision === store.cases[index]!.draft.revision);
-  const latestDraft = index < 0 ? null : withCanonicalThbAmounts(store.cases[index]!.draft);
-  if (index < 0 || snapshot.revision !== store.cases[index]!.draft.revision
-    || !latestDraft || JSON.stringify(snapshot.inputs) !== JSON.stringify(latestDraft)
-    || !latestPreview || JSON.stringify(snapshot.result) !== JSON.stringify(latestPreview.result)
-    || JSON.stringify(snapshot.evidence) !== JSON.stringify(latestPreview.evidence)) {
-    throw new Error("ร่างหรือผลคำนวณเปลี่ยนไประหว่างส่ง กรุณาคำนวณใหม่ก่อนส่งตรวจ");
-  }
-  const now = new Date().toISOString();
+  index = store.cases.findIndex((record) => record.id === id && record.ownerId === demoUser("taxpayer").id && record.status === "draft");
+  if (index < 0) throw new Error("กรณีนี้ส่งแล้วหรือไม่อยู่ในคิวสาธิต");
+  const latest = ensureCurrent(store, index);
+  const submittedAt = new Date().toISOString();
+  const submissionMetadata: SubmissionMetadata = {
+    version: 1,
+    statement: AVAILABLE_EVIDENCE_STATEMENT_V1,
+    acknowledgedBy: demoUser("taxpayer").id,
+    acknowledgedAt: submittedAt,
+    revision: latest.record.draft.revision,
+    previewSnapshotId: latest.savedPreview.id,
+    missingEvidence: missingEvidenceInventory(latest.draft, latest.evidence),
+  };
+  const snapshot = createCalculationSnapshot({ id: `demo-submitted-${crypto.randomUUID()}`, caseId: id, revision: latest.record.draft.revision,
+    kind: "submitted", inputs: latest.draft, evidence: latest.evidence, createdAt: submittedAt, policy: DEMO_POLICY, submissionMetadata });
   const submitted: FtcCaseRecord = {
-    ...store.cases[index]!,
+    ...latest.record,
     status: "submitted",
     assignedOfficerId: demoUser("officer").id,
     submittedSnapshotId: snapshot.id,
-    submittedAt: now,
-    updatedAt: now,
+    submittedAt,
+    updatedAt: submittedAt,
   };
   store.cases[index] = submitted;
   store.snapshots.unshift(snapshot);
   writeStore(store);
-  return submitted;
+  return { case: submitted, snapshot };
 }
 
 export async function deleteDemoCase(id: string, ownerId: string): Promise<boolean> {

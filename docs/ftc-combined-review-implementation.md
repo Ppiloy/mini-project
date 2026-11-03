@@ -14,9 +14,9 @@ The user's separate implementation request authorizes this work. The source docu
 - The user explicitly permits declaration-only residence entry alongside date ranges. A computed below-180 result cannot be overridden by a contradictory declaration.
 - The final FX direction is manual entry with clear remittance-date guidance and BOT as an optional reference only. No live lookup or prepared-catalogue requirement is included.
 
-## Mapping to the current build
+## Mapping from the starting build
 
-| Review topic | Current evidence and next action |
+| Review topic | Starting evidence and delivery action |
 |---|---|
 | E and L entry, C07/C08 | Code still requires ordinary E rationale/equality controls and L prose. Simplify the ordinary path while preserving genuine adjusted-tax facts and saved provenance. |
 | I/K, C09 | Existing totals are present. The form routes them through full calculation readiness and temporary J/L values; reproduce the reported incomplete-state display before correcting it. |
@@ -51,3 +51,25 @@ Each completed increment will record the reproduced behavior, RED/GREEN results,
 - Frozen release checks: 150 tests in 18 files, eight ordered migrations, TypeScript and production build pass. All 82 default browser journeys and 11 real-backend journeys are covered by passing runs: 78/10 initially passed; the remaining four/one passed after result-disclosure selectors and current-policy test metadata were updated. Assertions on amounts, evidence, saved reports and authorization remain intact.
 - Parallel browser runners exposed a shared Vite optimizer-cache collision. Browser tests now use project/port-specific temporary caches; production configuration is unchanged. The final configuration also passed a fresh production build.
 - Root visually checked ordinary/adjusted E and the saved Vietnam–China summary, including accessible adjustment/error targets and the rounding explanation.
+- Commit `251321e` was pushed; its Netlify preview reached `ready`, and the preview's public API/database health endpoint returned `status: ok`.
+
+### 3. Guided residence, manual FX and available-evidence submissions
+
+- Scope appears before entry: reviewed 2025 Vietnam/China salary and prepared dividend examples, same-year income/remittance, one remittance per source, direct THB or a user-supplied dated quote. Unsupported selections remain recordable without a calculated credit.
+- New drafts collect one residence record per income-earned year. Inclusive, overlapping periods derive the count; a declaration-only record retains a null exact count and an unverified statement. Missing/invalid records and computed 179 days block progression and calculation, including saved-step navigation and legacy period edits. Draft save remains available. Reports and Excel retain the recorded basis.
+- FX entry displays the quotation unit and remittance-date basis. BOT is an optional reference link, with no lookup or catalogue. Changing the date requires clear/cancel and preserves raw D/E/F; changing currency/mode clears the stated dependent amounts and quote. Country edits preserve a selected currency. Stored reference units/provenance remain intact until explicit replacement, and a pending reset cannot target a different source after rows change.
+- Submission permits zero files after the available-evidence declaration. The server binds the statement to the current revision/preview, derives available files and missing categories, and freezes statement text, actor and time. Pending/failed uploads and missing or corrupt ready-file bytes still block submission. Existing upload/security/quota controls remain. Missing evidence and declaration-only residence appear as officer review points.
+- Migration `20261103000100_snapshot_submission_metadata.sql` adds nullable immutable-snapshot metadata. Existing submissions remain unattested; previews cannot carry a submission declaration. Retry digests include the acknowledgement and tolerate JSON key reordering while rejecting changed facts.
+- The result shows the inventory being acknowledged. Demo byte loss now advances the draft revision, reloads availability, clears the acknowledgement and marks the preview stale. Submitted snapshots remain unchanged. Shared Thai-first labels, readable amount fields, one educational footer and concise local/online destination wording complete the entry/report flow.
+
+Root review corrected source-reset identity, correction links to removed FX controls, partial manual-quote editing, early legacy residence guards, and stale demo inventories. An independent GPT-6-luna review checked the FX and evidence boundaries and identified the latter recovery issue.
+
+The real authenticated journey also reproduced a ready preview followed by `confirmation.thai_tax_stale` on submission. A short HTTP regression isolated the cause: JSONB reordered nested residence object keys, while the confirmation fingerprint serialized their input order. Canonical field construction now keeps equivalent stored facts current and still invalidates changed facts. Both dated and declaration-only HTTP submissions are covered; legacy `ftc-tax-v1` serialization remains unchanged.
+
+The final browser checks preserve arithmetic, file-byte, permission, recovery and historical-report assertions. Test fixtures were updated for the new residence form, wording and evidence grouping. Desktop/mobile screens and rendered A4 reports were visually checked for readable Thai, complete amounts, saved status, declaration/inventory visibility and page breaks. The new evidence appendix can add a third report page.
+
+Final local release gate: 167 tests in 19 files, nine ordered/checksummed migrations, TypeScript and the production build pass. After the canonical confirmation fix, all 100 default browser journeys and all 11 authenticated real-backend journeys pass in full runs. The submitted-workbook check was then strengthened through the actual browser download and passed, replacing a direct report-builder unit test to keep coverage at the agreed public interfaces. Temporary diagnostic instrumentation and the throwaway browser harness were removed.
+
+### Remaining agreed limits
+
+P3 officer decisions, supplementary documents and resubmission versions remain deferred. Broader countries/types/years, cross-year income/remittance and multiple-remittance modelling are not added. No PIT engine, government filing or legal eligibility determination is claimed. Production deployment and recovery are separate from this branch's preview release.

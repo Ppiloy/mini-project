@@ -23,7 +23,7 @@ export function SiteFrame({ children, user, demo, onSignOut, signOutError, signi
           <span><strong>{PRODUCT_NAME}</strong></span>
         </Link>
         <div className="topbar-actions">
-          {demo && <span className="mode-tag">ข้อมูลตัวอย่าง</span>}
+          {demo && <span className="mode-tag">โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้</span>}
           <span className="user-name">{user.displayName}</span>
           {onSignOut && <button className="button button-quiet button-small" disabled={signingOut} onClick={() => void onSignOut()}>{signingOut ? "กำลังออกจากระบบ…" : signOutError ? "ลองออกจากระบบอีกครั้ง" : "ออกจากระบบ"}</button>}
         </div>

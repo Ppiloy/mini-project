@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Express, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
-import type { ApiUser, CalculationSnapshot, FtcCaseRecord, FrozenEvidenceReference, OfficerWorklistFilters, OfficerWorklistItem } from "../../shared/contracts.js";
+import type { ApiUser, CalculationSnapshot, FtcCaseRecord, FrozenEvidenceReference, OfficerWorklistFilters, OfficerWorklistItem, SubmissionMetadata } from "../../shared/contracts.js";
 import { apiSuccessSchemas } from "../../shared/contracts.js";
 import { validateSubmission } from "../../shared/calculator.js";
+import { AVAILABLE_EVIDENCE_STATEMENT_V1 } from "../../shared/labels.js";
+import { missingEvidenceInventory } from "../../shared/evidenceInventory.js";
 import { DEMO_POLICY } from "../../shared/policy.js";
 import { classifySubmittedSnapshot, officerReviewScope } from "../../shared/review.js";
 import { createCalculationSnapshot } from "../../shared/snapshot.js";
@@ -52,6 +54,13 @@ function revision(value: unknown): number {
 }
 function parseStored<T>(value: T | string): T { return typeof value === "string" ? JSON.parse(value) as T : value; }
 function conflict(message: string): never { throw new ApiFailure(409, "conflict", message); }
+function requireEvidenceAcknowledgement(): never {
+  throw new ApiFailure(422, "incomplete_case", "กรุณายืนยันเอกสารที่มีอยู่ก่อนส่งตรวจ", [{
+    code: "submit.evidence_acknowledgement_required",
+    message: "กรุณายืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม",
+    path: ["evidenceAcknowledgement"],
+  }]);
+}
 function notFound(): never { throw new ApiFailure(404, "not_found", "ไม่พบข้อมูลรายการนี้"); }
 function statusJson<T>(value: T | string): T { return parseStored(value); }
 function sameJson(left: unknown, right: unknown): boolean {
@@ -93,13 +102,43 @@ async function currentAttachmentRow(client: PgQueryable, attachmentId: string, m
 }
 
 function snapshotInsertSql(): string {
-  return `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
-    VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11::timestamptz)`;
+  return `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at,submission_metadata)
+    VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11::timestamptz,$12::jsonb)`;
 }
 
 function frozenEvidence(rows: readonly AttachmentRow[]): FrozenEvidenceReference[] {
   return rows.filter((row) => row.status === "ready").map((row) => ({ id: row.id, sourceId: row.source_id, kind: row.kind,
     displayName: row.display_name, mediaType: row.media_type, byteSize: row.byte_size, sha256: row.sha256 }));
+}
+
+async function preflightReadyEvidence(blobIO: BlobIO | undefined, marker: EnvironmentMarker, rows: readonly AttachmentRow[]): Promise<void> {
+  const ready = rows.filter((row) => row.status === "ready");
+  if (ready.length === 0) return;
+  if (!blobIO) throw new ApiFailure(503, "service_unavailable", "ไม่สามารถตรวจสอบไฟล์แนบในพื้นที่จัดเก็บได้");
+  const totalBytes = ready.reduce((sum, row) => sum + Number(row.byte_size), 0);
+  const issues: Array<{ code: string; message: string; path: Array<string | number> }> = [];
+  if (totalBytes > maxCaseBytes) {
+    issues.push({ code: "submit.evidence_size_limit", message: "ไฟล์พร้อมใช้งานมีขนาดรวมเกิน 30 MiB ต่อกรณี", path: ["evidence"] });
+  }
+  for (const row of ready) {
+    const validLocation = row.storage_environment === marker.kind && row.storage_store === marker.storageStore
+      && row.storage_region === marker.storageRegion && typeof row.storage_key === "string" && row.storage_key.length > 0;
+    if (!validLocation) {
+      issues.push({ code: "submit.evidence_unavailable", message: `ไม่พบไฟล์ “${row.display_name}” ในพื้นที่จัดเก็บของกรณีนี้ กรุณาแนบไฟล์อีกครั้ง`, path: ["evidence", row.id] });
+      continue;
+    }
+    let bytes: Uint8Array | null;
+    try { bytes = await blobIO.get(marker, row.storage_key); }
+    catch { throw new ApiFailure(503, "service_unavailable", "พื้นที่จัดเก็บไฟล์ไม่พร้อมตรวจสอบ กรุณาลองส่งอีกครั้งภายหลัง"); }
+    if (!bytes) {
+      issues.push({ code: "submit.evidence_unavailable", message: `ไม่พบไฟล์ต้นฉบับ “${row.display_name}” ในพื้นที่จัดเก็บ กรุณาแนบไฟล์อีกครั้ง`, path: ["evidence", row.id] });
+      continue;
+    }
+    if (bytes.byteLength !== Number(row.byte_size) || createHash("sha256").update(bytes).digest("hex") !== row.sha256) {
+      issues.push({ code: "submit.evidence_integrity_mismatch", message: `ไฟล์ต้นฉบับ “${row.display_name}” ไม่ตรงกับรายการที่บันทึกไว้ กรุณาแนบไฟล์อีกครั้ง`, path: ["evidence", row.id] });
+    }
+  }
+  if (issues.length > 0) throw new ApiFailure(422, "incomplete_case", "มีไฟล์ที่ไม่พร้อมหรือไม่ตรงกับข้อมูลที่บันทึก กรุณาแก้ไขก่อนส่งตรวจ", issues);
 }
 
 async function addMutationReplay(client: PgQueryable, caseId: string, operation: string, id: string, bodyDigest: string, response: unknown): Promise<void> {
@@ -154,7 +193,7 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
           inputs: record.draft, evidence: frozenEvidence(attachmentResult.rows), createdAt: new Date().toISOString() });
         await client.query(snapshotInsertSql(), [snapshot.id, snapshot.caseId, snapshot.revision, snapshot.kind,
           JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result), JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy),
-          snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt]);
+          snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt, snapshot.submissionMetadata === null ? null : JSON.stringify(snapshot.submissionMetadata)]);
         await appendAudit(client, user.id, row.id, "preview_created", snapshot.id);
         await addMutationReplay(client, row.id, "calculate", id, bodyDigest, { snapshot });
         return { snapshot, replayed: false };
@@ -373,17 +412,30 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
   app.post("/api/cases/:id/submit", options.authenticated, options.taxpayerOnly, options.csrf, async (request, response, next) => {
     try {
       const caseId = routeId(request.params.id); if (!caseId) notFound();
-      const body = exact(request.body, ["expectedRevision", "previewSnapshotId", "requestId"]);
+      const body = exact(request.body, ["expectedRevision", "previewSnapshotId", "requestId", "evidenceAcknowledgement"]);
       const expectedRevision = revision(body.expectedRevision); const previewId = routeId(body.previewSnapshotId as string);
       if (!previewId) failInput("previewSnapshotId ไม่ถูกต้อง");
       const id = requestId(body.requestId); const user = response.locals.user as ApiUser; const marker = options.environmentMarker(response);
-      const digestValue = digest({ expectedRevision, previewSnapshotId: previewId });
+      const evidenceAcknowledgement = body.evidenceAcknowledgement;
+      const acknowledgementForDigest = isRecord(evidenceAcknowledgement)
+        ? Object.fromEntries(Object.keys(evidenceAcknowledgement).sort().map((key) => [key, evidenceAcknowledgement[key]]))
+        : evidenceAcknowledgement ?? null;
+      const digestValue = digest({ expectedRevision, previewSnapshotId: previewId, evidenceAcknowledgement: acknowledgementForDigest });
       const submitted = await inTransaction(options.pool, async (client) => {
         const row = await ownedCaseForUpdate(client, caseId, user.id, marker);
         await assertCaseNotDeleting(client, row.id);
         const replay = await priorMutation(client, row.id, "submit", id, digestValue);
         if (replay) return replay as { case: FtcCaseRecord; snapshot: CalculationSnapshot };
         if (row.status !== "draft") conflict("รายการนี้ส่งไปแล้ว");
+        if (!isRecord(evidenceAcknowledgement)
+          || Object.keys(evidenceAcknowledgement).length !== 4
+          || evidenceAcknowledgement.version !== 1
+          || evidenceAcknowledgement.acknowledged !== true
+          || !Number.isSafeInteger(evidenceAcknowledgement.revision)
+          || typeof evidenceAcknowledgement.previewSnapshotId !== "string") requireEvidenceAcknowledgement();
+        const acknowledgedRevision = evidenceAcknowledgement.revision as number;
+        const acknowledgedPreviewId = routeId(evidenceAcknowledgement.previewSnapshotId as string);
+        if (acknowledgedRevision !== expectedRevision || acknowledgedPreviewId !== previewId) conflict("คำยืนยันเอกสารไม่ตรงกับผลคำนวณนี้ กรุณาทบทวนและยืนยันอีกครั้ง");
         if (row.revision !== expectedRevision) conflict("ข้อมูลเปลี่ยนไปแล้ว กรุณาโหลดแบบร่างล่าสุด");
         if (!options.officerUserId || !caseUuid.test(options.officerUserId)) throw new ApiFailure(503, "service_unavailable", "ยังไม่ได้กำหนดเจ้าหน้าที่รับรายการ");
         const officer = await client.query<{ id: string }>("SELECT id FROM app_users WHERE id=$1 AND role='officer' AND active=true FOR UPDATE", [options.officerUserId]);
@@ -405,14 +457,28 @@ export function registerWorkflowRoutes(app: Express, options: RouteOptions): voi
         const validation = validateSubmission(record.draft, computed.result, { currentRevision: row.revision, previewRevision: preview.revision,
           attachments: attachments.metadata });
         if (validation.length) {
-          const incomplete = validation.some((message) => message.code === "submit.calculation_not_ready" || message.code === "submit.no_positive_remittance" || message.code === "submit.source_evidence_missing" || message.code === "submit.preview_stale");
+          const incomplete = validation.some((message) => message.code === "submit.calculation_not_ready" || message.code === "submit.no_positive_remittance"
+            || message.code === "submit.preview_stale" || message.code === "submit.source_id_missing" || message.code === "submit.evidence_unresolved");
           throw new ApiFailure(422, incomplete ? "incomplete_case" : "unsupported_case", "กรุณาแก้ไขข้อมูลและหลักฐานก่อนส่งตรวจ", validation);
         }
+        await preflightReadyEvidence(blobIO, marker, attachments.rows);
         await client.query("INSERT INTO officer_case_assignments(case_id,officer_id,assigned_by) VALUES ($1,$2,$3)", [row.id,options.officerUserId,user.id]);
+        const submittedAt = new Date().toISOString();
+        const availableEvidence = frozenEvidence(attachments.rows);
+        const submissionMetadata: SubmissionMetadata = {
+          version: 1,
+          statement: AVAILABLE_EVIDENCE_STATEMENT_V1,
+          acknowledgedBy: user.id,
+          acknowledgedAt: submittedAt,
+          revision: row.revision,
+          previewSnapshotId: preview.id,
+          missingEvidence: missingEvidenceInventory(record.draft, availableEvidence),
+        };
         const snapshot = createCalculationSnapshot({ id: randomUUID(), caseId: row.id, revision: row.revision, kind: "submitted",
-          inputs: record.draft, evidence: frozenEvidence(attachments.rows), createdAt: new Date().toISOString() });
+          inputs: record.draft, evidence: availableEvidence, createdAt: submittedAt, submissionMetadata });
         await client.query(snapshotInsertSql(), [snapshot.id,snapshot.caseId,snapshot.revision,snapshot.kind,JSON.stringify(snapshot.inputs),
-          JSON.stringify(snapshot.result),JSON.stringify(snapshot.evidence),JSON.stringify(snapshot.policy),snapshot.policy.id,snapshot.result.engineVersion,snapshot.createdAt]);
+          JSON.stringify(snapshot.result),JSON.stringify(snapshot.evidence),JSON.stringify(snapshot.policy),snapshot.policy.id,snapshot.result.engineVersion,snapshot.createdAt,
+          JSON.stringify(snapshot.submissionMetadata)]);
         const updated = await client.query<CaseRow>(
           `UPDATE ftc_cases SET status='submitted',assigned_officer_id=$2,submitted_snapshot_id=$3,submitted_at=$4::timestamptz,updated_at=$4::timestamptz
            WHERE id=$1 RETURNING *`, [row.id,options.officerUserId,snapshot.id,snapshot.createdAt]);

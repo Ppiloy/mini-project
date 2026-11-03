@@ -31,6 +31,10 @@
     {
       "name": "20261102000100_residence_periods_allow_leap_year.sql",
       "sha256": "96a88abe9446d8c967d42e35fecc389ee98f355d90d124c48019cd6a1aa0e5d0"
+    },
+    {
+      "name": "20261103000100_snapshot_submission_metadata.sql",
+      "sha256": "a69971470337c89b978cd13e743e812b1ed752978b8e220a6184741f55bedf2e"
     }
   ]
 }

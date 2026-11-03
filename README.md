@@ -24,6 +24,7 @@ The release gate runs typecheck, API/calculation/operator tests, ordered SQL che
 - [Operations guide](docs/operations.md) covers trusted configuration, review manifests, seed/rotation, preview initialization, cleanup, and release checks.
 - [Recovery guide](docs/recovery.md) covers private exports, fresh local restore rehearsal, ambiguity handling, retention, and open hosting gates.
 - [Presentation guide](docs/presentation.md) contains the five-minute walkthrough, fixture fallback, and sample report provenance.
+- [Combined review delivery](docs/ftc-combined-review-implementation.md) records the agreed improvement scope, regression checks, commits, and preview deployment evidence.
 - [Detailed operator reference](README-operations.md) documents command behavior and the environment ownership rules.
 
-No current hosted URL, preview lifecycle, production smoke result, account usage reading, or completed live recovery is claimed by this repository. See each guide for the exact local evidence and outstanding hosted checks.
+Preview deployment evidence is recorded in the delivery notes. It does not establish production smoke results, account usage, or completed live recovery. See the operator guides for those separate checks.

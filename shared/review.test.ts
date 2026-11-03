@@ -58,3 +58,23 @@ describe("submitted review classification for E", () => {
     expect(legacyPoint?.reason).toContain(EVIDENCE_LABELS.foreign_tax);
   });
 });
+
+describe("submitted review classification for residence declarations", () => {
+  it("adds one non-verifying review point per declared earned year, even when sources share the year", () => {
+    const snapshot = submittedSnapshot({});
+    snapshot.inputs.residenceYears = [
+      { earnedTaxYear: 2025, mode: "declared", declaration: "at_least_180_days" },
+      { earnedTaxYear: 2025, mode: "declared", declaration: "at_least_180_days" },
+      { earnedTaxYear: 2026, mode: "declared", declaration: "at_least_180_days" },
+      { earnedTaxYear: 2027, mode: "periods", periods: [{ startDate: "2027-01-01", endDate: "2027-12-31" }] },
+    ];
+
+    const points = classifySubmittedSnapshot(snapshot).filter(({ code }) => code.startsWith("residence.declaration_unverified."));
+
+    expect(points).toHaveLength(2);
+    expect(points.map(({ code }) => code)).toEqual(["residence.declaration_unverified.2025", "residence.declaration_unverified.2026"]);
+    expect(points.every((point) => point.category === "substantive" && point.sourceId === null && point.sourceIndex === null)).toBe(true);
+    expect(points[0]?.reason).toContain("โดยไม่มีช่วงวันที่หรือจำนวนวันแน่นอน");
+    expect(points[0]?.reason).toContain("ไม่ได้ตรวจสอบข้อเท็จจริงหรือวินิจฉัยสิทธิ FTC หรือ DTA");
+  });
+});

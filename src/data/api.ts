@@ -14,6 +14,7 @@ import type {
   OfficerWorklistFilters,
   OfficerWorklistResponse,
   PendingCaseDeletion,
+  SubmissionAcknowledgement,
 } from "../../shared/contracts.js";
 
 export class ApiClientError extends Error {
@@ -161,10 +162,10 @@ export const hostedApi = {
       body: JSON.stringify({ expectedRevision, requestId: crypto.randomUUID() }),
     }, csrfToken, apiSuccessSchemas.snapshot);
   },
-  submit(id: string, expectedRevision: number, previewSnapshotId: string, csrfToken: string, requestId: string = crypto.randomUUID()): Promise<{ case: FtcCaseRecord; snapshot: CalculationSnapshot }> {
+  submit(id: string, expectedRevision: number, previewSnapshotId: string, csrfToken: string, evidenceAcknowledgement: SubmissionAcknowledgement, requestId: string = crypto.randomUUID()): Promise<{ case: FtcCaseRecord; snapshot: CalculationSnapshot }> {
     return request(`/api/cases/${encodeURIComponent(id)}/submit`, {
       method: "POST",
-      body: JSON.stringify({ expectedRevision, previewSnapshotId, requestId }),
+      body: JSON.stringify({ expectedRevision, previewSnapshotId, requestId, evidenceAcknowledgement }),
     }, csrfToken, apiSuccessSchemas.submission);
   },
   listOfficerCases(): Promise<{ cases: FtcCaseRecord[] }> {

@@ -8,14 +8,19 @@ async function enterTaxpayerDemo(page: import("@playwright/test").Page) {
 test("country and currency choices stay searchable and usable within the source worksheet", async ({ page }, testInfo) => {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
+  await page.getByRole("spinbutton", { name: "ปีที่เกิดเงินได้ (ค.ศ.)" }).fill("2025");
+  await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
+  await page.getByRole("button", { name: /เพิ่มช่วงวันที่พำนัก ปี พ\.ศ\. 2568/ }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-07-19");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
-  await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
+  await page.getByRole("button", { name: "＋ เพิ่มแหล่งเงินได้", exact: true }).click();
 
   const moneyEntryFields = [
-    page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }),
-    page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }),
-    page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }),
+    page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }),
+    page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }),
+    page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }),
   ];
   for (const field of moneyEntryFields) await expect(field).toBeDisabled();
 
@@ -59,31 +64,43 @@ test("taxpayer can save overlapping residence periods and sees the inclusive ded
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
 
-  const residence = page.getByRole("region", { name: "ช่วงเวลาที่พำนักในประเทศไทย" });
+  const residence = page.getByRole("region", { name: "ข้อมูลวันพำนักตามปีที่เกิดเงินได้" });
   await expect(residence).toBeVisible();
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-04-30");
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 2").fill("2025-04-30");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 2").fill("2025-06-29");
+  await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
+  await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
+  const addPeriod = residence.getByRole("button", { name: "เพิ่มช่วงวันที่พำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" });
+  await addPeriod.click();
+  await residence.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
+  await residence.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-04-30");
+  await addPeriod.click();
+  await residence.getByLabel("วันแรกที่พำนัก · ช่วงที่ 2").fill("2025-04-30");
+  await residence.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 2").fill("2025-06-29");
 
-  await expect(residence).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
+  await expect(residence.getByRole("status", { name: "สรุปวันพำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" })).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
   await page.reload();
 
-  await expect(page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 2")).toHaveValue("2025-04-30");
-  await expect(page.getByRole("region", { name: "ช่วงเวลาที่พำนักในประเทศไทย" })).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
+  const reloadedResidence = page.getByRole("region", { name: "ข้อมูลวันพำนักตามปีที่เกิดเงินได้" });
+  await expect(reloadedResidence.getByLabel("วันแรกที่พำนัก · ช่วงที่ 2")).toHaveValue("2025-04-30");
+  await expect(reloadedResidence.getByRole("status", { name: "สรุปวันพำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" })).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
 });
 
-test("editing residence periods refreshes the counted days and clears affected confirmations", async ({ page }) => {
+test("editing residence periods blocks ten days, then clears affected confirmations after correction", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
   await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-06-29");
-  await expect(page.getByRole("region", { name: "ช่วงเวลาที่พำนักในประเทศไทย" })).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
+  const lastResidenceDay = page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1");
+  await lastResidenceDay.fill("2025-01-10");
+  const legacyResidence = page.getByRole("region", { name: "ช่วงเวลาที่พำนักในประเทศไทย" });
+  await expect(legacyResidence).toContainText("10 วัน · ต่ำกว่าเกณฑ์ 180 วันตามมาตรา 41");
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "มี 10 วัน ต่ำกว่า 180 วันตามมาตรา 41" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ข้อมูลเบื้องต้น" })).toBeVisible();
+
+  await lastResidenceDay.fill("2025-06-29");
+  await expect(legacyResidence).toContainText("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
 
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   const thaiConfirmation = page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" });
@@ -105,6 +122,16 @@ test("missing source residence days link back to the dates that calculate them",
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "เพิ่มข้อมูลวันพำนักอย่างน้อยหนึ่งปีที่เกิดเงินได้" })).toBeVisible();
+  const addYearInput = page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)");
+  await page.getByRole("button", { name: "ไปยังข้อมูลวันพำนัก" }).click();
+  await expect(addYearInput).toBeFocused();
+  await addYearInput.fill("2025");
+  await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
+  await page.getByRole("button", { name: "เพิ่มช่วงวันที่พำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-07-19");
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "＋ เพิ่มแหล่งเงินได้", exact: true }).click();
 
   const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
@@ -113,13 +140,18 @@ test("missing source residence days link back to the dates that calculate them",
   await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2025-01-31");
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("worksheet_thb");
+  await page.getByRole("button", { name: "ย้อนกลับ", exact: true }).click();
+  await page.getByRole("button", { name: "ลบข้อมูลวันพำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" }).click();
+  await page.getByRole("button", { name: "ลบข้อมูลปีนี้" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
-  await expect(page.getByText(/เพิ่มช่วงวันที่พำนักในขั้นข้อมูลเบื้องต้น.*ปีที่เกิดเงินได้/)).toBeVisible();
-  await page.getByRole("button", { name: "ไปยังช่วงเวลาที่พำนักของแหล่งเงินได้ 1" }).click();
-  const addStay = page.getByRole("button", { name: "เพิ่มช่วงเวลา" });
-  await expect(addStay).toBeFocused();
-  await addStay.click();
+  const missingYearAlert = page.getByRole("alert").filter({ hasText: "เพิ่มข้อมูลวันพำนักสำหรับปีที่เกิดเงินได้ พ.ศ. 2568" });
+  await expect(missingYearAlert).toBeVisible();
+  await missingYearAlert.getByRole("button", { name: "ไปยังข้อมูลวันพำนัก" }).click();
+  const addYearRecord = page.getByRole("button", { name: "เพิ่มข้อมูลปีนี้" });
+  await expect(addYearRecord).toBeFocused();
+  await addYearRecord.click();
+  await page.getByRole("button", { name: "เพิ่มช่วงวันที่พำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)" }).click();
   await page.getByLabel(/วันแรกที่พำนัก · ช่วงที่ 1/).fill("2025-01-01");
   await page.getByLabel(/วันสุดท้ายที่พำนัก · ช่วงที่ 1/).fill("2025-07-19");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -135,28 +167,28 @@ test("one source card contains A–H and the next section does not repeat D/E/F"
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const source = page.locator(".source-card").filter({ hasText: "แหล่งเงินได้ 1" });
   for (const label of [
-    "(A) - ปีภาษีที่เกิดเงินได้",
-    "(B) - ประเทศแหล่งเงินได้",
-    "(C) - ประเภทเงินได้",
-    "(D) - จำนวนเงินได้ในต่างประเทศ",
-    "(E) - จำนวนภาษีชำระในต่างประเทศ",
-    "(F) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ",
-    "(G) - จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้พึงประเมินจากต่างประเทศ",
-    "(H) - สัดส่วนเงินได้ต่างประเทศที่นำเข้ามา",
+    "ปีภาษีที่เกิดเงินได้ (A)",
+    "ประเทศแหล่งเงินได้ (B)",
+    "ประเภทเงินได้ (C)",
+    "จำนวนเงินได้ในต่างประเทศ (D)",
+    "จำนวนภาษีชำระในต่างประเทศ (E)",
+    "จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (F)",
+    "จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้พึงประเมินจากต่างประเทศ (G)",
+    "สัดส่วนเงินได้ต่างประเทศที่นำเข้ามา (H)",
   ]) await expect(source.getByRole("columnheader", { name: label })).toBeVisible();
-  await expect(source.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toHaveValue("50000.00");
-  await expect(source.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ })).toHaveValue("5000.00");
-  await expect(source.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toHaveValue("25000.00");
+  await expect(source.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toHaveValue("50000.00");
+  await expect(source.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ })).toHaveValue("5000.00");
+  await expect(source.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toHaveValue("25000.00");
   await expect(source.getByRole("textbox", { name: "เหตุผลของการปรับจำนวน (E)" })).toHaveCount(0);
   await expect(source.getByText("หมายเหตุเดิมที่บันทึกไว้: ตัวอย่างระบุ (D)/(E) จากแถวข้อมูลที่ตรวจไว้ และกำหนดจำนวน (E) เป็นสมมติฐานสำหรับการคำนวณ")).toBeVisible();
   await expect(source.getByText("2,500.00 บาท", { exact: true })).toBeVisible();
   await expect(source.getByText("50.00%", { exact: true })).toBeVisible();
   for (const label of [
-    "(B) - ประเทศแหล่งเงินได้",
-    "(C) - ประเภทเงินได้",
-    "(D) - จำนวนเงินได้ในต่างประเทศ",
-    "(E) - จำนวนภาษีชำระในต่างประเทศ",
-    "(F) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ",
+    "ประเทศแหล่งเงินได้ (B)",
+    "ประเภทเงินได้ (C)",
+    "จำนวนเงินได้ในต่างประเทศ (D)",
+    "จำนวนภาษีชำระในต่างประเทศ (E)",
+    "จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (F)",
   ]) await expect(source.getByLabel(label)).toHaveCount(1);
   await page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" }).click();
   await page.evaluate("document.querySelector('.skip-link')?.blur(); document.activeElement?.blur()");
@@ -164,13 +196,13 @@ test("one source card contains A–H and the next section does not repeat D/E/F"
   await page.screenshot({ path: desktopPath, fullPage: true });
   await testInfo.attach("entry-worksheet-desktop", { path: desktopPath, contentType: "image/png" });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(source.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toHaveCount(1);
+  await expect(source.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toHaveCount(1);
   for (const label of [
-    "(B) - ประเทศแหล่งเงินได้",
-    "(C) - ประเภทเงินได้",
-    "(D) - จำนวนเงินได้ในต่างประเทศ",
-    "(E) - จำนวนภาษีชำระในต่างประเทศ",
-    "(F) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ",
+    "ประเทศแหล่งเงินได้ (B)",
+    "ประเภทเงินได้ (C)",
+    "จำนวนเงินได้ในต่างประเทศ (D)",
+    "จำนวนภาษีชำระในต่างประเทศ (E)",
+    "จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (F)",
   ]) await expect(source.getByLabel(label)).toHaveCount(1);
   expect(await page.evaluate("document.documentElement.scrollWidth")).toBeLessThanOrEqual(390);
   await page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" }).click();
@@ -183,9 +215,9 @@ test("one source card contains A–H and the next section does not repeat D/E/F"
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: /ที่มาของจำนวน \(L\)/ })).toHaveCount(0);
   await expect(page.getByText(/หมายเหตุเดิมที่บันทึกไว้: ตัวอย่างการจัดสรรนี้กำหนด/)).toBeVisible();
-  await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ })).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toHaveCount(0);
 });
 
 test("known English worksheet notes from an older saved draft display in Thai without rewriting it", async ({ page }) => {

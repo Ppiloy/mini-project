@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AttachmentMetadata, CalculationResult, EvidenceKind, FtcCaseDraft, ForeignIncomeSourceDraft, InputMode, UnsupportedClassification } from "../../../shared/contracts.js";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../../../shared/confirmations.js";
 import { calculateFTC } from "../../../shared/calculator.js";
@@ -7,10 +7,12 @@ import { formatCalculationIssues, stepForCalculationIssue, validationTargetId, v
 import { countryLabel, COUNTRY_CHOICES, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, WORKSHEET_LABELS, WORKSHEET_SECTIONS, worksheetLabel, type WorksheetLetter } from "../../../shared/labels.js";
 import { deriveResidenceDaysForDraft } from "../../../shared/residence.js";
 import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../../shared/foreignTax.js";
+import { missingEvidenceInventory } from "../../../shared/evidenceInventory.js";
 import { createEmptySource } from "../../fixtures/index.js";
 import { EvidenceFileActions } from "../../components/EvidenceFileActions.js";
 import { FieldLabel } from "../../components/FieldLabel.js";
 import { formatMoney } from "../../components/money.js";
+import { ManualFxFields } from "./ManualFxFields.js";
 import { ResidenceSection } from "./ResidenceSection.js";
 
 interface StepProps {
@@ -211,12 +213,22 @@ function hasAmounts(source: ForeignIncomeSourceDraft): boolean {
 
 function hasFxQuote(source: ForeignIncomeSourceDraft): boolean {
   const fx = source.fxReference;
-  return fx !== null && [fx.thbRate, fx.effectiveDate, fx.rateType, fx.sourceLabel, fx.sourceUrl, fx.educationalAssumption]
+  return fx !== null && [fx.thbRate, fx.effectiveDate, fx.rateType, fx.sourceKind, fx.sourceLabel, fx.sourceUrl, fx.educationalAssumption]
     .some((value) => value !== null && value !== "");
+}
+
+function clearDerivedAmounts(): Partial<ForeignIncomeSourceDraft> {
+  return {
+    grossIncomeThb: null,
+    actualForeignTaxPaidThb: null,
+    eligibleForeignTaxThb: null,
+    remittedIncomeThb: null,
+  };
 }
 
 function clearAmounts(): Partial<ForeignIncomeSourceDraft> {
   return {
+    ...clearDerivedAmounts(),
     grossIncomeAmount: null,
     actualForeignTaxPaid: null,
     eligibleForeignTax: null,
@@ -224,45 +236,52 @@ function clearAmounts(): Partial<ForeignIncomeSourceDraft> {
   };
 }
 
-function clearFxQuote(source: ForeignIncomeSourceDraft, currencyCode: string | null) {
-  if (!source.fxReference) return null;
-  return {
-    ...source.fxReference,
-    currencyCode,
-    thbRate: null,
-    effectiveDate: null,
-    rateType: null,
-    sourceKind: null,
-    sourceLabel: null,
-    sourceUrl: null,
-    educationalAssumption: null,
-  };
-}
+type SourceResetTarget = { index: number; sourceId: string | null; sourceRef: ForeignIncomeSourceDraft };
+type SourceResetPrompt =
+  | (SourceResetTarget & { kind: "all"; change: string; next: Partial<ForeignIncomeSourceDraft> })
+  | (SourceResetTarget & { kind: "date"; remittanceDate: string | null });
 
-function confirmCurrencyReset(source: ForeignIncomeSourceDraft, change: string): boolean {
-  if (!hasAmounts(source) && !hasFxQuote(source)) return true;
-  return window.confirm(`การเปลี่ยน${change}จะล้างจำนวน (D), (E), (F) และข้อมูลอัตราแลกเปลี่ยนเดิมเพื่อไม่ให้ตีความข้อมูลผิด ต้องการเปลี่ยนหรือไม่?`);
+function pendingResetTargets(prompt: SourceResetPrompt | null, index: number, source: ForeignIncomeSourceDraft | null): boolean {
+  if (!prompt || prompt.index !== index || source === null) return false;
+  return prompt.sourceId !== null ? source.id === prompt.sourceId : source === prompt.sourceRef;
 }
 
 export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
   const year = draft.taxYear;
   const unsupported = year !== null && year !== 2025;
+  const updateResidenceYears = (residenceYears: NonNullable<FtcCaseDraft["residenceYears"]>) => {
+    const next = { ...draft, residenceYears };
+    delete next.residencePeriods;
+    onChange(deriveResidenceDaysForDraft(next));
+  };
   return (
     <section className="step-panel" aria-labelledby="step-title">
       <h2 id="step-title">ข้อมูลเบื้องต้น</h2>
-      <p className="muted">กำหนดปีภาษีที่คำนวณและช่วงวันที่พำนักในประเทศไทย ปีที่เกิดเงินได้ในช่อง (A) และวันที่นำเงินเข้าเป็นคนละข้อเท็จจริง ส่วนวันยื่นแบบไม่ได้ใช้คำนวณในกรณีนี้</p>
+      <p className="muted">กำหนดปีภาษีและบันทึกวันพำนักตามปีที่เกิดเงินได้ ปีที่เกิดเงินได้ วันที่นำเงินเข้า และวันยื่นแบบเป็นคนละข้อเท็จจริง</p>
+      <section className="info-callout scope-overview" aria-label="ขอบเขตการคำนวณตัวอย่าง">
+        <strong>ขอบเขตการคำนวณตัวอย่าง</strong>
+        <dl className="scope-rows">
+          <div><dt>ปีและเวลานำเข้า</dt><dd>ปี 2025 · เงินได้และการนำเข้าไทยในปีเดียวกัน · หนึ่งรายการนำเข้าต่อแหล่งเงินได้</dd></div>
+          <div><dt>ประเทศและประเภทเงินได้</dt><dd>เวียดนามหรือจีน · เงินเดือนตามมาตรา 40(1) · ตัวอย่างเงินปันผลที่เตรียมไว้ตามมาตรา 40(4)</dd></div>
+          <div><dt>จำนวนเงินและอัตรา</dt><dd>จำนวนเงิน THB หรืออัตราแลกเปลี่ยนที่ผู้ใช้ระบุพร้อมวันที่อ้างอิง</dd></div>
+          <div><dt>รายการนอกตัวอย่าง</dt><dd>บันทึกเป็นร่างได้ แต่ต้นแบบยังไม่สร้างยอดเครดิตให้รายการอื่น</dd></div>
+        </dl>
+        <p>รายละเอียดนี้อธิบายขอบเขตของต้นแบบเพื่อการศึกษา ไม่ใช่ข้อสรุปเรื่องสิทธิ FTC หรือ DTA</p>
+      </section>
       <label className="field field-narrow"><span>ปีภาษี (พ.ศ.) <RequiredMark /></span><select id="case-taxYear" required aria-required="true" value={year === null ? "" : String(year + 543)} onChange={(event) => onChange({ ...draft, taxYear: event.target.value === "" ? null : Number(event.target.value) - 543 })}>
         <option value="">เลือกปีภาษี</option><option value="2568">2568 (2025)</option><option value="2567">2567 (2024) — ยังไม่รองรับ</option><option value="2569">2569 (2026) — ยังไม่รองรับ</option>
       </select></label>
       {validationErrors.filter((issue) => issue.path?.[0] === "taxYear").map((issue, index) => <div className="alert alert-error" role="alert" key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></div>)}
+      {validationErrors.filter((issue) => issue.path?.[0] === "residenceYears" || issue.path?.[0] === "residencePeriods").map((issue, index) => <div className="alert alert-error" role="alert" key={`residence-${index}`}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></div>)}
       <ResidenceSection
         periods={draft.residencePeriods}
+        residenceYears={draft.residenceYears}
         sources={draft.sources}
         calculationTaxYear={draft.taxYear}
         onChange={(residencePeriods) => onChange(deriveResidenceDaysForDraft({ ...draft, residencePeriods }))}
+        onResidenceYearsChange={updateResidenceYears}
       />
       {unsupported && <div className="alert alert-warning" role="status"><strong>กรณีนี้อยู่นอกขอบเขตตัวอย่าง</strong><span>บันทึกร่างไว้แก้ไขได้ แต่ระบบจะไม่สร้างยอดเครดิตภาษี</span></div>}
-      <div className="info-callout"><strong>ขอบเขตที่ระบบต้นแบบแสดง</strong><p>เงินได้ปีเดียวกับการนำเข้าไทย · กรณีที่ทบทวนแล้ว: เวียดนามและจีน · เงินเดือนตามมาตรา 40(1) และเงินปันผลตัวอย่างตามมาตรา 40(4) · ผู้มีถิ่นที่อยู่ตามเกณฑ์ 180 วัน</p><p>สหรัฐอเมริกาและสิงคโปร์เลือกบันทึกได้ แต่ยังไม่รองรับการคำนวณเครดิต</p></div>
       <div className="alert alert-info"><strong>ข้อมูลนี้เป็นตัวอย่างเพื่อการศึกษา</strong><span>ระบบไม่ได้ยืนยันสิทธิภาษีตามอนุสัญญา และไม่ใช่แบบยื่นภาษีหรือคำวินิจฉัยของกรมสรรพากร</span></div>
     </section>
   );
@@ -272,9 +291,24 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
   const [pendingRemovalIndex, setPendingRemovalIndex] = useState<number | null>(null);
   const [blockedRemovalIndex, setBlockedRemovalIndex] = useState<number | null>(null);
   const [adjustmentOpenBySource, setAdjustmentOpenBySource] = useState<Record<string, boolean>>({});
+  const [pendingReset, setPendingReset] = useState<SourceResetPrompt | null>(null);
+  useEffect(() => {
+    if (pendingReset && !pendingResetTargets(pendingReset, pendingReset.index, draft.sources[pendingReset.index] ?? null)) {
+      setPendingReset(null);
+    }
+  }, [draft.sources, pendingReset]);
   const updateSource = (index: number, update: Partial<ForeignIncomeSourceDraft>) => {
     const sources = draft.sources.map((source, currentIndex) => currentIndex === index ? { ...source, ...update } : source);
     onChange(deriveResidenceDaysForDraft({ ...draft, sources }));
+  };
+  const requestFullReset = (index: number, change: string, next: Partial<ForeignIncomeSourceDraft>) => {
+    const source = draft.sources[index];
+    if (!source) return;
+    if (!hasAmounts(source) && !hasFxQuote(source)) {
+      updateSource(index, { ...clearAmounts(), remittance: source.remittance === null ? null : { ...source.remittance, transferTotalThb: null }, ...next });
+      return;
+    }
+    setPendingReset({ kind: "all", index, sourceId: source.id, sourceRef: source, change, next });
   };
   const add = () => onChange({ ...draft, sources: [...draft.sources, createEmptySource()] });
   const remove = (index: number) => {
@@ -302,8 +336,19 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
     {validationErrors.filter((issue) => issue.path?.length === 1 && issue.path[0] === "sources").map((issue, index) => <div className="alert alert-error" role="alert" key={index}>{issue.message}</div>)}
     {draft.sources.length === 0 && <div className="empty-inline"><strong>ยังไม่มีแหล่งเงินได้</strong><span>เพิ่มรายการเพื่อบันทึกประเทศ ประเภทเงินได้ วันที่ และจำนวน (D), (E), (F)</span><button type="button" className="button button-secondary" onClick={add}>เพิ่มแหล่งเงินได้แรก</button></div>}
     <div className="source-list">{draft.sources.map((source, index) => {
-      const fx = source.fxReference ?? { currencyCode: source.currencyCode, thbRate: null, baseUnits: null, effectiveDate: null, rateType: null, sourceKind: null, sourceLabel: null, sourceUrl: null, educationalAssumption: null };
       const remittance = source.remittance ?? { remittanceDate: null, transferTotalAmount: null, transferCurrencyCode: source.currencyCode, transferTotalThb: null, classification: null, classificationNote: null };
+      const residenceRecord = source.earnedTaxYear === null ? undefined : draft.residenceYears?.find((record) => record.earnedTaxYear === source.earnedTaxYear);
+      const openResidenceRecord = () => {
+        if (source.earnedTaxYear === null) return;
+        onNavigateStep?.(0);
+        window.setTimeout(() => {
+          const target = document.getElementById(`residence-year-${source.earnedTaxYear}-mode`)
+            ?? document.getElementById(`residence-year-${source.earnedTaxYear}-add`)
+            ?? document.getElementById("residence-year-add-input");
+          target?.scrollIntoView({ behavior: "smooth", block: "center" });
+          target?.focus({ preventScroll: true });
+        }, 50);
+      };
       const amountUnit = source.inputMode === "original_currency" ? source.currencyCode ?? "สกุลเงินต้นทาง" : source.inputMode === "worksheet_thb" ? "บาท" : "เลือกรูปแบบก่อน";
       const sourceIssues = validationErrors.filter((issue) => issue.path?.[0] === "sources" && issue.path[1] === index);
       const hasTaxAdjustment = hasEligibleTaxAdjustment(source);
@@ -312,9 +357,34 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
       const sourcePreview = previewCalculation({ ...draft, sources: [source] }, true);
       const computedG = previewSourceLine(sourcePreview, [source], 0, "source_G");
       const computedShare = previewSourceLine(sourcePreview, [source], 0, "source_share");
-      const updateFx = (update: Partial<NonNullable<ForeignIncomeSourceDraft["fxReference"]>>) => updateSource(index, { fxReference: { ...fx, ...update } });
+      const sourceReset = pendingReset && pendingResetTargets(pendingReset, index, source) ? pendingReset : null;
+      const confirmReset = () => {
+        const reset = pendingReset;
+        if (!reset || !pendingResetTargets(reset, index, source)) { setPendingReset(null); return; }
+        if (reset.kind === "date") {
+          updateSource(index, {
+            ...clearDerivedAmounts(),
+            fxReference: null,
+            remittance: { ...remittance, remittanceDate: reset.remittanceDate, transferTotalThb: null },
+          });
+        } else {
+          updateSource(index, {
+            ...clearAmounts(),
+            remittance: source.remittance === null ? null : { ...remittance, transferTotalThb: null },
+            ...reset.next,
+          });
+        }
+        setPendingReset(null);
+      };
       return <article className="source-card" key={source.id ?? `source-${index}`} aria-label={`แหล่งเงินได้ ${index + 1}`}>
         <div className="source-card-title"><div><p className="eyebrow">แหล่งที่ {String(index + 1).padStart(2, "0")}</p><h3>แหล่งเงินได้ {index + 1}</h3></div><button type="button" className="button button-danger-quiet button-small" onClick={() => remove(index)} aria-label={`ลบแหล่งเงินได้ ${index + 1}`}>ลบรายการ</button></div>
+        {sourceReset && <div className="source-delete-prompt" role="alertdialog" aria-labelledby={`source-${index}-fx-reset-title`}>
+          <strong id={`source-${index}-fx-reset-title`}>{sourceReset.kind === "date" ? "อัตราเดิมใช้กับวันที่นำเงินเข้าไทยที่เปลี่ยนไปไม่ได้" : `ยืนยันการเปลี่ยน${sourceReset.change}`}</strong>
+          <p>{sourceReset.kind === "date"
+            ? "การยืนยันจะล้างเฉพาะอัตราเดิมและจำนวนเงินบาทที่แปลงไว้ โดยคงจำนวน (D), (E) และ (F) กับข้อมูลรายการอื่นไว้"
+            : "การยืนยันจะล้างจำนวน (D), (E), (F) และข้อมูลอัตราแลกเปลี่ยนเดิม"}</p>
+          <div><button type="button" className="button button-secondary button-small" onClick={() => setPendingReset(null)}>ยกเลิก</button><button type="button" className="button button-primary button-small" onClick={confirmReset}>เปลี่ยนและล้างข้อมูล</button></div>
+        </div>}
         {blockedRemovalIndex === index && <div className="alert alert-warning" role="alert"><span>ยังมีไฟล์แนบ {attachments.filter((file) => file.sourceId === source.id && file.status !== "deleted").length} รายการ ลบไฟล์ในขั้นหลักฐานก่อนลบแหล่งเงินได้นี้</span><button type="button" className="button button-secondary button-small" onClick={() => onNavigateStep?.(4)}>ไปยังหลักฐานแหล่งเงินได้ {index + 1}</button></div>}
         {pendingRemovalIndex === index && <div className="source-delete-prompt" role="alertdialog" aria-labelledby={`source-delete-title-${index}`}><strong id={`source-delete-title-${index}`}>ยืนยันการลบแหล่งเงินได้ {index + 1}</strong><p>การลบรายการนี้จะเอาข้อมูลแหล่งเงินได้ออกจากร่าง</p><div><button type="button" className="button button-danger-quiet button-small" onClick={confirmRemove}>ยืนยันลบรายการ</button><button type="button" className="button button-secondary button-small" onClick={() => setPendingRemovalIndex(null)}>ยกเลิก</button></div></div>}
         {sourceIssues.length > 0 && <div className="alert alert-error" role="alert"><ul>{sourceIssues.map((issue, issueIndex) => <li key={issueIndex}><span>{issue.message}</span><ValidationFieldLink issue={issue} sourceIndex={index} onNavigateStep={onNavigateStep} targetStep={issue.path?.[2] === "residenceDaysInEarnedYear" ? 0 : undefined} /></li>)}</ul></div>}
@@ -326,12 +396,11 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
               <td data-label={worksheetLabel("A")}><output className="readonly-value" aria-label={worksheetLabel("A")}>พ.ศ. {thaiYear(source.earnedTaxYear)}</output></td>
               <td data-label={`${worksheetLabel("B")} *`}><SearchableChoice id={`source-${index}-countryCode`} label={worksheetLabel("B")} hiddenLabel value={source.countryCode} options={countryOptions} required onChange={(code) => {
                 const country = COUNTRY_CHOICES.find((item) => item.code === code);
-                const previousCountry = COUNTRY_CHOICES.find((item) => item.code === source.countryCode);
-                const followsSuggestion = source.currencyCode === null || source.currencyCode === previousCountry?.suggestedCurrency;
-                const suggestedCurrency = source.inputMode === "original_currency" && followsSuggestion ? country?.suggestedCurrency ?? null : source.currencyCode;
-                const currencyChanged = source.inputMode === "original_currency" && suggestedCurrency !== source.currencyCode;
-                if (currencyChanged && !confirmCurrencyReset(source, "ประเทศและสกุลเงินที่แนะนำ")) return;
-                updateSource(index, { countryCode: code, countryName: country?.storedName ?? null, ...(currencyChanged ? clearAmounts() : {}), ...(currencyChanged ? { currencyCode: suggestedCurrency, fxReference: clearFxQuote(source, suggestedCurrency) } : {}) });
+                const suggestedCurrency = source.inputMode === "original_currency" && source.currencyCode === null && !hasAmounts(source)
+                  ? country?.suggestedCurrency ?? null
+                  : source.currencyCode;
+                updateSource(index, { countryCode: code, countryName: country?.storedName ?? null,
+                  ...(suggestedCurrency !== source.currencyCode ? { currencyCode: suggestedCurrency } : {}) });
               }} /></td>
               <td data-label={`${worksheetLabel("C")} *`}><label className="field"><span className="sr-only">{worksheetLabel("C")}</span><select id={`source-${index}-incomeType`} required aria-required="true" value={incomeChoiceKey(source)} onChange={(event) => {
                 const choice = INCOME_CHOICES.find((item) => item.key === event.target.value);
@@ -345,22 +414,36 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
             </tr>
             <tr><td className="worksheet-source-details" colSpan={8}><div className="field-grid">
               <label className="field"><span>วันที่เกิดเงินได้ <RequiredMark /></span><input id={`source-${index}-earnedDate`} type="date" required aria-required="true" value={source.earnedDate ?? ""} onChange={(event) => updateSource(index, { earnedDate: nullableText(event.target.value), earnedTaxYear: event.target.value ? Number(event.target.value.slice(0, 4)) : null })} /><small className="field-hint">ระบุวันที่จริงเพื่อกำหนดปี (A)</small></label>
-              <label className="field"><span>วันพำนักในปีที่เกิดเงินได้</span><span className="input-unit"><input id={`source-${index}-residenceDaysInEarnedYear`} value={source.residenceDaysInEarnedYear ?? ""} readOnly aria-readonly="true" /><span>วัน</span></span><small className="field-hint">คำนวณจากช่วงวันที่ในขั้นข้อมูลเบื้องต้น</small></label>
+              <label className="field"><span>วันพำนักในปีที่เกิดเงินได้</span>
+                {residenceRecord?.mode === "declared"
+                  ? <output id={`source-${index}-residenceDaysInEarnedYear`} className="readonly-value">ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ</output>
+                  : <span className="input-unit"><input id={`source-${index}-residenceDaysInEarnedYear`} value={source.residenceDaysInEarnedYear ?? ""} readOnly aria-readonly="true" /><span>วัน</span></span>}
+                {residenceRecord?.mode === "declared"
+                  ? <small className="field-hint">ไม่มีจำนวนวันแน่นอน ข้อมูลนี้เป็นคำยืนยันของผู้ใช้</small>
+                  : draft.residenceYears !== undefined && residenceRecord === undefined
+                    ? <small className="field-hint">ยังไม่มีข้อมูลวันพำนักสำหรับปีที่เกิดเงินได้นี้</small>
+                    : <small className="field-hint">คำนวณจากข้อมูลวันพำนักในขั้นข้อมูลเบื้องต้น</small>}
+                {draft.residenceYears !== undefined && source.earnedTaxYear !== null && <button type="button" className="text-link residence-record-link" onClick={openResidenceRecord}>ดูข้อมูลวันพำนักปี พ.ศ. {source.earnedTaxYear + 543}</button>}
+              </label>
               <label className="field"><span>รูปแบบจำนวนเงินของช่อง (D), (E) และ (F) <RequiredMark /></span><select id={`source-${index}-inputMode`} required aria-required="true" value={source.inputMode ?? ""} onChange={(event) => {
                 const nextMode = (event.target.value || null) as InputMode | null;
-                if (source.inputMode !== nextMode && !confirmCurrencyReset(source, "รูปแบบการกรอก")) return;
-                if (nextMode === "worksheet_thb") updateSource(index, { ...clearAmounts(), inputMode: nextMode, currencyCode: "THB", fxReference: null });
+                if (source.inputMode === nextMode) return;
+                if (nextMode === "worksheet_thb") requestFullReset(index, "รูปแบบการกรอก", { inputMode: nextMode, currencyCode: "THB", fxReference: null });
                 else if (nextMode === "original_currency") {
                   const suggestedCurrency = COUNTRY_CHOICES.find((country) => country.code === source.countryCode)?.suggestedCurrency ?? null;
-                  updateSource(index, { ...clearAmounts(), inputMode: nextMode, currencyCode: suggestedCurrency, fxReference: null });
-                } else updateSource(index, { ...clearAmounts(), inputMode: null, currencyCode: null, fxReference: null });
+                  requestFullReset(index, "รูปแบบการกรอก", { inputMode: nextMode, currencyCode: suggestedCurrency, fxReference: null });
+                } else requestFullReset(index, "รูปแบบการกรอก", { inputMode: null, currencyCode: null, fxReference: null });
               }}><option value="">เลือกรูปแบบ</option><option value="worksheet_thb">จำนวนเงินตามตาราง (THB)</option><option value="original_currency">สกุลเงินต้นทาง</option></select></label>
               {source.inputMode === "original_currency" && <SearchableChoice id={`source-${index}-currencyCode`} label={<>สกุลเงินต้นทาง <RequiredMark /></>} value={source.currencyCode} options={currencyOptions} required onChange={(currencyCode) => {
                 const changed = currencyCode !== source.currencyCode;
-                if (changed && !confirmCurrencyReset(source, "สกุลเงิน")) return;
-                updateSource(index, { ...(changed ? clearAmounts() : {}), currencyCode, fxReference: changed ? clearFxQuote(source, currencyCode) : source.fxReference });
+                if (changed) requestFullReset(index, "สกุลเงิน", { currencyCode, fxReference: null });
               }} />}
-              <label className="field"><span>วันที่นำเงินเข้าไทย <RequiredMark /></span><input id={`source-${index}-remittance-remittanceDate`} type="date" required aria-required="true" value={remittance.remittanceDate ?? ""} onChange={(event) => updateSource(index, { remittance: { ...remittance, remittanceDate: nullableText(event.target.value) } })} /></label>
+              <label className="field"><span>วันที่นำเงินเข้าไทย <RequiredMark /></span><input id={`source-${index}-remittance-remittanceDate`} type="date" required aria-required="true" value={remittance.remittanceDate ?? ""} onChange={(event) => {
+                const nextDate = nullableText(event.target.value);
+                if (nextDate === remittance.remittanceDate) return;
+                if (hasFxQuote(source)) setPendingReset({ kind: "date", index, sourceId: source.id, sourceRef: source, remittanceDate: nextDate });
+                else updateSource(index, { remittance: { ...remittance, remittanceDate: nextDate, transferTotalThb: null } });
+              }} /></label>
               {!adjustmentOpen && source.eligibilityRationale?.trim() && <p className="field-hint field-span" role="note">หมายเหตุเดิมที่บันทึกไว้: {displayKnownExampleNote(source.eligibilityRationale)}</p>}
               <details className="unsupported-details field-span" open={adjustmentOpen} onToggle={(event) => {
                 const nextOpen = event.currentTarget.open;
@@ -371,15 +454,18 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
                 <MoneyField id={`source-${index}-eligibleForeignTax`} label={<>จำนวน (E) ที่ใช้คำนวณ</>} value={source.eligibleForeignTax} unit={amountUnit} disabled={source.inputMode === null} onChange={(value) => updateSource(index, { eligibleForeignTax: value })} hint="เว้นว่างเมื่อใช้จำนวนภาษีที่ชำระจริงเป็น (E)" />
                 <label className="field field-span"><span>เหตุผลของการปรับจำนวน (E){hasTaxAdjustment && <RequiredMark />}</span><textarea id={`source-${index}-eligibilityRationale`} rows={2} maxLength={1000} required={hasTaxAdjustment} aria-required={hasTaxAdjustment} value={displayKnownExampleNote(source.eligibilityRationale) ?? ""} onChange={(event) => updateSource(index, { eligibilityRationale: nullableText(event.target.value) })} placeholder="กรอกเฉพาะเมื่อจำนวน (E) ต่างจากภาษีที่ชำระจริง" /></label>
               </div>}</details>
-              {source.inputMode === "original_currency" && <div className="field-grid details-grid field-span">
-                <MoneyField id={`source-${index}-fxReference-thbRate`} label={<>อัตรา THB ต่อหน่วยฐาน <RequiredMark /></>} value={fx.thbRate} unit="บาท / หน่วย" required onChange={(value) => updateFx({ thbRate: value })} />
-                <label className="field"><span>หน่วยของอัตรา <RequiredMark /></span><select id={`source-${index}-fxReference-baseUnits`} required aria-required="true" value={fx.baseUnits ?? ""} onChange={(event) => updateFx({ baseUnits: event.target.value === "100" ? 100 : event.target.value === "1" ? 1 : null })}><option value="">เลือกหน่วย</option><option value="1">ต่อ 1 หน่วย</option><option value="100">ต่อ 100 หน่วย</option></select></label>
-                <label className="field"><span>วันที่อัตราแลกเปลี่ยน <RequiredMark /></span><input id={`source-${index}-fxReference-effectiveDate`} type="date" required aria-required="true" value={fx.effectiveDate ?? ""} onChange={(event) => updateFx({ effectiveDate: nullableText(event.target.value) })} /></label>
-                <label className="field"><span>ประเภทอัตรา <RequiredMark /></span><select id={`source-${index}-fxReference-rateType`} required aria-required="true" value={fx.rateType ?? ""} onChange={(event) => updateFx({ rateType: nullableText(event.target.value) as typeof fx.rateType, sourceKind: event.target.value === "manual" ? "user_supplied" : event.target.value === "fixture" ? "fixture" : event.target.value === "bank_buying" ? "bank" : event.target.value ? "bot" : null })}><option value="">เลือกประเภท</option><option value="bank_buying">ธนาคาร อัตราซื้อ</option><option value="bot_average_buying">ธปท. อัตราซื้อเฉลี่ย</option><option value="manual">กรอกเอง</option><option value="fixture">อัตราสมมติสำหรับการศึกษา</option></select></label>
-                <label className="field"><span>แหล่งที่มาอัตรา <RequiredMark /></span><input id={`source-${index}-fxReference-sourceLabel`} required aria-required="true" value={fx.sourceLabel ?? ""} onChange={(event) => updateFx({ sourceLabel: nullableText(event.target.value) })} placeholder="ชื่อธนาคารหรือแหล่งข้อมูล" /></label>
-                <label className="field"><span>ลิงก์แหล่งอัตรา (ถ้ามี)</span><input type="url" value={fx.sourceUrl ?? ""} onChange={(event) => updateFx({ sourceUrl: nullableText(event.target.value) })} /></label>
-                {(fx.rateType === "manual" || fx.rateType === "fixture") && <label className="field field-span"><span>สมมติฐานเพื่อการศึกษา <RequiredMark /></span><textarea rows={2} value={fx.educationalAssumption ?? ""} onChange={(event) => updateFx({ educationalAssumption: nullableText(event.target.value) })} placeholder="อธิบายเหตุผลและข้อจำกัดของอัตรานี้" /></label>}
-              </div>}
+              {source.inputMode === "original_currency" && <ManualFxFields
+                sourceIndex={index}
+                currencyCode={source.currencyCode}
+                remittanceDate={remittance.remittanceDate}
+                reference={source.fxReference}
+                onChange={(fxReference) => updateSource(index, { fxReference })}
+                onReplaceLegacy={() => updateSource(index, {
+                  ...clearDerivedAmounts(),
+                  fxReference: null,
+                  remittance: source.remittance === null ? null : { ...remittance, transferTotalThb: null },
+                })}
+              />}
             </div></td></tr>
           </tbody>
         </table></div>
@@ -441,34 +527,28 @@ export function StepFour({ draft, onNavigateStep }: StepProps) {
   </section>;
 }
 
-export function StepFive({ draft, onChange, attachments, onUpload, onDeleteAttachment, busy, mode = "demo" }: StepProps) {
+export function StepFive({ draft, attachments, onUpload, onDeleteAttachment, busy, mode = "demo" }: StepProps) {
   const allItems = [{ sourceId: null, sourceIndex: undefined as number | undefined, label: "ภาษีไทย · ที่มาของ (L)" }, ...draft.sources.map((source, index) => ({ sourceId: source.id, sourceIndex: index, label: `แหล่งเงินได้ ${index + 1} · ${countryLabel(source.countryCode, "ยังไม่เลือกประเทศ")} · ${incomeTypeLabel(source)}` }))];
+  const missingEvidence = missingEvidenceInventory(draft, attachments.filter((file) => file.status === "ready"));
   return <section className="step-panel" aria-labelledby="step-title">
     <h2 id="step-title">หลักฐานและตรวจทาน</h2>
-    <p className="muted">แนบตัวอย่างเอกสารเพื่อจำลองรายการตรวจสอบก่อนส่ง แต่ละไฟล์ไม่เกิน 3 MiB, PDF/JPEG/PNG เท่านั้น รายการตรวจสอบเป็นคำแจ้งของผู้ใช้ ไม่ใช่การตรวจยืนยันไฟล์</p>
+    <p className="muted">แนบเอกสารที่มีและตรวจดูหมวดที่ยังไม่มีไฟล์พร้อมใช้งาน แต่ละไฟล์ไม่เกิน 3 MiB, PDF/JPEG/PNG เท่านั้น การมีไฟล์ไม่ได้ยืนยันเนื้อหาหรือความถูกต้องของเอกสาร</p>
     {mode === "demo"
       ? <div className="alert alert-info"><strong>ไฟล์เก็บไว้ในเบราว์เซอร์นี้</strong><span>โหมดสาธิตเก็บข้อมูลไฟล์จริงไว้ในเบราว์เซอร์นี้เพื่อเปิดดูตัวอย่างหรือดาวน์โหลด โดยไม่ส่งไฟล์ขึ้นเซิร์ฟเวอร์</span></div>
       : <div className="alert alert-warning"><strong>โหมดระบบที่เชื่อมต่อเซิร์ฟเวอร์</strong><span>ไฟล์ที่แนบจะออกจากอุปกรณ์และถูกจัดเก็บในพื้นที่หลักฐานฝั่งเซิร์ฟเวอร์ของโครงการ โปรดใช้เฉพาะเอกสารสมมติสำหรับการสาธิต</span></div>}
     <div className="evidence-list">
-      {allItems.map(({ sourceId, sourceIndex, label }, itemIndex) => {
+      {allItems.map(({ sourceId, sourceIndex, label }) => {
         const source = sourceIndex === undefined ? null : draft.sources[sourceIndex] ?? null;
         const items = attachments.filter((file) => sourceIndex === undefined ? file.sourceId === null : sourceId !== null && file.sourceId === sourceId);
         const needsSourceProof = !isZeroAmount(source?.remittedIncomeAmount);
-        const effectiveTax = source === null ? null : effectiveForeignTaxAmount(source);
-        const checklistKinds = evidenceKinds.filter(({ kind }) => kind !== "foreign_tax" || !isZeroAmount(effectiveTax));
+        const missingKinds = missingEvidence.find((group) => group.sourceIndex === sourceIndex)?.missingKinds ?? [];
         return <article className="evidence-card" key={sourceIndex === undefined ? "thai-tax-evidence" : `source-evidence-${sourceIndex}`}>
           <div className="evidence-title"><div><h3>{label}</h3><p>ไฟล์ {items.length}/5 · รวมไม่เกิน 30 MiB ต่อกรณี</p></div><div className="evidence-upload-actions">
             {sourceIndex === undefined ? <UploadButton label="แนบหลักฐานภาษีไทย" kind="thai_tax" sourceId={null} disabled={busy || items.length >= 5} onUpload={onUpload} /> : evidenceKinds.map(({ kind, label: kindLabel }) => <UploadButton key={kind} label={`แนบ: ${kindLabel}`} kind={kind} sourceId={sourceId} sourceIndex={sourceIndex} disabled={busy || items.length >= 5} onUpload={onUpload} />)}
           </div></div>
           <ul className="file-list">{items.map((item) => <li key={item.id}><span className="file-icon" aria-hidden="true">{evidenceMediaType(item.mediaType)}</span><span className="file-name"><strong>{item.displayName}</strong><small>{EVIDENCE_LABELS[item.kind]} · {evidenceMediaType(item.mediaType)} · {formatBytes(item.byteSize)} · {item.status === "ready" ? "พร้อมใช้งาน" : item.status === "pending" ? "กำลังตรวจสอบ" : "อัปโหลดไม่สำเร็จ"}</small></span><EvidenceFileActions file={item} mode={mode} onDelete={onDeleteAttachment} busy={busy} /></li>)}</ul>
           {items.length === 0 && <p className="empty-evidence">ยังไม่มีไฟล์แนบ</p>}
-          {sourceIndex !== undefined && needsSourceProof && <div className="evidence-checklist"><strong>รายการหลักฐานที่ผู้ใช้แจ้งว่ามี</strong><p className="field-hint">การเลือกช่องนี้ไม่ตรวจสอบเนื้อหาหรือชื่อไฟล์โดยอัตโนมัติ</p><div className="checklist-items">{checklistKinds.map(({ kind, label: kindLabel }) => <label key={kind}><input type="checkbox" checked={source?.evidenceChecklist.includes(kind) ?? false} onChange={(event) => {
-            const sourceIndex = itemIndex - 1;
-            const source = draft.sources[sourceIndex];
-            if (!source) return;
-            const evidenceChecklist = event.target.checked ? [...new Set([...source.evidenceChecklist, kind])] : source.evidenceChecklist.filter((value) => value !== kind);
-            onChange({ ...draft, sources: draft.sources.map((item, index) => index === sourceIndex ? { ...item, evidenceChecklist } : item) });
-          }} />{kindLabel}</label>)}</div></div>}
+          {missingKinds.length > 0 && <p className="field-hint evidence-missing"><strong>ยังไม่มีไฟล์พร้อมใช้งานสำหรับ:</strong> {missingKinds.map((kind) => EVIDENCE_LABELS[kind]).join(" · ")}</p>}
           {sourceIndex !== undefined && !needsSourceProof && <p className="field-hint">(F) = 0: ระบบไม่กำหนดให้แนบหลักฐานแหล่งเงินได้สำหรับยอดที่ไม่ได้นำเข้าไทย</p>}
         </article>;
       })}

@@ -403,13 +403,18 @@ describe("FTC calculator", () => {
       ...source.fxReference!,
       rateType: "manual" as const,
       sourceKind: "user_supplied" as const,
-      effectiveDate: "2025-01-02",
-      sourceLabel: "User supplied bank statement quote, dated 2025-01-02",
+      effectiveDate: source.remittance!.remittanceDate!,
+      sourceLabel: "User supplied rate for the remittance date",
       sourceUrl: null,
       educationalAssumption: "User-entered rate for demonstration only; not independently verified.",
     };
     const manual = withSource(draft, 0, { fxReference: manualFx });
+    const manualForWrongDate = withSource(draft, 0, { fxReference: { ...manualFx, effectiveDate: "2025-01-02" } });
     expect(calculateFTC(manual).outcome).toBe("ready");
+    const wrongDateResult = calculateFTC(manualForWrongDate);
+    expect(wrongDateResult.outcome).toBe("needs_review");
+    expect(wrongDateResult.allowableCredit).toBeNull();
+    expect(wrongDateResult.validationMessages.map(({ code }) => code)).toContain("fx.manual_date_mismatch");
 
     const disguisedBot = withSource(draft, 0, {
       fxReference: { ...manualFx, rateType: "bot_average_buying", sourceKind: "bot" },
@@ -472,7 +477,8 @@ describe("FTC calculator", () => {
     const result = calculateFTC(draft);
     const messages = validateSubmission(draft, result, { currentRevision: 2, previewRevision: 1, attachments: [] });
     expect(messages.map(({ code }) => code)).toContain("submit.preview_stale");
-    expect(messages.map(({ code }) => code)).toContain("submit.source_evidence_missing");
+    expect(messages.map(({ code }) => code)).not.toContain("submit.source_evidence_missing");
+    expect(messages.map(({ code }) => code)).not.toContain("submit.source_checklist_missing");
     const noRemittance = withSource(draft, 0, { remittedIncomeAmount: "0.00" });
     expect(validateSubmission(noRemittance, calculateFTC(noRemittance), { currentRevision: 2, previewRevision: 2, attachments: [] }).map(({ code }) => code)).toContain("submit.no_positive_remittance");
   });
@@ -512,7 +518,7 @@ describe("FTC calculator", () => {
       previewRevision: eligibleTaxMissingChecklist.revision,
       attachments: [combinedReadyFile],
     });
-    expect(eligibleTaxMessages.map(({ code }) => code)).toContain("submit.source_checklist_missing");
+    expect(eligibleTaxMessages).toEqual([]);
   });
 
   it("blocks submission while an upload is pending or failed", () => {

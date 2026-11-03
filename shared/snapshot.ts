@@ -2,6 +2,7 @@ import type {
   CalculationSnapshot,
   FtcCaseDraft,
   FrozenEvidenceReference,
+  SubmissionMetadata,
   SnapshotKind,
 } from "./contracts.js";
 import { calculateFTC, withCanonicalThbAmounts } from "./calculator.js";
@@ -17,11 +18,15 @@ export interface CreateCalculationSnapshotInput {
   evidence: readonly FrozenEvidenceReference[];
   createdAt: string;
   policy?: DemoPolicy;
+  submissionMetadata?: SubmissionMetadata | null;
 }
 
 /** Copies every consumed input and result value into a versioned snapshot. */
 export function createCalculationSnapshot(input: CreateCalculationSnapshotInput): CalculationSnapshot {
   const policy = input.policy ?? DEMO_POLICY;
+  if (input.kind === "preview" && input.submissionMetadata != null) {
+    throw new Error("Preview snapshots cannot carry submission metadata.");
+  }
   if (input.revision !== input.inputs.revision) {
     throw new Error("Snapshot revision must match the frozen input revision.");
   }
@@ -37,5 +42,6 @@ export function createCalculationSnapshot(input: CreateCalculationSnapshotInput)
     evidence: input.evidence.map((reference) => ({ ...reference })),
     policy: policyReference(policy),
     createdAt: input.createdAt,
+    submissionMetadata: input.submissionMetadata ? structuredClone(input.submissionMetadata) : null,
   };
 }

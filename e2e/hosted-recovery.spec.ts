@@ -171,6 +171,8 @@ test("a submit conflict loads the newer draft and disables the stale preview", a
 
   await page.goto(`/app/cases/${caseId}/result?preview=snapshot-revision-1`);
   const submit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" });
+  await expect(submit).toBeDisabled();
+  await page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว/ }).check();
   await expect(submit).toBeEnabled();
   await submit.click();
   await expect(page.getByRole("alert").filter({ hasText: "มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง" })).toBeVisible();

@@ -37,33 +37,33 @@ test("taxpayer result presents the Vietnam–China calculation as the canonical 
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   for (const label of [
-    "(A) - ปีภาษีที่เกิดเงินได้",
-    "(B) - ประเทศแหล่งเงินได้",
-    "(C) - ประเภทเงินได้",
-    "(D) - จำนวนเงินได้ในต่างประเทศ",
-    "(E) - จำนวนภาษีชำระในต่างประเทศ",
-    "(F) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ",
-    "(G) - จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้พึงประเมินจากต่างประเทศ",
-    "(H) - สัดส่วนเงินได้ต่างประเทศที่นำเข้ามา",
+    "ปีภาษีที่เกิดเงินได้ (A)",
+    "ประเทศแหล่งเงินได้ (B)",
+    "ประเภทเงินได้ (C)",
+    "จำนวนเงินได้ในต่างประเทศ (D)",
+    "จำนวนภาษีชำระในต่างประเทศ (E)",
+    "จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (F)",
+    "จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้พึงประเมินจากต่างประเทศ (G)",
+    "สัดส่วนเงินได้ต่างประเทศที่นำเข้ามา (H)",
   ]) await expect(sourceTable.getByText(label, { exact: true })).toBeVisible();
 
   for (const label of [
-    "(I) - เงินได้พึงประเมินในต่างประเทศที่นำเข้ามา",
-    "(J) - เงินได้พึงประเมินในประเทศไทย",
-    "(K) - เงินได้พึงประเมินรวมจากทุกแหล่งเงินได้",
-    "(L) - ภาษีที่ต้องชำระในประเทศไทย",
-    "(M) - ประเทศ",
-    "(N) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (แยกตามประเทศ)",
-    "(O) - จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้ที่นำเข้ามา (แยกตามประเทศ)",
-    "(P) - เครดิตภาษีที่คำนวณได้ (คำนวณเพดานเครดิตภาษี)",
-    "(Q) - เครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย",
-  ]) await expect((label.startsWith("(M)") || label.startsWith("(N)") || label.startsWith("(O)") || label.startsWith("(P)") || label.startsWith("(Q)"))
+    "เงินได้พึงประเมินในต่างประเทศที่นำเข้ามา (I)",
+    "เงินได้พึงประเมินในประเทศไทย (J)",
+    "เงินได้พึงประเมินรวมจากทุกแหล่งเงินได้ (K)",
+    "ภาษีที่ต้องชำระในประเทศไทย (L)",
+    "ประเทศ (M)",
+    "จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ (แยกตามประเทศ) (N)",
+    "จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้ที่นำเข้ามา (แยกตามประเทศ) (O)",
+    "เครดิตภาษีที่คำนวณได้ (คำนวณเพดานเครดิตภาษี) (P)",
+    "เครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย (Q)",
+  ]) await expect((label.endsWith("(M)") || label.endsWith("(N)") || label.endsWith("(O)") || label.endsWith("(P)") || label.endsWith("(Q)"))
     ? page.getByRole("table", { name: "เครดิตภาษีที่คำนวณได้ตามประเทศ" }).getByText(label, { exact: true })
     : page.getByRole("region", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" }).getByText(label, { exact: true })).toBeVisible();
 
   const summaryTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" });
   await expect(summaryTable.getByRole("row")).toHaveCount(4);
-  await expect(summaryTable.getByRole("row").filter({ hasText: "(L) - ภาษีที่ต้องชำระในประเทศไทย" })).toContainText("318,750.00 บาท");
+  await expect(summaryTable.getByRole("row").filter({ hasText: "ภาษีที่ต้องชำระในประเทศไทย (L)" })).toContainText("318,750.00 บาท");
 
   const total = page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" });
   await expect(total).toContainText("143,544.30 บาท");
@@ -194,8 +194,12 @@ test("officer detail reuses the worksheet and groups frozen evidence by source a
   await page.getByLabel("ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1").check();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  const submit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true });
+  await expect(submit).toBeDisabled();
+  await page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว/ }).check();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();

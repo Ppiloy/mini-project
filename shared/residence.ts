@@ -1,4 +1,4 @@
-import type { FtcCaseDraft, ResidencePeriodDraft } from "./contracts.js";
+import type { FtcCaseDraft, ResidencePeriodDraft, ResidenceYearDraft } from "./contracts.js";
 
 export type ResidencePeriodIssueCode = "required" | "invalid_date" | "reversed";
 
@@ -6,6 +6,20 @@ export interface ResidencePeriodIssue {
   periodIndex: number;
   field: "startDate" | "endDate";
   code: ResidencePeriodIssueCode;
+}
+
+export type ResidenceYearStatus = "missing" | "invalid" | "computed" | "declared";
+
+export interface ResidenceYearAssessment {
+  status: ResidenceYearStatus;
+  days: number | null;
+  meets180Days: boolean | null;
+  issues: ResidencePeriodIssue[];
+}
+
+export interface ResidenceYearPeriodIssue extends ResidencePeriodIssue {
+  yearIndex: number;
+  earnedTaxYear: number;
 }
 
 const millisecondsPerDay = 24 * 60 * 60 * 1000;
@@ -66,8 +80,39 @@ export function calculateResidenceDaysInYear(periods: readonly ResidencePeriodDr
   return days;
 }
 
+/** Keeps declaration-only facts explicitly unverified and does not assign them an exact count. */
+export function assessResidenceYear(record: ResidenceYearDraft | undefined, year: number): ResidenceYearAssessment {
+  if (!record) return { status: "missing", days: null, meets180Days: null, issues: [] };
+  if (record.mode === "declared") return { status: "declared", days: null, meets180Days: true, issues: [] };
+  if (record.periods.length === 0) {
+    return { status: "invalid", days: null, meets180Days: null, issues: [{ periodIndex: 0, field: "startDate", code: "required" }] };
+  }
+  const issues = validateResidencePeriods(record.periods);
+  if (issues.length > 0) return { status: "invalid", days: null, meets180Days: null, issues };
+  const days = calculateResidenceDaysInYear(record.periods, year);
+  return { status: "computed", days, meets180Days: days >= 180, issues: [] };
+}
+
+export function validateResidenceYearPeriods(records: readonly ResidenceYearDraft[]): ResidenceYearPeriodIssue[] {
+  return records.flatMap((record, yearIndex) => record.mode === "periods"
+    ? (record.periods.length === 0 ? [{ periodIndex: 0, field: "startDate" as const, code: "required" as const }] : validateResidencePeriods(record.periods))
+      .map((issue) => ({ ...issue, yearIndex, earnedTaxYear: record.earnedTaxYear }))
+    : []);
+}
+
 /** Derives each source's days from its earned year whenever periods are explicitly supplied. */
 export function deriveResidenceDaysForDraft(draft: FtcCaseDraft): FtcCaseDraft {
+  if (draft.residenceYears !== undefined) {
+    const recordsByYear = new Map(draft.residenceYears.map((record) => [record.earnedTaxYear, record]));
+    return {
+      ...draft,
+      sources: draft.sources.map((source) => {
+        if (source.earnedTaxYear === null) return { ...source, residenceDaysInEarnedYear: null };
+        const assessment = assessResidenceYear(recordsByYear.get(source.earnedTaxYear), source.earnedTaxYear);
+        return { ...source, residenceDaysInEarnedYear: assessment.status === "computed" ? assessment.days : null };
+      }),
+    };
+  }
   if (draft.residencePeriods === undefined) return draft;
   const periods = draft.residencePeriods;
   const hasInvalidPeriods = validateResidencePeriods(periods).length > 0;

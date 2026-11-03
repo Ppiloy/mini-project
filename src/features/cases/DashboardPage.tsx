@@ -96,7 +96,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
         <div><span className="summary-label">ปีภาษีที่รองรับ</span><strong>2568 <span className="muted-inline">(2025)</span></strong></div>
         <div><span className="summary-label">ตัวอย่างคำนวณ</span><strong>เวียดนามและจีน · 40(1), เงินปันผล 40(4)</strong></div>
       </section>
-      {mode === "demo" && <section className="fixture-launch card"><div><h2>ตัวอย่างที่เตรียมไว้</h2><p>เลือกตัวอย่างเพื่อดูการนำเงินได้บางส่วนเข้าไทย หรือเปรียบเทียบเงินได้จากเวียดนามและจีน</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>{DEMO_EXAMPLE_LABELS.partialRemittance}</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>{DEMO_EXAMPLE_LABELS.vietnamAndChina}</button></div></section>}
+      {mode === "demo" && <section className="fixture-launch card"><div><h2>กรณีตัวอย่าง</h2><p>เปิดกรณีสาธิตที่มีข้อมูลตั้งต้น หรือเริ่มกรณีใหม่จากข้อมูลว่าง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>{DEMO_EXAMPLE_LABELS.partialRemittance}</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>{DEMO_EXAMPLE_LABELS.vietnamAndChina}</button></div></section>}
       <section className="content-section">
         <div className="section-heading"><div><h2>กรณีที่บันทึกไว้</h2></div></div>
         {problem && <div className="alert alert-error" role="alert"><span>{problem}</span>{mode === "hosted" && <Link to="/login">เข้าสู่ระบบอีกครั้ง</Link>}</div>}
@@ -109,7 +109,6 @@ export function DashboardPage({ mode }: { mode: Mode }) {
           </div>
         )}
       </section>
-      {mode === "demo" && <p className="demo-storage-note">ข้อมูลตัวอย่างบันทึกไว้ในเบราว์เซอร์นี้เท่านั้นและไม่เชื่อมกับบัญชีออนไลน์</p>}
     </>
   );
 }

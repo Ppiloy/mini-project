@@ -21,13 +21,30 @@ async function printReport(page: import("@playwright/test").Page, name: string) 
   await mkdir(dirname(pdfPath), { recursive: true });
   await expect(page.locator(".site-footer")).toContainText(educationalNotice);
   await expect(page.locator(".report-footer")).toBeHidden();
-  await expect(page.locator(".worksheet-evidence-empty h2")).toBeVisible();
+  const evidence = page.getByRole("region", { name: "เอกสารประกอบที่บันทึกกับผลนี้" });
+  const evidenceHeading = evidence.getByRole("heading", { name: "เอกสารประกอบที่บันทึกกับผลนี้" });
+  const emptyInventory = evidence.getByText("ไม่มีไฟล์แนบในผลคำนวณที่บันทึกไว้นี้", { exact: true });
+  const declaration = evidence.locator(".submission-declaration");
+  const hasDeclaration = await declaration.count() > 0;
+  const hasEmptyInventory = await emptyInventory.count() > 0;
+  await expect(evidence).toBeVisible();
+  await expect(evidenceHeading).toBeVisible();
+  if (hasDeclaration) {
+    await expect(declaration).toBeVisible();
+    await expect(declaration).toContainText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว");
+  }
+  if (hasEmptyInventory) await expect(emptyInventory).toBeVisible();
   await page.emulateMedia({ media: "print" });
   await expect(page.locator(".site-footer")).toBeHidden();
   await expect(page.locator(".report-footer")).toBeVisible();
   await expect(page.locator(".report-footer")).toHaveText(educationalNotice);
-  await expect(page.locator(".worksheet-evidence-empty h2")).toBeHidden();
-  await expect(page.locator(".worksheet-evidence-empty .empty-evidence")).toBeVisible();
+  await expect(evidence).toBeVisible();
+  await expect(evidenceHeading).toBeVisible();
+  if (hasDeclaration) {
+    await expect(declaration).toBeVisible();
+    await expect(declaration).toContainText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว");
+  }
+  if (hasEmptyInventory) await expect(emptyInventory).toBeVisible();
   await page.evaluate("window.dispatchEvent(new Event('beforeprint'))");
   await page.screenshot({ path: screenshotPath, fullPage: true });
   const pdf = await page.pdf({ path: pdfPath, format: "A4", printBackground: true });

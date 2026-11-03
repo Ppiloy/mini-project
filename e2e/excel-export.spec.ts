@@ -65,9 +65,9 @@ test("report workbook preserves the saved source, country, total, provenance, an
   expect(countryHeading).toBeDefined();
   if (!countryHeading) throw new Error("The country worksheet section is missing.");
   const countryHeader = sheet.getRow(countryHeading.number + 1);
-  expect(countryHeader.getCell(1).value).toBe("(M) - ประเทศ");
-  expect(countryHeader.getCell(5).value).toBe("(Q) - เครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย");
-  const sourceHeader = rowWithValue(sheet, "(A) - ปีภาษีที่เกิดเงินได้");
+  expect(countryHeader.getCell(1).value).toBe("ประเทศ (M)");
+  expect(countryHeader.getCell(5).value).toBe("เครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย (Q)");
+  const sourceHeader = rowWithValue(sheet, "ปีภาษีที่เกิดเงินได้ (A)");
   expect((sheet.views[0] as { ySplit?: number } | undefined)?.ySplit).toBe(sourceHeader?.number);
   expect(sheet.autoFilter).toBe(`A${sourceHeader?.number}:I${(sourceHeader?.number ?? 0) + draft.sources.length}`);
   const vietnam = sheet.getRows(countryHeader.number + 1, sheet.rowCount - countryHeader.number - 1)
@@ -260,9 +260,9 @@ test("FX provenance exports as exact text and only safe source URLs become reada
     if (value && typeof value === "object" && "hyperlink" in value) links.push({ text: value.text, hyperlink: value.hyperlink });
   }));
   expect(links).toEqual([{ text: "แหล่งอัตราแลกเปลี่ยน", hyperlink: "https://fx.example.test/rate/2025-01-01" }]);
-  const originalIncomeRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(2).value === "(D) - จำนวนเงินได้ในต่างประเทศ");
+  const originalIncomeRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(2).value === "จำนวนเงินได้ในต่างประเทศ (D)");
   expect(originalIncomeRow?.getCell(3).numFmt).toBe("#,##0.00;[Red]-#,##0.00");
-  const originalTaxRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(2).value === "(E) - จำนวนภาษีชำระในต่างประเทศ");
+  const originalTaxRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(2).value === "จำนวนภาษีชำระในต่างประเทศ (E)");
   expect(originalTaxRow?.getCell(3).numFmt).toBe("#,##0.00;[Red]-#,##0.00");
   const actualPaidRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(2).value === "ภาษีที่ชำระทั้งหมดตามหลักฐาน");
   expect(actualPaidRow?.getCell(3).value).toBe(30);
@@ -318,4 +318,54 @@ test("workbook preserves frozen residence periods and inclusive per-year day tot
   expect(rowWithValue(sheet, "ปี พ.ศ. 2568 (ค.ศ. 2025) · ปีที่เกิดเงินได้")?.getCell(3).value).toBe("180 วัน · ครบเกณฑ์ 180 วันตามมาตรา 41");
   expect(rowWithValue(sheet, "ข้อสังเกตช่วงพำนัก")?.getCell(3).value).toBe("นับวันเริ่มต้นและวันสิ้นสุดรวมกัน และนับวันปฏิทินที่ซ้ำกันเพียงครั้งเดียว สรุปวันพำนักนี้แยกจากปีภาษีที่ใช้ยื่น และไม่ได้ยืนยันการรองรับการคำนวณ สิทธิ FTC หรือสิทธิตาม DTA");
   expect(Number(rowWithValue(sheet, "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย")?.getCell(2).value)).toBe(143544.3);
+});
+
+test("saved declaration-only residence stays explicitly unverified in the report and workbook", async ({ page }, testInfo) => {
+  const now = "2026-10-14T00:00:00.000Z";
+  const caseId = "excel-declared-residence-case";
+  const snapshotId = "excel-declared-residence-snapshot";
+  const draft = structuredClone(partialRemittanceFixture.draft);
+  draft.id = caseId;
+  draft.createdAt = now;
+  draft.updatedAt = now;
+  draft.residenceYears = [{ earnedTaxYear: 2025, mode: "declared", declaration: "at_least_180_days" }];
+  draft.sources = draft.sources.map((source) => {
+    const normalizedSource = { ...source, residenceDaysInEarnedYear: null };
+    return { ...normalizedSource, eligibilityConfirmedInputFingerprint: sourceEligibilityFingerprint(normalizedSource) };
+  });
+  draft.thaiTax.confirmedInputFingerprint = taxInputFingerprint(draft);
+  const snapshot = createCalculationSnapshot({ id: snapshotId, caseId, revision: draft.revision, kind: "preview", inputs: draft, evidence: [], createdAt: now });
+  const record: FtcCaseRecord = {
+    id: caseId, ownerId: "demo-taxpayer", status: "draft", draft, assignedOfficerId: null,
+    submittedSnapshotId: null, submittedAt: null, createdAt: now, updatedAt: now,
+  };
+  await page.addInitScript(({ savedSnapshot, caseRecord }) => {
+    sessionStorage.setItem("ftc.demo.persona", "taxpayer");
+    localStorage.setItem("ftc.prototype.fixture.v1", JSON.stringify({ cases: [caseRecord], snapshots: [savedSnapshot], attachments: [] }));
+  }, { savedSnapshot: snapshot, caseRecord: record });
+  await page.goto(`/demo/reports/${snapshotId}`);
+
+  const worksheetDetails = page.locator(".result-worksheet-details");
+  if (await worksheetDetails.count()) await worksheetDetails.locator(":scope > summary").click();
+  const summary = page.locator(".worksheet-residence-summary");
+  await expect(summary).toContainText("2568 · ปีที่เกิดเงินได้");
+  await expect(summary).toContainText("ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ · ไม่มีจำนวนวันแน่นอน");
+  await expect(summary).not.toContainText(/180 วัน · (?:ครบ|ต่ำกว่า)เกณฑ์/);
+  await expect(page.locator(".worksheet-source-meta").first()).toContainText("ดูข้อมูลวันพำนักปี พ.ศ. 2568");
+
+  const downloadReady = page.waitForEvent("download");
+  await page.getByRole("button", { name: "ส่งออก Excel", exact: true }).click();
+  const download = await downloadReady;
+  const workbookPath = testInfo.outputPath("declared-residence-report.xlsx");
+  await mkdir(dirname(workbookPath), { recursive: true });
+  await download.saveAs(workbookPath);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(workbookPath);
+  const sheet = workbook.getWorksheet("ผลคำนวณ");
+  expect(sheet).toBeDefined();
+  if (!sheet) throw new Error("The saved report workbook is missing its result worksheet.");
+  expect(rowWithValue(sheet, "ปี พ.ศ. 2568 (ค.ศ. 2025) · ปีที่เกิดเงินได้")?.getCell(3).value)
+    .toBe("ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ · ไม่มีจำนวนวันแน่นอน");
+  expect(rowWithValue(sheet, "ข้อสังเกตช่วงพำนัก")?.getCell(3).value)
+    .toContain("นับวันแรกและวันสุดท้ายรวมกัน");
 });

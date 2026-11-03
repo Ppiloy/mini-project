@@ -1,4 +1,4 @@
-import type { EvidenceKind, ForeignIncomeSourceDraft } from "./contracts.js";
+import type { EvidenceKind, ForeignIncomeSourceDraft, FxRateType, FxSourceKind } from "./contracts.js";
 
 export const WORKSHEET_LABELS = {
   A: "ปีภาษีที่เกิดเงินได้",
@@ -45,8 +45,30 @@ export const EVIDENCE_LABELS: Readonly<Record<EvidenceKind, string>> = {
   other: "เอกสารอื่น",
 };
 
+export const AVAILABLE_EVIDENCE_STATEMENT_V1 = "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม";
+
 export function worksheetLabel(letter: WorksheetLetter): string {
-  return `(${letter}) - ${WORKSHEET_LABELS[letter]}`;
+  return `${WORKSHEET_LABELS[letter]} (${letter})`;
+}
+
+export function fxRateTypeLabel(value: FxRateType | null): string {
+  switch (value) {
+    case "bank_buying": return "อัตรารับซื้อของธนาคาร";
+    case "bot_average_buying": return "อัตราเฉลี่ยรับซื้อของธนาคารแห่งประเทศไทย";
+    case "manual": return "อัตราที่ผู้ใช้กรอกเอง";
+    case "fixture": return "อัตราที่กำหนดไว้ในตัวอย่าง";
+    default: return "ไม่ระบุประเภทอัตรา";
+  }
+}
+
+export function fxSourceKindLabel(value: FxSourceKind | null): string {
+  switch (value) {
+    case "bank": return "ธนาคาร";
+    case "bot": return "ธนาคารแห่งประเทศไทย";
+    case "user_supplied": return "ผู้ใช้ระบุ";
+    case "fixture": return "ตัวอย่างเพื่อการศึกษา";
+    default: return "ไม่ระบุแหล่งอัตรา";
+  }
 }
 
 export const COUNTRY_CHOICES = [

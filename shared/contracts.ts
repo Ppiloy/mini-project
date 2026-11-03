@@ -104,6 +104,11 @@ export interface ResidencePeriodDraft {
   endDate: IsoDate | null;
 }
 
+/** Residence facts for one earned-income year; a declaration has no fabricated exact day count. */
+export type ResidenceYearDraft =
+  | { earnedTaxYear: number; mode: "periods"; periods: ResidencePeriodDraft[] }
+  | { earnedTaxYear: number; mode: "declared"; declaration: "at_least_180_days" };
+
 export interface FtcCaseDraft {
   id: CaseId | null;
   taxYear: number | null;
@@ -112,6 +117,8 @@ export interface FtcCaseDraft {
   sources: ForeignIncomeSourceDraft[];
   /** Optional for backward compatibility with drafts and snapshots saved before period entry. */
   residencePeriods?: ResidencePeriodDraft[];
+  /** Optional legacy boundary: when present, per-earned-year records replace caller day totals. */
+  residenceYears?: ResidenceYearDraft[];
   revision: number;
   createdAt: IsoDateTime | null;
   updatedAt: IsoDateTime | null;
@@ -159,6 +166,30 @@ export interface FrozenEvidenceReference {
   mediaType: string;
   byteSize: number;
   sha256: string;
+}
+
+export interface MissingEvidenceGroup {
+  sourceId: SourceId | null;
+  sourceIndex: number | null;
+  missingKinds: EvidenceKind[];
+}
+
+export interface SubmissionAcknowledgement {
+  version: 1;
+  acknowledged: boolean;
+  revision: number;
+  previewSnapshotId: SnapshotId;
+}
+
+/** Immutable taxpayer declaration recorded only on newly submitted snapshots. */
+export interface SubmissionMetadata {
+  version: 1;
+  statement: string;
+  acknowledgedBy: UserId;
+  acknowledgedAt: IsoDateTime;
+  revision: number;
+  previewSnapshotId: SnapshotId;
+  missingEvidence: MissingEvidenceGroup[];
 }
 
 export interface PolicyReference {
@@ -219,6 +250,8 @@ export interface CalculationSnapshot {
   evidence: FrozenEvidenceReference[];
   policy: PolicyReference;
   createdAt: IsoDateTime;
+  /** Null for previews and historical submissions created before declarations were recorded. */
+  submissionMetadata?: SubmissionMetadata | null;
 }
 
 export interface ValidationMessage {
@@ -302,6 +335,15 @@ const frozenEvidenceSchema: z.ZodType<FrozenEvidenceReference> = z.object({
   byteSize: z.number().int().positive().max(3 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 
+const missingEvidenceGroupSchema: z.ZodType<MissingEvidenceGroup> = z.object({
+  sourceId: z.string().min(1).nullable(), sourceIndex: z.number().int().nonnegative().nullable(),
+  missingKinds: z.array(z.enum(["foreign_income", "foreign_tax", "remittance", "thai_tax", "other"])),
+}).strict();
+const submissionMetadataSchema: z.ZodType<SubmissionMetadata> = z.object({
+  version: z.literal(1), statement: z.string().min(1), acknowledgedBy: z.string().min(1), acknowledgedAt: dateTime,
+  revision: z.number().int().nonnegative(), previewSnapshotId: z.string().min(1), missingEvidence: z.array(missingEvidenceGroupSchema),
+}).strict();
+
 const policyReferenceSchema: z.ZodType<PolicyReference> = z.object({
   id: z.string().min(1), taxYear: z.number().int(), effectiveFrom: date.nullable(), effectiveTo: date.nullable(),
   sourceUrls: z.array(z.string().url()), reviewedAt: date.nullable(), assumptions: z.array(z.string()), roundingPolicy: z.string(),
@@ -330,6 +372,7 @@ export const calculationSnapshotSchema: z.ZodType<CalculationSnapshot> = z.objec
   id: z.string().min(1).max(100), caseId: z.string().min(1).max(100), revision: z.number().int().nonnegative(),
   kind: z.enum(["preview", "submitted"]), inputs: draftSchema, result: calculationResultSchema,
   evidence: z.array(frozenEvidenceSchema), policy: policyReferenceSchema, createdAt: dateTime,
+  submissionMetadata: submissionMetadataSchema.nullable().optional(),
 }).strict();
 
 const auditEventSchema: z.ZodType<AuditEventSummary> = z.object({

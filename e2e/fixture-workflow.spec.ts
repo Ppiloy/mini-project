@@ -12,6 +12,14 @@ async function advanceToReview(page: import("@playwright/test").Page) {
   }
 }
 
+async function addResidenceYear(page: import("@playwright/test").Page, startDate = "2025-01-01", endDate = "2025-12-31") {
+  await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
+  await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้", exact: true }).click();
+  await page.getByRole("button", { name: "เพิ่มช่วงวันที่พำนัก ปี พ.ศ. 2568 (ค.ศ. 2025)", exact: true }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill(startDate);
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill(endDate);
+}
+
 async function openPartialRemittance(page: import("@playwright/test").Page) {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
@@ -55,14 +63,18 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.goto(`/demo/cases/${caseId}/result?preview=${previewId}`);
   await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี" })).toContainText("2,500.00 บาท");
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
+  await page.getByRole("checkbox", { name: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม" }).check();
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
   await expect(dashboardCard).toContainText("ส่งแล้ว · ข้อมูลตัวอย่าง");
   await expect(dashboardCard).toContainText("2,500.00");
   await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page).toHaveURL(new RegExp(`/demo/reports/[^/]+$`));
   await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม", { exact: true })).toBeVisible();
+  await expect(page.getByText("ตัวอย่างหลักฐาน.pdf", { exact: true })).toHaveCount(4);
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.reload();
   await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
@@ -104,8 +116,10 @@ test("taxpayer dashboard never presents a stale draft preview or a ready amount 
   await expect(card).not.toContainText("2,500.00");
   await expect(card.getByRole("link", { name: "ดูรายงาน" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
+  await page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   const incompleteCaseId = new URL(page.url()).pathname.split("/")[3]!;
+  await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
+  await addResidenceYear(page);
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
@@ -125,7 +139,7 @@ test("editing Thai tax invalidates its confirmation and prevents a ready preview
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("100000.01");
+  await page.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("100000.01");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
@@ -170,7 +184,7 @@ test("each review confirmation is one keyboard-operable control that persists af
 test("form actions have no disabled first Back, duplicate mobile actions, or revision status", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
+  await page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   await expect(page.getByRole("button", { name: "ย้อนกลับ" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "ถัดไป", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "ถัดไป", exact: true })).toHaveCount(1);
@@ -238,29 +252,33 @@ test("source deletion keeps linked evidence reachable and asks before deleting a
   await expect(sourceCard).toHaveCount(0);
 });
 
-test("zero eligible tax permits one combined source file with income and remittance checklist only", async ({ page }) => {
+test("zero foreign tax permits missing categories under the available-evidence declaration", async ({ page }) => {
   await openPartialRemittance(page);
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("0.00");
+  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("0.00");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
   await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานเงินได้" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
-  await expect(page.getByRole("checkbox", { name: "หลักฐานภาษีต่างประเทศ" })).toHaveCount(0);
+  await expect(page.locator(".evidence-checklist")).toHaveCount(0);
+  const sourceEvidenceCard = page.locator(".evidence-card").filter({ hasText: "แหล่งเงินได้ 1" });
+  await expect(sourceEvidenceCard).toContainText("หลักฐานเงินได้");
+  await expect(sourceEvidenceCard).toContainText("หลักฐานการนำเงินเข้าไทย");
+  await expect(sourceEvidenceCard.locator(".evidence-missing")).not.toContainText("หลักฐานภาษีต่างประเทศ");
 
   await page.getByLabel("แนบ: เอกสารอื่น").setInputFiles({ name: "รายงานรวม.pdf", mimeType: "application/pdf", buffer: Buffer.from("combined source evidence") });
   await expect(page.getByText("รายงานรวม.pdf", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
+  await page.getByRole("checkbox", { name: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม" }).check();
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
 });
 
 test("zero remittance needs no source evidence checklist", async ({ page }) => {
   await openPartialRemittance(page);
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("0");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("0");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -272,7 +290,7 @@ test("retired transfer-total and classification controls are absent", async ({ p
   await openPartialRemittance(page);
   await expect(page.getByLabel("ยอดโอนทั้งหมด (ข้อมูลประกอบ)")).toHaveCount(0);
   await expect(page.getByLabel("ลักษณะการโอน")).toHaveCount(0);
-  await expect(page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toHaveValue("25000.00");
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toHaveValue("25000.00");
 });
 
 test("unsupported tax year stays visible and does not produce an ordinary credit result", async ({ page }) => {
@@ -292,40 +310,39 @@ test("unsupported tax year stays visible and does not produce an ordinary credit
 
 test("zero D and F greater than D are blocked with source-specific messages", async ({ page }) => {
   await openPartialRemittance(page);
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("-1");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("-1");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await expect(page.getByText(/แหล่งเงินได้ 1.*ตรวจสอบรูปแบบหรือค่าของ\(D\) - จำนวนเงินได้ในต่างประเทศ/)).toBeVisible();
-  const negativeDLink = page.getByRole("button", { name: /ไปยัง\(D\) - จำนวนเงินได้ในต่างประเทศ.*แหล่งเงินได้ 1/ });
+  await expect(page.getByText(/แหล่งเงินได้ 1.*ตรวจสอบรูปแบบหรือค่าของจำนวนเงินได้ในต่างประเทศ \(D\)/)).toBeVisible();
+  const negativeDLink = page.getByRole("button", { name: /ไปยังจำนวนเงินได้ในต่างประเทศ \(D\).*แหล่งเงินได้ 1/ });
   await expect(negativeDLink).toBeVisible();
   await negativeDLink.click();
-  await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toBeFocused();
 
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("0");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("0");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   await expect(page.getByText(/แหล่งเงินได้ 1.*เงินได้ต้นทางต้องมากกว่าศูนย์เพื่อใช้เป็นตัวหาร/)).toBeVisible();
-  const zeroDLink = page.getByRole("button", { name: /ไปยัง\(D\) - จำนวนเงินได้ในต่างประเทศ.*แหล่งเงินได้ 1/ });
+  const zeroDLink = page.getByRole("button", { name: /ไปยังจำนวนเงินได้ในต่างประเทศ \(D\).*แหล่งเงินได้ 1/ });
   await zeroDLink.click();
-  await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toBeFocused();
 
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("50000.01");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("50000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("50000.01");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   await expect(page.getByText(/แหล่งเงินได้ 1.*เงินได้ที่นำเข้าต้องไม่เกินเงินได้ต้นทาง/)).toBeVisible();
-  const fLink = page.getByRole("button", { name: /ไปยัง\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ.*แหล่งเงินได้ 1/ });
+  const fLink = page.getByRole("button", { name: /ไปยังจำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\).*แหล่งเงินได้ 1/ });
   await fLink.click();
-  await expect(page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toBeFocused();
 });
 
 test("missing original-currency FX is linked to its source and remains saveable", async ({ page }) => {
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-07-19");
+  await page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
+  await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
+  await addResidenceYear(page);
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "＋ เพิ่มแหล่งเงินได้", exact: true }).click();
   const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
@@ -334,9 +351,9 @@ test("missing original-currency FX is linked to its source and remains saveable"
   await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2025-01-01");
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("original_currency");
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("100");
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("20");
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("50");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("100");
+  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("20");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("50");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-01-01");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
@@ -345,14 +362,14 @@ test("missing original-currency FX is linked to its source and remains saveable"
   const fxErrorLink = page.getByRole("button", { name: "ไปยังอัตราแลกเปลี่ยนของแหล่งเงินได้ 1" });
   await expect(fxErrorLink).toBeVisible();
   await fxErrorLink.click();
-  await expect(page.getByLabel("อัตรา THB ต่อหน่วยฐาน")).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
 });
 
 test("an unsupported but well-formed draft saves, reloads, and warns before leaving unsaved edits", async ({ page }) => {
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
+  await page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
   await page.getByRole("button", { name: "บันทึกร่าง" }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
@@ -374,7 +391,7 @@ test("the fixture entry and form work by keyboard at a phone viewport", async ({
   await taxpayerEntry.focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/demo\/app$/);
-  const create = page.getByRole("button", { name: "เริ่มคำนวณใหม่" });
+  const create = page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true });
   await create.focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
@@ -384,11 +401,9 @@ test("the fixture entry and form work by keyboard at a phone viewport", async ({
 
 test("Next explains the missing source while an incomplete draft can still be saved", async ({ page }) => {
   await enterTaxpayerDemo(page);
-  await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
+  await page.locator(".dashboard-heading").getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-07-19");
+  await addResidenceYear(page, "2025-01-01", "2025-07-19");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
 
@@ -399,14 +414,14 @@ test("Next explains the missing source while an incomplete draft can still be sa
   await page.getByRole("button", { name: "＋ เพิ่มแหล่งเงินได้", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText(/แหล่งเงินได้ 1.*กรุณากรอก\(B\) - ประเทศแหล่งเงินได้/)).toBeVisible();
+  await expect(page.getByText(/แหล่งเงินได้ 1.*กรุณากรอกประเทศแหล่งเงินได้ \(B\)/)).toBeVisible();
   await page.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await expect(page.getByText(/แหล่งเงินได้ 1.*กรุณากรอก\(B\) - ประเทศแหล่งเงินได้/)).toBeVisible();
+  await expect(page.getByText(/แหล่งเงินได้ 1.*กรุณากรอกประเทศแหล่งเงินได้ \(B\)/)).toBeVisible();
 
-  const countryLink = page.getByRole("button", { name: "ไปยัง(B) - ประเทศแหล่งเงินได้ของแหล่งเงินได้ 1" });
+  const countryLink = page.getByRole("button", { name: /ไปยังประเทศแหล่งเงินได้ \(B\) ?ของแหล่งเงินได้ 1/ });
   await countryLink.click();
   const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
   await expect(country).toBeFocused();
@@ -417,24 +432,24 @@ test("Next explains the missing source while an incomplete draft can still be sa
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("worksheet_thb");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText("แหล่งเงินได้ 1 (เวียดนาม · 40(1) เงินเดือนหรือค่าจ้าง): กรุณากรอก(D) - จำนวนเงินได้ในต่างประเทศให้ครบก่อนดำเนินการต่อ")).toBeVisible();
-  const grossIncomeLink = page.getByRole("button", { name: /ไปยัง\(D\) - จำนวนเงินได้ในต่างประเทศ.*แหล่งเงินได้ 1/ });
+  await expect(page.getByText(/แหล่งเงินได้ 1 \(เวียดนาม · 40\(1\) เงินเดือนหรือค่าจ้าง\): กรุณากรอกจำนวนเงินได้ในต่างประเทศ \(D\)/)).toBeVisible();
+  const grossIncomeLink = page.getByRole("button", { name: /ไปยังจำนวนเงินได้ในต่างประเทศ \(D\).*แหล่งเงินได้ 1/ });
   await grossIncomeLink.click();
-  await expect(page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ })).toBeFocused();
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("4000");
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
+  await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toBeFocused();
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("50000");
+  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("4000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("25000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-02-15");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
-  await expect(page.getByText("กรุณากรอก(J) - เงินได้พึงประเมินในประเทศไทยให้ครบก่อนดำเนินการต่อ")).toBeVisible();
-  const jLink = page.getByRole("button", { name: "ไปยัง(J) - เงินได้พึงประเมินในประเทศไทย" });
+  await expect(page.getByText("กรุณากรอกเงินได้พึงประเมินในประเทศไทย (J) ให้ครบก่อนดำเนินการต่อ")).toBeVisible();
+  const jLink = page.getByRole("button", { name: "ไปยังเงินได้พึงประเมินในประเทศไทย (J)" });
   await jLink.click();
-  await expect(page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toBeFocused();
-  await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
-  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("10000");
+  await expect(page.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ })).toBeFocused();
+  await page.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("100000");
+  await page.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("10000");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "เครดิตภาษีที่คำนวณได้ตามประเทศ" })).toBeVisible();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();

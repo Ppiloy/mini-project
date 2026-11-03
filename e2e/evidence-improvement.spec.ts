@@ -78,13 +78,16 @@ test("demo evidence previews and downloads the original file after reload and of
   }
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
+  await page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว/ }).check();
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
 
   await page.goto("/demo");
   await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
   await page.getByRole("link", { name: "ตรวจทาน" }).click();
   const officerRow = page.locator(".file-list li").filter({ hasText: name });
+  await expect(page.getByText("คำยืนยันเรื่องเอกสารของผู้ส่ง · เวอร์ชัน 1")).toBeVisible();
+  await expect(page.getByText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม", { exact: true })).toBeVisible();
   await expect(officerRow).toBeVisible();
   await expect(officerRow.getByRole("button", { name: "ลบ", exact: true })).toHaveCount(0);
   await officerRow.getByRole("button", { name: "ดูตัวอย่าง", exact: true }).click();
@@ -110,6 +113,7 @@ test("demo submission rejects stale evidence metadata after browser file bytes a
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
+  await page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว/ }).check();
 
   await page.evaluate(`(async () => {
     const databases = await indexedDB.databases();
@@ -123,8 +127,12 @@ test("demo submission rejects stale evidence metadata after browser file bytes a
   })()`);
 
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByRole("alert")).toContainText("ไฟล์ต้นฉบับบางรายการไม่มีอยู่ในอุปกรณ์นี้");
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("ไฟล์ต้นฉบับบางรายการไม่มีอยู่หรือข้อมูลไม่ตรงกับไฟล์ในอุปกรณ์นี้");
+  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("ผลนี้เป็นข้อมูลก่อนการแก้ไขล่าสุด", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสาร/ })).toHaveCount(0);
+  await expect(page.locator(".submission-available-inventory")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true })).toBeDisabled();
 
   await page.goto(`/demo/cases/${caseId}/edit`);
   await advanceToReview(page);

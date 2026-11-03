@@ -1,4 +1,4 @@
-import type { AttachmentMetadata, AuditEventSummary, CalculationSnapshot, CaseWorkflowDetail, FtcCaseDraft, FtcCaseRecord, SnapshotSummary } from "../../shared/contracts.js";
+import type { AttachmentMetadata, AuditEventSummary, CalculationSnapshot, CaseWorkflowDetail, FtcCaseDraft, FtcCaseRecord, SnapshotSummary, SubmissionMetadata } from "../../shared/contracts.js";
 import { DEMO_POLICY } from "../../shared/policy.js";
 import type { PgQueryable } from "../postgres.js";
 import { loadCaseRecord, type CaseRow } from "../app.js";
@@ -13,6 +13,7 @@ export interface SnapshotRow {
   id: string; case_id: string; revision: number; kind: CalculationSnapshot["kind"];
   inputs: FtcCaseDraft | string; result: CalculationSnapshot["result"] | string;
   evidence: CalculationSnapshot["evidence"] | string; policy: CalculationSnapshot["policy"] | string;
+  submission_metadata?: SubmissionMetadata | string | null;
   policy_id: string; engine_version: string; created_at: Date | string;
 }
 
@@ -27,7 +28,8 @@ function jsonValue<T>(value: T | string): T { return typeof value === "string" ?
 export function snapshotRecord(row: SnapshotRow): CalculationSnapshot {
   return { id: row.id, caseId: row.case_id, revision: row.revision, kind: row.kind,
     inputs: jsonValue(row.inputs), result: jsonValue(row.result), evidence: jsonValue(row.evidence),
-    policy: jsonValue(row.policy), createdAt: new Date(row.created_at).toISOString() };
+    policy: jsonValue(row.policy), createdAt: new Date(row.created_at).toISOString(),
+    submissionMetadata: row.submission_metadata == null ? null : jsonValue(row.submission_metadata) };
 }
 
 export async function getAttachments(query: Pick<PgQueryable, "query">, caseId: string, markerId: string): Promise<{ rows: AttachmentRow[]; metadata: AttachmentMetadata[] }> {

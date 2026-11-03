@@ -7,6 +7,15 @@ import { assertFocusedSkipLinkIsScreenOnly } from "./print-acceptance.js";
 
 const proofBytes = (label: string) => Buffer.from(`%PDF-1.7\n% fictional acceptance evidence: ${label}\n%%EOF\n`, "ascii");
 
+async function enterResidenceYear(page: import("@playwright/test").Page, year: number, startDate: string, endDate: string, expectedDays: number) {
+  await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill(String(year));
+  await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
+  await page.getByRole("button", { name: `เพิ่มช่วงวันที่พำนัก ปี พ.ศ. ${year + 543} (ค.ศ. ${year})` }).click();
+  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill(startDate);
+  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill(endDate);
+  await expect(page.getByRole("status", { name: `สรุปวันพำนัก ปี พ.ศ. ${year + 543} (ค.ศ. ${year})` })).toContainText(`${expectedDays} วัน`);
+}
+
 test("real taxpayer journey persists a server-assigned source, evidence, calculation, submitted snapshot and officer audit", async ({ browser, page }, testInfo) => {
   const seed = await operatorSeed();
   const taxpayerA = seed.credentials.find((item) => item.loginName === "taxpayer-demo-a")!;
@@ -16,9 +25,7 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const caseId = await createCase(page);
 
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-12-31");
+  await enterResidenceYear(page, 2025, "2025-01-01", "2025-12-31", 365);
   await advance(page);
   await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
   const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
@@ -27,9 +34,9 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2025-01-15");
   await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("50000");
+  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("5000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("25000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
   const firstSourceSave = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
   await advance(page);
@@ -40,16 +47,18 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   const sourceId = sourceEnvelope.data?.case?.draft?.sources?.[0]?.id;
   expect(sourceId).toMatch(/^[0-9a-f-]{36}$/i);
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toBeVisible();
-  await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
-  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
+  await page.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("100000");
+  await page.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("20000");
   await advance(page);
   await advance(page);
   await expect(page.getByRole("heading", { name: "หลักฐานและตรวจทาน" })).toBeVisible();
   await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
   await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานเงินได้" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานภาษีต่างประเทศ" }).check();
-  await page.getByRole("checkbox", { name: "หลักฐานการนำเงินเข้าไทย" }).check();
+  await expect(page.locator(".evidence-checklist")).toHaveCount(0);
+  const thaiEvidence = page.getByRole("article").filter({ has: page.getByRole("heading", { name: /^ภาษีไทย/ }) });
+  const sourceEvidence = page.getByRole("article").filter({ has: page.getByRole("heading", { name: /^แหล่งเงินได้ 1/ }) });
+  await expect(thaiEvidence.getByText("ยังไม่มีไฟล์แนบ", { exact: true })).toBeVisible();
+  await expect(sourceEvidence.getByText("ยังไม่มีไฟล์แนบ", { exact: true })).toBeVisible();
 
   const uploadedFiles = [
     { name: "thai-tax.pdf", label: "แนบหลักฐานภาษีไทย", kind: "thai_tax" },
@@ -138,14 +147,25 @@ test("real taxpayer journey persists a server-assigned source, evidence, calcula
   expect(Math.min(allocatedFromReference, thaiCapFromReference)).toBe(2_500);
 
   const submitPromise = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/submit`) && response.request().method() === "POST");
+  const evidenceAcknowledgement = page.getByRole("checkbox", { name: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม" });
+  await expect(page.getByText("เมื่อส่งแล้ว รายการจะไปยังเจ้าหน้าที่ที่ได้รับมอบหมายในบัญชีระบบที่เชื่อมต่อ", { exact: true })).toBeVisible();
+  await expect(evidenceAcknowledgement).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
+  await evidenceAcknowledgement.check();
   await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
   const submitResponse = await submitPromise;
-  expect(submitResponse.status()).toBe(200);
-  expect(apiSuccessSchemas.submission.safeParse(await submitResponse.json()).success).toBe(true);
-  await expect(page.getByText("ส่งเข้าคิวจำลองแล้ว")).toBeVisible();
+  const submittedBody = await submitResponse.json();
+  expect(submitResponse.status(), JSON.stringify(submittedBody)).toBe(200);
+  expect(apiSuccessSchemas.submission.safeParse(submittedBody).success).toBe(true);
+  expect(submittedBody.data.snapshot.submissionMetadata.statement).toBe("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม");
+  expect(submittedBody.data.snapshot.submissionMetadata.missingEvidence).toEqual([]);
+  await expect(page.getByText("ส่งให้เจ้าหน้าที่แล้ว", { exact: true })).toBeVisible();
+  await expect(page.getByText("รายการนี้ส่งให้เจ้าหน้าที่ที่ได้รับมอบหมายแล้ว", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "ดูรายงาน" }).click();
   await expect(page.getByRole("heading", { name: "รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ" })).toBeVisible();
   await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
+  await expect(page.getByText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม", { exact: true })).toBeVisible();
+  await expect(page.getByText("foreign-income.pdf", { exact: true })).toBeVisible();
   await expect(page.locator(".print-report")).toContainText("ระบบต้นแบบเพื่อการศึกษา");
   await expect(page.getByText("rd-ftc-demo-2568-v1", { exact: false })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
@@ -259,9 +279,7 @@ test("real API rejects incomplete and unsupported input without inventing an ord
 
   await page.goto(`/app/cases/${caseId}/edit`);
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
-  await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
-  await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2024-01-01");
-  await page.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2024-12-31");
+  await enterResidenceYear(page, 2024, "2024-01-01", "2024-12-31", 366);
   await advance(page);
   await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
   const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
@@ -270,13 +288,13 @@ test("real API rejects incomplete and unsupported input without inventing an ord
   await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("other_unclassified");
   await page.getByLabel("วันที่เกิดเงินได้").fill("2024-03-01");
   await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
-  await page.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("10000");
-  await page.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("1000");
-  await page.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("5000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("10000");
+  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("1000");
+  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("5000");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2024-03-01");
   await advance(page);
-  await page.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("10000");
-  await page.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("1000");
+  await page.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("10000");
+  await page.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("1000");
   await advance(page);
   await advance(page);
   await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
@@ -317,9 +335,7 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     const second = await secondContext.newPage();
     const secondSession = await login(second, credential);
     await first.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
-    await first.getByRole("button", { name: "เพิ่มช่วงเวลา", exact: true }).click();
-    await first.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");
-    await first.getByLabel("วันสุดท้ายที่พำนัก · ช่วงที่ 1").fill("2025-12-31");
+    await enterResidenceYear(first, 2025, "2025-01-01", "2025-12-31", 365);
     await advance(first);
     await first.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก", exact: true }).click();
     const country = first.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
@@ -328,17 +344,17 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     await first.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("40_1");
     await first.getByLabel("วันที่เกิดเงินได้").fill("2025-01-15");
     await first.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
-    await first.getByRole("textbox", { name: /^\(D\) - จำนวนเงินได้ในต่างประเทศ/ }).fill("50000");
-    await first.getByRole("textbox", { name: /^\(E\) - จำนวนภาษีชำระในต่างประเทศ/ }).fill("5000");
-    await first.getByRole("textbox", { name: /^\(F\) - จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ/ }).fill("25000");
+    await first.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("50000");
+    await first.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("5000");
+    await first.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("25000");
     await first.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-07-01");
     await advance(first);
-    await first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("100000");
-    await first.getByRole("textbox", { name: /^\(L\) - ภาษีที่ต้องชำระในประเทศไทย/ }).fill("20000");
+    await first.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("100000");
+    await first.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("20000");
     const initialSave = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
     await first.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
     expect((await initialSave).status()).toBe(200);
-    await first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ }).fill("111111");
+    await first.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("111111");
     const latestEnvelope = (await browserApi(second, `/api/cases/${caseId}`)).json as { data: { case: { draft: Record<string, unknown> & { revision: number } } } };
     const latestDraft = latestEnvelope.data.case.draft;
     const independentSave = await browserApi(second, `/api/cases/${caseId}/draft`, {
@@ -356,7 +372,7 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     expect((await conflictResponsePromise).status()).toBe(409);
     await expect(first.locator(".conflict-panel")).toContainText("ไม่บันทึกทับข้อมูลที่บันทึกจากอีกหน้าต่างโดยอัตโนมัติ");
     await first.getByRole("button", { name: "นำการแก้ไขปัจจุบันไปใช้ต่อ" }).click();
-    await expect(first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toHaveValue("111111");
+    await expect(first.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ })).toHaveValue("111111");
     await expect(first.locator(".conflict-panel")).toBeHidden();
     const reapplyResponsePromise = first.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
     await first.getByRole("button", { name: "บันทึกร่าง" }).click();
@@ -366,7 +382,7 @@ test("real stale save offers deliberate reapply and keeps typed values until sav
     await expect(first.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
     await first.reload();
     for (let step = 0; step < 2; step += 1) await advance(first);
-    await expect(first.getByRole("textbox", { name: /^\(J\) - เงินได้พึงประเมินในประเทศไทย/ })).toHaveValue("111111");
+    await expect(first.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ })).toHaveValue("111111");
     const saved = await browserApi(first, `/api/cases/${caseId}`);
     const savedDraft = (saved.json as { data: { case: { draft: { domesticAssessableIncome: string } } } }).data.case.draft;
     expect(savedDraft.domesticAssessableIncome).toBe("111111");

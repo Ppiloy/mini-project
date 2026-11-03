@@ -2,7 +2,8 @@ import Decimal from "decimal.js";
 import type { Row as ExcelRow, Worksheet as ExcelWorksheet } from "exceljs";
 import type { CalculationSnapshot as SavedCalculationSnapshot, EvidenceKind, ForeignIncomeSourceDraft } from "../../../shared/contracts.js";
 import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, worksheetLabel, WORKSHEET_SECTIONS } from "../../../shared/labels.js";
-import { calculateResidenceDaysInYear, validateResidencePeriods } from "../../../shared/residence.js";
+import { missingEvidenceInventory } from "../../../shared/evidenceInventory.js";
+import { assessResidenceYear, calculateResidenceDaysInYear, validateResidencePeriods } from "../../../shared/residence.js";
 import { formatDate } from "../../components/money.js";
 import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../../shared/foreignTax.js";
 
@@ -163,6 +164,33 @@ function appendSourceDetails(sheet: ExcelWorksheet, snapshot: SavedCalculationSn
 }
 
 function appendResidenceSummary(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot): void {
+  const residenceYears = snapshot.inputs.residenceYears;
+  if (residenceYears !== undefined) {
+    section(sheet, "สรุปช่วงเวลาที่พำนักตามปีที่เกิดเงินได้", 3);
+    const years = [...new Set([
+      ...residenceYears.map((record) => record.earnedTaxYear),
+      ...snapshot.inputs.sources.flatMap((source) => source.earnedTaxYear === null ? [] : [source.earnedTaxYear]),
+    ])].sort((left, right) => left - right);
+    for (const year of years) {
+      const record = residenceYears.find((item) => item.earnedTaxYear === year);
+      if (!record) {
+        addDetailsRow(sheet, "", `ปี พ.ศ. ${year + 543} (ค.ศ. ${year}) · ปีที่เกิดเงินได้`, "ยังไม่มีข้อมูลวันพำนักสำหรับปีนี้");
+        continue;
+      }
+      if (record.mode === "declared") {
+        addDetailsRow(sheet, "", `ปี พ.ศ. ${year + 543} (ค.ศ. ${year}) · ปีที่เกิดเงินได้`, "ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ · ไม่มีจำนวนวันแน่นอน");
+        continue;
+      }
+      record.periods.forEach((period, index) => addDetailsRow(sheet, "", `ปี พ.ศ. ${year + 543} (ค.ศ. ${year}) · ช่วงที่ ${index + 1}`, `${period.startDate ?? "ไม่ระบุวันเริ่มต้น"} – ${period.endDate ?? "ไม่ระบุวันสิ้นสุด"}`));
+      const assessment = assessResidenceYear(record, year);
+      const total = assessment.status !== "computed" || assessment.days === null
+        ? "ช่วงวันที่ไม่ครบหรือไม่ถูกต้อง จึงยังสรุปจำนวนวันไม่ได้"
+        : `${assessment.days} วัน · ${assessment.days >= 180 ? "ครบเกณฑ์ 180 วันตามมาตรา 41" : "ต่ำกว่าเกณฑ์ 180 วันตามมาตรา 41"}`;
+      addDetailsRow(sheet, "", `ปี พ.ศ. ${year + 543} (ค.ศ. ${year}) · สรุปวันพำนัก`, total);
+    }
+    addDetailsRow(sheet, "", "ข้อสังเกตช่วงพำนัก", "ช่วงวันที่นับวันแรกและวันสุดท้ายรวมกัน และนับวันปฏิทินที่ซ้ำกันครั้งเดียว คำยืนยันของผู้ใช้ยังไม่ผ่านการตรวจสอบ รายละเอียดการนับวันจากหลักฐานเข้าออกขึ้นกับข้อเท็จจริงแต่ละกรณี เกณฑ์วันพำนักแยกจากการรองรับของตัวอย่างและสิทธิ FTC หรือ DTA");
+    return;
+  }
   const periods = snapshot.inputs.residencePeriods;
   if (periods === undefined) return;
 
@@ -209,18 +237,23 @@ function appendResidenceSummary(sheet: ExcelWorksheet, snapshot: SavedCalculatio
 
 function addEvidence(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot): void {
   section(sheet, "เอกสารประกอบที่บันทึกกับผลนี้", 3);
-  const appendGroup = (heading: string, files: SavedCalculationSnapshot["evidence"]) => {
+  const missingEvidence = snapshot.submissionMetadata?.missingEvidence ?? missingEvidenceInventory(snapshot.inputs, snapshot.evidence);
+  if (snapshot.submissionMetadata) {
+    addDetailsRow(sheet, "คำยืนยันจากผู้ส่ง", "ข้อความ", snapshot.submissionMetadata.statement);
+    addDetailsRow(sheet, "คำยืนยันจากผู้ส่ง", "บันทึก", `เวอร์ชัน ${snapshot.submissionMetadata.version} · บัญชีผู้ส่ง · ${formatDate(snapshot.submissionMetadata.acknowledgedAt)}`);
+  }
+  const appendGroup = (heading: string, files: SavedCalculationSnapshot["evidence"], sourceIndex: number | null = null) => {
     addDetailsRow(sheet, heading, "", null);
     if (!files.length) {
-      addDetailsRow(sheet, heading, "สถานะ", "ไม่มีหลักฐานแนบในผลคำนวณที่บันทึกไว้นี้");
-      return;
-    }
-    for (const file of files) addDetailsRow(sheet, heading, EVIDENCE_LABELS[file.kind as EvidenceKind], file.displayName);
+      addDetailsRow(sheet, heading, "สถานะ", "ไม่มีไฟล์แนบในผลคำนวณที่บันทึกไว้นี้");
+    } else for (const file of files) addDetailsRow(sheet, heading, EVIDENCE_LABELS[file.kind as EvidenceKind], file.displayName);
+    const missing = missingEvidence.find((group) => group.sourceIndex === sourceIndex)?.missingKinds ?? [];
+    if (missing.length) addDetailsRow(sheet, heading, "หมวดที่ยังไม่มีไฟล์พร้อมใช้งาน", missing.map((kind) => EVIDENCE_LABELS[kind]).join(" · "));
   };
   appendGroup("หลักฐานภาษีไทย", snapshot.evidence.filter((file) => file.sourceId === null && file.kind === "thai_tax"));
-  for (const source of snapshot.inputs.sources) {
+  for (const [sourceIndex, source] of snapshot.inputs.sources.entries()) {
     const name = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
-    appendGroup(name, snapshot.evidence.filter((file) => source.id !== null && file.sourceId === source.id));
+    appendGroup(name, snapshot.evidence.filter((file) => source.id !== null && file.sourceId === source.id), sourceIndex);
   }
   const other = snapshot.evidence.filter((file) => file.sourceId === null && file.kind !== "thai_tax");
   if (other.length) appendGroup("เอกสารอื่นของกรณี", other);

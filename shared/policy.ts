@@ -49,7 +49,7 @@ export const DEMO_POLICY: DemoPolicy = Object.freeze({
     "All fixture FX values are synthetic educational values unless the fixture itself identifies a checked source row.",
   ]),
   roundingPolicy: "40 significant digits; sum unrounded country credits, then round total half-up to 2 decimals; display each country at 2 decimals and reconcile the difference.",
-  engineVersion: "ftc-engine-v2",
+  engineVersion: "ftc-engine-v3",
   supportedCountries: Object.freeze({ VN: "Vietnam", CN: "China" }),
   supportedIncomeTypes: Object.freeze({
     salary_40_1: Object.freeze(["salary"]),

@@ -1,12 +1,13 @@
 import Decimal from "decimal.js";
 import { Fragment, useEffect, useRef } from "react";
-import type { AttachmentMetadata, CalculationSnapshot, EvidenceKind, ForeignIncomeSourceDraft, FrozenEvidenceReference } from "../../shared/contracts.js";
+import type { AttachmentMetadata, CalculationSnapshot, ForeignIncomeSourceDraft, FrozenEvidenceReference } from "../../shared/contracts.js";
 import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, WORKSHEET_SECTIONS, type WorksheetLetter } from "../../shared/labels.js";
 import { EvidenceFileActions } from "./EvidenceFileActions.js";
 import { FieldLabel } from "./FieldLabel.js";
 import { formatDate, formatMoney } from "./money.js";
-import { calculateResidenceDaysInYear, validateResidencePeriods } from "../../shared/residence.js";
+import { assessResidenceYear, calculateResidenceDaysInYear, validateResidencePeriods } from "../../shared/residence.js";
 import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "../../shared/foreignTax.js";
+import { missingEvidenceInventory } from "../../shared/evidenceInventory.js";
 
 type Mode = "demo" | "hosted";
 
@@ -117,7 +118,7 @@ function SourceValues({ snapshot, source, index }: { snapshot: CalculationSnapsh
       <div className="worksheet-source-meta">
         <span><strong>วันที่เกิดเงินได้:</strong> {formatDate(source.earnedDate)}</span>
         <span><strong>วันที่นำเข้าไทย:</strong> {formatDate(source.remittance?.remittanceDate)}</span>
-        {source.residenceDaysInEarnedYear !== null && <span><strong>วันพำนักในปีที่เกิดเงินได้:</strong> {source.residenceDaysInEarnedYear} วัน</span>}
+        <SourceResidenceSummaryLink snapshot={snapshot} source={source} />
       </div>
       {source.inputMode === "original_currency" && <div className="worksheet-original-currency">
         <strong>จำนวนเงินต้นทาง</strong>
@@ -163,7 +164,7 @@ function SourceCards({ snapshot }: { snapshot: CalculationSnapshot }) {
       <div className="worksheet-source-meta">
         <span><strong>วันที่เกิดเงินได้:</strong> {formatDate(source.earnedDate)}</span>
         <span><strong>วันที่นำเข้าไทย:</strong> {formatDate(source.remittance?.remittanceDate)}</span>
-        {source.residenceDaysInEarnedYear !== null && <span><strong>วันพำนักในปีที่เกิดเงินได้:</strong> {source.residenceDaysInEarnedYear} วัน</span>}
+        <SourceResidenceSummaryLink snapshot={snapshot} source={source} />
       </div>
       {source.inputMode === "original_currency" && <div className="worksheet-original-currency"><strong>จำนวนเงินต้นทาง</strong><span>เงินได้ {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)}</span><span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveForeignTaxAmount(source))} {thaiCurrency(source.currencyCode)}</span>{hasEligibleTaxAdjustment(source) && <span>ภาษีที่ชำระจริง {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}<span>เงินได้ที่นำเข้า {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>{source.fxReference && <FxReferenceDetails reference={source.fxReference} />}</div>}
       {hasEligibleTaxAdjustment(source) && <p className="worksheet-assumption-note">ภาษีที่ชำระจริง: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้คำนวณ (G): {formatMoney(sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb)} บาท</p>}
@@ -210,6 +211,30 @@ function CountryCards({ snapshot }: { snapshot: CalculationSnapshot }) {
 }
 
 function ResidencePeriodSummary({ snapshot }: { snapshot: CalculationSnapshot }) {
+  const residenceYears = snapshot.inputs.residenceYears;
+  if (residenceYears !== undefined) {
+    const years = [...new Set([
+      ...residenceYears.map((record) => record.earnedTaxYear),
+      ...snapshot.inputs.sources.flatMap((source) => source.earnedTaxYear === null ? [] : [source.earnedTaxYear]),
+    ])].sort((left, right) => left - right);
+    return <section id="worksheet-residence-summary" className="worksheet-residence-summary" aria-label="สรุปช่วงเวลาที่พำนัก">
+      <h3>สรุปช่วงเวลาที่พำนักตามปีที่เกิดเงินได้</h3>
+      {years.length === 0 && <p>ยังไม่มีข้อมูลวันพำนักตามปีที่เกิดเงินได้ในผลนี้</p>}
+      <dl className="worksheet-residence-years">{years.map((year) => {
+        const record = residenceYears.find((item) => item.earnedTaxYear === year);
+        const assessment = assessResidenceYear(record, year);
+        return <div key={year}>
+          <dt>{thaiYear(year)} · ปีที่เกิดเงินได้</dt>
+          <dd>{!record ? "ยังไม่มีข้อมูลวันพำนักสำหรับปีนี้"
+            : record.mode === "declared" ? "ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ · ไม่มีจำนวนวันแน่นอน"
+              : assessment.status !== "computed" || assessment.days === null ? "ช่วงวันที่ไม่ครบหรือไม่ถูกต้อง จึงยังสรุปจำนวนวันไม่ได้"
+                : `${assessment.days} วัน · ${assessment.days >= 180 ? "ครบเกณฑ์ 180 วันตามมาตรา 41" : "ต่ำกว่าเกณฑ์ 180 วันตามมาตรา 41"}`}</dd>
+          {record?.mode === "periods" && record.periods.length > 0 && <dd><ul className="worksheet-residence-periods">{record.periods.map((period, index) => <li key={`${year}-${index}`}><strong>ช่วงที่ {index + 1}:</strong> {period.startDate ?? "ไม่ระบุวันเริ่มต้น"} – {period.endDate ?? "ไม่ระบุวันสิ้นสุด"}</li>)}</ul></dd>}
+        </div>;
+      })}</dl>
+      <p className="worksheet-residence-note">ช่วงวันที่นับวันแรกและวันสุดท้ายรวมกัน และนับวันปฏิทินที่ซ้ำกันครั้งเดียว คำยืนยันของผู้ใช้ยังไม่ผ่านการตรวจสอบ รายละเอียดการนับวันจากหลักฐานเข้าออกขึ้นกับข้อเท็จจริงแต่ละกรณี เกณฑ์วันพำนักแยกจากการรองรับของตัวอย่างและสิทธิ FTC หรือ DTA</p>
+    </section>;
+  }
   const periods = snapshot.inputs.residencePeriods;
   if (periods === undefined) return null;
 
@@ -247,10 +272,16 @@ function ResidencePeriodSummary({ snapshot }: { snapshot: CalculationSnapshot })
   </section>;
 }
 
+function SourceResidenceSummaryLink({ snapshot, source }: { snapshot: CalculationSnapshot; source: ForeignIncomeSourceDraft }) {
+  if (snapshot.inputs.residenceYears !== undefined && source.earnedTaxYear !== null) {
+    return <a href="#worksheet-residence-summary">ดูข้อมูลวันพำนักปี พ.ศ. {source.earnedTaxYear + 543}</a>;
+  }
+  return source.residenceDaysInEarnedYear === null ? null : <span>วันพำนักในปีที่เกิดเงินได้: {source.residenceDaysInEarnedYear} วัน</span>;
+}
+
 function WorksheetEvidence({ snapshot, attachments = [], mode }: { snapshot: CalculationSnapshot; attachments?: AttachmentMetadata[]; mode?: Mode }) {
   const metadataById = new Map(attachments.map((attachment) => [attachment.id, attachment]));
   const frozen = snapshot.evidence;
-  const filesFor = (files: FrozenEvidenceReference[], kind: EvidenceKind) => files.filter((file) => file.kind === kind);
   const renderFile = (file: FrozenEvidenceReference) => {
     const metadata = metadataById.get(file.id);
     return <li key={file.id}>
@@ -262,18 +293,22 @@ function WorksheetEvidence({ snapshot, attachments = [], mode }: { snapshot: Cal
   const thaiTaxFiles = frozen.filter((file) => file.sourceId === null && file.kind === "thai_tax");
   const otherCaseFiles = frozen.filter((file) => file.sourceId === null && file.kind !== "thai_tax");
   const sourceFiles = snapshot.inputs.sources.map((source, index) => ({ source, index, files: frozen.filter((file) => file.sourceId === source.id && source.id !== null) }));
-
-  if (frozen.length === 0) return <section className="content-section card worksheet-section worksheet-evidence worksheet-evidence-empty" aria-labelledby="worksheet-evidence-heading">
-    <h2 id="worksheet-evidence-heading">เอกสารประกอบที่บันทึกกับผลนี้</h2>
-    <p className="empty-evidence">ไม่มีหลักฐานแนบในผลคำนวณที่บันทึกไว้นี้</p>
-  </section>;
+  const missingEvidence = snapshot.submissionMetadata?.missingEvidence ?? missingEvidenceInventory(snapshot.inputs, frozen);
+  const missingFor = (sourceIndex: number | null) => missingEvidence.find((group) => group.sourceIndex === sourceIndex)?.missingKinds ?? [];
+  const renderMissing = (sourceIndex: number | null) => {
+    const kinds = missingFor(sourceIndex);
+    return kinds.length ? <p className="field-hint evidence-missing"><strong>ยังไม่มีไฟล์พร้อมใช้งานสำหรับ:</strong> {kinds.map((kind) => EVIDENCE_LABELS[kind]).join(" · ")}</p> : null;
+  };
 
   return <section className="content-section card worksheet-section worksheet-evidence" aria-labelledby="worksheet-evidence-heading">
     <h2 id="worksheet-evidence-heading">เอกสารประกอบที่บันทึกกับผลนี้</h2>
-    <div className="worksheet-evidence-group"><h3>หลักฐานภาษีไทย</h3>{thaiTaxFiles.length ? <ul className="file-list">{filesFor(thaiTaxFiles, "thai_tax").map(renderFile)}</ul> : <p className="empty-evidence">ไม่มีหลักฐานภาษีไทยที่บันทึกไว้กับผลนี้</p>}</div>
+    {snapshot.submissionMetadata && <div className="submission-declaration"><strong>คำยืนยันเรื่องเอกสารของผู้ส่ง · เวอร์ชัน {snapshot.submissionMetadata.version}</strong><p>{snapshot.submissionMetadata.statement}</p><small>บันทึกโดยบัญชีผู้ส่งเมื่อ {formatDate(snapshot.submissionMetadata.acknowledgedAt)}</small></div>}
+    {frozen.length === 0 && <p className="empty-evidence">ไม่มีไฟล์แนบในผลคำนวณที่บันทึกไว้นี้</p>}
+    <div className="worksheet-evidence-group"><h3>หลักฐานภาษีไทย</h3>{thaiTaxFiles.length ? <ul className="file-list">{thaiTaxFiles.map(renderFile)}</ul> : <p className="empty-evidence">ไม่มีหลักฐานภาษีไทยที่บันทึกไว้กับผลนี้</p>}{renderMissing(null)}</div>
     {sourceFiles.map(({ source, index, files }) => <div className="worksheet-evidence-group" key={source.id ?? `evidence-source-${index}`}>
       <h3>{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · {incomeTypeLabel(source)}</h3>
       {files.length ? <ul className="file-list">{files.map(renderFile)}</ul> : <p className="empty-evidence">ไม่มีหลักฐานแนบสำหรับแหล่งเงินได้นี้</p>}
+      {renderMissing(index)}
     </div>)}
     {otherCaseFiles.length > 0 && <div className="worksheet-evidence-group"><h3>เอกสารอื่นของกรณี</h3><ul className="file-list">{otherCaseFiles.map(renderFile)}</ul></div>}
   </section>;

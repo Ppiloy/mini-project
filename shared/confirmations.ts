@@ -52,12 +52,18 @@ export function taxInputFingerprint(draft: FtcCaseDraft): string {
     const b = JSON.stringify(right);
     return a < b ? -1 : a > b ? 1 : 0;
   });
-  return `ftc-tax-v1:${JSON.stringify({
+  const fingerprintVersion = draft.residenceYears === undefined ? "ftc-tax-v1" : "ftc-tax-v2";
+  return `${fingerprintVersion}:${JSON.stringify({
     taxYear: draft.taxYear,
     domesticAssessableIncome: draft.domesticAssessableIncome,
     thaiTaxAmountBeforeFtc: draft.thaiTax.amountBeforeFtc,
     thaiTaxProvenance: draft.thaiTax.provenance,
     sources,
+    // JSONB reorders object keys; stamp and compare the same ordered raw facts.
+    ...(draft.residenceYears === undefined ? {} : { residenceYears: draft.residenceYears.map((record) => record.mode === "declared"
+      ? { earnedTaxYear: record.earnedTaxYear, mode: record.mode, declaration: record.declaration }
+      : { earnedTaxYear: record.earnedTaxYear, mode: record.mode,
+        periods: record.periods.map((period) => ({ startDate: period.startDate, endDate: period.endDate })) }) }),
   })}`;
 }
 

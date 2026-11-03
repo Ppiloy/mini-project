@@ -858,6 +858,7 @@ export function createApp(options: CreateAppOptions): Express {
         draft.revision = 0;
         draft.createdAt = timestamp;
         draft.updatedAt = timestamp;
+        draft.residenceYears = [];
         const created = await client.query<CaseRow>(
           `INSERT INTO ftc_cases(id, owner_id, draft, create_request_id, environment_marker_id)
            VALUES ($1::uuid, $2::uuid, $3::jsonb, $4, $5::uuid) RETURNING *`,
