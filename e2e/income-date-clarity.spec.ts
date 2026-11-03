@@ -1,0 +1,31 @@
+import { expect, test } from "@playwright/test";
+
+test("earned-date feedback is inline and never rewrites the remittance date", async ({ page }) => {
+  await page.goto("/demo");
+  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  const source = page.locator(".source-card").first();
+  const earned = source.getByLabel(/^วันที่เกิดเงินได้/);
+  const remittance = source.getByLabel(/^วันที่นำเงินเข้าไทย/);
+  const savedRemittance = await remittance.inputValue();
+  await earned.fill("2026-01-01");
+  await expect(earned).toHaveAttribute("aria-invalid", "true");
+  await expect(source.getByText("วันที่เกิดเงินได้ต้องไม่หลังวันสิ้นปีภาษีที่เลือก", { exact: true })).toBeVisible();
+  await expect(remittance).toHaveValue(savedRemittance);
+  await remittance.fill("2025-07-01");
+  await earned.fill("2025-07-02");
+  await expect(source.getByText("วันที่เกิดเงินได้ต้องไม่หลังวันที่นำเงินเข้าไทย", { exact: true })).toBeVisible();
+  await earned.fill("2023-12-31");
+  await expect(source.getByText(/คู่มือเครื่องมือกรมสรรพากรกำหนดช่วงเงินได้จากต่างประเทศตั้งแต่วันที่ 1 มกราคม 2024/)).toBeVisible();
+  await earned.fill("2024-01-01");
+  await expect(earned).toHaveAttribute("aria-invalid", "false");
+  await expect(source.getByLabel(/ปีภาษีที่เกิดเงินได้/)).toContainText("ค.ศ. 2024");
+  await expect(remittance).toHaveValue("2025-07-01");
+  await page.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "บันทึกแล้ว" })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  await expect(earned).toHaveValue("2024-01-01");
+  await expect(remittance).toHaveValue("2025-07-01");
+});

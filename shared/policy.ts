@@ -55,7 +55,7 @@ export const DEMO_POLICY: DemoPolicy = Object.freeze({
     "All fixture FX values are synthetic educational values unless the fixture itself identifies a checked source row.",
   ]),
   roundingPolicy: "40 significant digits; sum unrounded country credits, then round total half-up to 2 decimals; display each country at 2 decimals and reconcile the difference.",
-  engineVersion: "ftc-engine-v4",
+  engineVersion: "ftc-engine-v5",
   supportedCountries: Object.freeze(Object.fromEntries(COUNTRY_CHOICES.map(({ code, storedName }) => [code, storedName]))),
   supportedIncomeTypes: SUPPORTED_INCOME_TYPES,
   minimumResidenceDays: 180,

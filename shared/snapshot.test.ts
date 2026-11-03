@@ -23,7 +23,7 @@ describe("calculation snapshots", () => {
     expect(snapshot.inputs.sources[0]?.grossIncomeThb).toBe("50000");
     expect(snapshot.result.lines[0]?.value).toBe("50000");
     expect(snapshot.policy.id).toBe("rd-ftc-2024plus-v2");
-    expect(snapshot.result.engineVersion).toBe("ftc-engine-v4");
+    expect(snapshot.result.engineVersion).toBe("ftc-engine-v5");
   });
 
   it("recomputes results from the exact frozen inputs and rejects a mismatched revision", () => {
@@ -63,6 +63,6 @@ describe("calculation snapshots", () => {
     expect(snapshot.policy.effectiveFrom).toBe("2024-01-01");
     expect(snapshot.policy.effectiveTo).toBe("2024-12-31");
     expect(snapshot.policy.id).toBe("rd-ftc-2024plus-v2");
-    expect(snapshot.result.engineVersion).toBe("ftc-engine-v4");
+    expect(snapshot.result.engineVersion).toBe("ftc-engine-v5");
   });
 });

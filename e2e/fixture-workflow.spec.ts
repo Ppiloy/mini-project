@@ -293,7 +293,7 @@ test("retired transfer-total and classification controls are absent", async ({ p
   await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toHaveValue("25000.00");
 });
 
-test("a retained pre-2024 tax year stays visible and explains the RD calculator cutoff", async ({ page }) => {
+test("a retained pre-2024 claim year stays visible and blocks later earned dates inline", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
@@ -308,11 +308,11 @@ test("a retained pre-2024 tax year stays visible and explains the RD calculator 
   await page.reload();
   const taxYear = page.getByLabel("ปีภาษี (พ.ศ.)");
   await expect(taxYear).toHaveValue("2566");
-  await advanceToReview(page);
-  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  await expect(page.locator(".source-card").first().getByText("วันที่เกิดเงินได้ต้องไม่หลังวันสิ้นปีภาษีที่เลือก", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
-  await expect(page.getByRole("heading", { name: "ข้อมูลเบื้องต้น" })).toBeVisible();
-  await expect(page.locator(".step-panel .alert.alert-error").filter({ hasText: "เครื่องมือนี้รองรับปีภาษีตั้งแต่ ค.ศ. 2024 เป็นต้นไป" })).toBeVisible();
+  await expect(page.locator(".source-card").first().getByLabel(/^วันที่เกิดเงินได้/)).toHaveAttribute("aria-invalid", "true");
   await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
 });
 

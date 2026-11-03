@@ -366,6 +366,8 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
       const adjustmentKey = source.id ?? `new-${index}`;
       const adjustmentOpen = hasTaxAdjustment || (adjustmentOpenBySource[adjustmentKey] ?? false);
       const sourcePreview = previewCalculation({ ...draft, sources: [source] }, true);
+      const earnedDateIssues = source.earnedDate === null ? [] : sourcePreview.validationMessages.filter((issue) =>
+        ["source.earned_after_claim_year", "source.earned_date_year_mismatch", "source.income_before_tool_window", "source.remittance_before_earned"].includes(issue.code));
       const computedG = previewSourceLine(sourcePreview, [source], 0, "source_G");
       const computedShare = previewSourceLine(sourcePreview, [source], 0, "source_share");
       const sourceReset = pendingReset && pendingResetTargets(pendingReset, index, source) ? pendingReset : null;
@@ -404,7 +406,7 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
           <thead><tr>{SOURCE_LETTERS.map((letter) => <th key={letter} scope="col"><FieldLabel letter={letter} />{["B", "C", "D", "E", "F"].includes(letter) && <RequiredMark />}</th>)}</tr></thead>
           <tbody>
             <tr>
-              <td data-label={worksheetLabel("A")}><output className="readonly-value" aria-label={worksheetLabel("A")}>พ.ศ. {thaiYear(source.earnedTaxYear)}</output></td>
+              <td data-label={worksheetLabel("A")}><output className="readonly-value" aria-label={worksheetLabel("A")}>พ.ศ. {thaiYear(source.earnedTaxYear)}{source.earnedTaxYear !== null && ` (ค.ศ. ${source.earnedTaxYear})`}</output><small className="field-hint">ปีจากวันที่เกิดเงินได้ ใช้ตรวจวันพำนักในปีนั้น</small></td>
               <td data-label={`${worksheetLabel("B")} *`}><SearchableChoice id={`source-${index}-countryCode`} label={worksheetLabel("B")} hiddenLabel value={source.countryCode} options={sourceCountryOptions} required onChange={(code) => {
                 const country = COUNTRY_CHOICES.find((item) => item.code === code);
                 const suggestedCurrency = source.inputMode === "original_currency" && source.currencyCode === null && !hasAmounts(source)
@@ -428,7 +430,9 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
               <td data-label={worksheetLabel("H")}><output className="readonly-value" aria-label={worksheetLabel("H")}>{formatPercentage(computedShare)}</output></td>
             </tr>
             <tr><td className="worksheet-source-details" colSpan={8}><div className="field-grid">
-              <label className="field"><span>วันที่เกิดเงินได้ <RequiredMark /></span><input id={`source-${index}-earnedDate`} type="date" required aria-required="true" value={source.earnedDate ?? ""} onChange={(event) => updateSource(index, { earnedDate: nullableText(event.target.value), earnedTaxYear: event.target.value ? Number(event.target.value.slice(0, 4)) : null })} /><small className="field-hint">ระบุวันที่จริงเพื่อกำหนดปี (A)</small></label>
+              <label className="field"><span>วันที่เกิดเงินได้ <RequiredMark /></span><input id={`source-${index}-earnedDate`} type="date" required aria-required="true" aria-invalid={earnedDateIssues.length > 0} aria-describedby={`source-${index}-earnedDate-help${earnedDateIssues.length ? ` source-${index}-earnedDate-errors` : ""}`} value={source.earnedDate ?? ""} onChange={(event) => updateSource(index, { earnedDate: nullableText(event.target.value), earnedTaxYear: event.target.value ? Number(event.target.value.slice(0, 4)) : null })} /><small id={`source-${index}-earnedDate-help`} className="field-hint">ปี (A) คำนวณจากวันที่นี้ ใช้ตรวจวันพำนักในปีที่เกิดเงินได้และช่วงเงินได้ตามคู่มือ แยกจากปีที่นำเงินเข้าไทย</small>
+                {earnedDateIssues.length > 0 && <span id={`source-${index}-earnedDate-errors`} className="field-error">{earnedDateIssues.map((issue) => <span key={issue.code} style={{ display: "block" }}>{issue.code === "source.remittance_before_earned" ? "วันที่เกิดเงินได้ต้องไม่หลังวันที่นำเงินเข้าไทย" : issue.message}</span>)}</span>}
+              </label>
               <label className="field"><span>วันพำนักในปีที่เกิดเงินได้</span>
                 {residenceRecord?.mode === "declared"
                   ? <output id={`source-${index}-residenceDaysInEarnedYear`} className="readonly-value">ผู้ใช้ยืนยันว่าพำนักอย่างน้อย 180 วัน · ยังไม่ผ่านการตรวจสอบ</output>

@@ -179,6 +179,7 @@ function ResidenceYearSection({ records, sources, onChange }: {
     <div className="field-grid residence-year-add">
       <label className="field field-narrow" htmlFor="residence-year-add-input"><span>ปีที่เกิดเงินได้ (ค.ศ.)</span>
         <input id="residence-year-add-input" type="number" min="1900" max="2200" step="1" value={newYear} onChange={(event) => setNewYear(event.target.value)} />
+        <small className="field-hint">ปีนี้ใช้จัดกลุ่มข้อมูลวันพำนักให้ตรงกับปีจากวันที่เกิดเงินได้ในขั้นถัดไป แยกจากปีนำเงินเข้าไทย</small>
       </label>
       <div className="field-action"><button className="button button-secondary button-small" type="button" disabled={!Number.isInteger(Number(newYear)) || newYear === "" || Number(newYear) < 1900 || Number(newYear) > 2200 || recordFor(records, Number(newYear)) !== undefined} onClick={() => addYear(Number(newYear))}>เพิ่มปีที่เกิดเงินได้</button></div>
     </div>

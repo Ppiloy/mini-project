@@ -139,6 +139,9 @@ function assessSource(
   if (source.earnedDate !== null && source.earnedTaxYear !== null && source.earnedDate.slice(0, 4) !== String(source.earnedTaxYear)) {
     addReview(msg("source.earned_date_year_mismatch", "ปีของวันที่เกิดเงินได้ต้องตรงกับปีภาษีที่ระบุว่าเกิดเงินได้", path("earnedDate")));
   }
+  if (source.earnedDate !== null && taxYear !== null && source.earnedDate > `${taxYear}-12-31`) {
+    addReview(msg("source.earned_after_claim_year", "วันที่เกิดเงินได้ต้องไม่หลังวันสิ้นปีภาษีที่เลือก", path("earnedDate")));
+  }
   if (!residenceYearsAreAuthoritative && source.residenceDaysInEarnedYear !== null && source.residenceDaysInEarnedYear < policy.minimumResidenceDays) {
     addReview(msg("source.nonresident_earned_income", "เกณฑ์ตามมาตรา 41 กำหนดให้พำนักในประเทศไทยอย่างน้อย 180 วันในปีที่เกิดเงินได้สำหรับกรณีในเครื่องมือนี้", path("residenceDaysInEarnedYear")));
   }

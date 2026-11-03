@@ -99,6 +99,14 @@ function withSource(draft: FtcCaseDraft, index: number, changes: Partial<Foreign
 }
 
 describe("FTC calculator", () => {
+  it("identifies an earned date after the claim year beside the earned-date field", () => {
+    const draft = withSource(partialRemittanceFixture.draft, 0, { earnedDate: "2026-01-01", earnedTaxYear: 2026 });
+    const result = calculateFTC(draft);
+    expect(result.validationMessages).toContainEqual(expect.objectContaining({
+      code: "source.earned_after_claim_year", path: ["sources", 0, "earnedDate"],
+    }));
+    expect(result.allowableCredit).toBeNull();
+  });
   it("recomputes the slide's displayed formula instead of its discrepant printed total", () => {
     expect(isThaiTaxConfirmationCurrent(slideDraft)).toBe(true);
     expect(slideDraft.sources.every(isSourceEligibilityConfirmationCurrent)).toBe(true);
