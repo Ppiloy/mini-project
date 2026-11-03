@@ -152,7 +152,7 @@ function SearchableChoice({ id, label, value, options, onChange, required = fals
       placeholder="พิมพ์เพื่อค้นหา"
       onFocus={() => { setQuery(""); setActiveIndex(0); setOpen(true); }}
       onChange={(event) => { setQuery(event.target.value); setActiveIndex(0); setOpen(true); }}
-      onBlur={() => window.setTimeout(() => setOpen(false), 100)}
+      onBlur={() => setOpen(false)}
       onKeyDown={(event) => {
         if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setActiveIndex((index) => Math.min(index + 1, Math.max(filtered.length - 1, 0))); }
         if (event.key === "ArrowUp") { event.preventDefault(); setOpen(true); setActiveIndex((index) => Math.max(index - 1, 0)); }
@@ -403,7 +403,7 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
         {sourceIssues.length > 0 && <div className="alert alert-error" role="alert"><ul>{sourceIssues.map((issue, issueIndex) => <li key={issueIndex}><span>{issue.message}</span><ValidationFieldLink issue={issue} sourceIndex={index} onNavigateStep={onNavigateStep} targetStep={issue.path?.[2] === "residenceDaysInEarnedYear" ? 0 : undefined} /></li>)}</ul></div>}
         {source.inputMode === null && <p className="field-hint">เลือกโหมดจำนวนเงินด้านล่างก่อนกรอกจำนวน (D), (E) และ (F)</p>}
         <div className="table-scroll source-worksheet-wrap"><table className="source-worksheet-table" aria-label={`${WORKSHEET_SECTIONS[0]} · แหล่งเงินได้ ${index + 1}`}>
-          <thead><tr>{SOURCE_LETTERS.map((letter) => <th key={letter} scope="col"><FieldLabel letter={letter} />{["B", "C", "D", "E", "F"].includes(letter) && <RequiredMark />}</th>)}</tr></thead>
+          <thead><tr>{SOURCE_LETTERS.map((letter) => <th key={letter} scope="col"><FieldLabel letter={letter} />{["B", "C", "D", "E", "F"].includes(letter) && <RequiredMark />}{["D", "E", "F"].includes(letter) && source.inputMode !== null && <span style={{ display: "block" }}>{source.currencyCode ?? "ยังไม่เลือกสกุลเงิน"}</span>}</th>)}</tr></thead>
           <tbody>
             <tr>
               <td data-label={worksheetLabel("A")}><output className="readonly-value" aria-label={worksheetLabel("A")}>พ.ศ. {thaiYear(source.earnedTaxYear)}{source.earnedTaxYear !== null && ` (ค.ศ. ${source.earnedTaxYear})`}</output><small className="field-hint">ปีจากวันที่เกิดเงินได้ ใช้ตรวจวันพำนักในปีนั้น</small></td>
@@ -489,6 +489,16 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
             </div></td></tr>
           </tbody>
         </table></div>
+        {source.inputMode === "original_currency" && <section className="conversion-breakdown" aria-label="การแปลงจำนวนเงินเป็นบาท">
+          <strong>กรอก (D), (E), (F) เป็น {source.currencyCode ?? "สกุลเงินต้นทาง"} ก่อนแปลงเป็นบาท</strong>
+          <p className="field-hint">แปลงด้วยอัตราเดียวกันที่กรอกไว้ ระบุวันที่ แหล่งอัตรา และข้อมูลให้ครบเพื่อแสดงจำนวนบาท</p>
+          <dl className="conversion-values">{([
+            ["D", "เงินได้", source.grossIncomeAmount, "source_D"],
+            ["E", "ภาษีต่างประเทศ", effectiveForeignTaxAmount(source), "source_E_eligible"],
+            ["F", "นำเข้าไทย", source.remittedIncomeAmount, "source_F"],
+          ] as const).map(([letter, label, raw, code]) => <div key={letter}><dt>{label} ({letter})</dt><dd>{formatMoney(raw)} {source.currencyCode ?? "—"} → <strong>{formatMoney(previewSourceLine(sourcePreview, [source], 0, code))} บาท</strong></dd></div>)}</dl>
+        </section>}
+        {source.inputMode === "worksheet_thb" && <p className="field-hint">จำนวน (D), (E), (F) เป็นบาท (THB) ที่แปลงแล้ว ไม่ใช้อัตราแลกเปลี่ยนซ้ำ</p>}
         {sourceCountry?.treatyUrl && <p className="field-hint source-treaty-reference" role="note">
           <a href={sourceCountry.treatyUrl} target="_blank" rel="noopener noreferrer">ข้อมูลอนุสัญญาภาษีซ้อนของ{sourceCountry.label}</a>{" "}
           <a href={RD_DTA_REGISTER_URL} target="_blank" rel="noopener noreferrer">ตรวจสอบสถานะและพิธีสารปัจจุบันในทะเบียนกรมสรรพากร</a>

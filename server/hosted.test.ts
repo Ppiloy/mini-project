@@ -852,6 +852,41 @@ describe("hosted authentication and durable draft API", () => {
     expect(reloaded.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
   });
 
+  it("retains manually entered FX method, date and original amounts in a frozen API snapshot", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const headers = { Origin: origin, "X-CSRF-Token": csrfToken };
+    const created = await agent.post("/api/cases").set(headers).send({ requestId: "manual-fx-case" });
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    const caseId = created.body.data.case.id as string;
+    const reference: NonNullable<ForeignIncomeSourceDraft["fxReference"]> = {
+      currencyCode: "USD", thbRate: "36.15", baseUnits: 1, effectiveDate: "2025-09-30", rateType: "bot_average_buying",
+      sourceKind: "user_supplied", sourceLabel: "ธปท. ตามข้อมูลที่ผู้ใช้กรอก", sourceUrl: null, educationalAssumption: "อัตราทดสอบที่ผู้ใช้กรอก ไม่ได้ตรวจสอบ",
+    };
+    Object.assign(draft, { taxYear: 2025, domesticAssessableIncome: "0", thaiTax: { amountBeforeFtc: "100000", provenance: null, confirmedAt: null, confirmedInputFingerprint: null },
+      residenceYears: [{ earnedTaxYear: 2025, mode: "declared", declaration: "at_least_180_days" }],
+      sources: [{ ...createEmptySource(), countryCode: "US", countryName: "United States", incomeType: "salary_40_1", subtype: "salary", earnedTaxYear: 2025,
+        earnedDate: "2025-01-01", inputMode: "original_currency", currencyCode: "USD", grossIncomeAmount: "1000", actualForeignTaxPaid: "100", remittedIncomeAmount: "500", fxReference: reference,
+        remittance: { remittanceDate: "2025-10-01", transferTotalAmount: null, transferCurrencyCode: null, transferTotalThb: null, classification: "income_only", classificationNote: null } }],
+    });
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set(headers).send({ expectedRevision: 0, requestId: "manual-fx-save", data: draft, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(saved.status).toBe(200);
+    const revision = saved.body.data.case.draft.revision as number;
+    const loaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(loaded.body.data.case.draft.sources[0].fxReference).toEqual(reference);
+    const calculated = await agent.post(`/api/cases/${caseId}/calculate`).set(headers).send({ expectedRevision: revision, requestId: "manual-fx-calculate" });
+    expect(calculated.status).toBe(200);
+    const snapshot = calculated.body.data.snapshot;
+    expect(snapshot.result).toMatchObject({ outcome: "ready", allowableCredit: "1807.50" });
+    expect(snapshot.inputs.sources[0]).toMatchObject({ currencyCode: "USD", grossIncomeAmount: "1000", actualForeignTaxPaid: "100", remittedIncomeAmount: "500", grossIncomeThb: "36150", remittedIncomeThb: "18075", fxReference: reference });
+    const changed = loaded.body.data.case.draft;
+    changed.sources[0].fxReference.thbRate = "37";
+    const resaved = await agent.put(`/api/cases/${caseId}/draft`).set(headers).send({ expectedRevision: revision, requestId: "manual-fx-change", data: changed, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(resaved.status).toBe(200);
+    const oldSnapshot = await agent.get(`/api/snapshots/${snapshot.id}`).set("Origin", origin);
+    expect(oldSnapshot.body.data.snapshot).toEqual(snapshot);
+  });
+
   it("round-trips every Section 40 income category through the authenticated API", async () => {
     const { app } = await setup();
     const { agent, csrfToken } = await login(app, "taxpayer-a");

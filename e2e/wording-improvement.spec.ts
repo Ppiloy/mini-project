@@ -64,8 +64,8 @@ test("demo entry names the browser-local mode and the form leads with Thai field
   await source.locator("#source-0-grossIncomeAmount").fill("100000.00");
   await source.locator("#source-0-actualForeignTaxPaid").fill("20000.00");
   await source.locator("#source-0-remittedIncomeAmount").fill("50000.00");
-  await source.getByRole("textbox", { name: "1 USD = บาท", exact: true }).fill("36.25");
-  await expect(source.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toHaveValue("36.25");
+  await source.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true }).fill("36.25");
+  await expect(source.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toHaveValue("36.25");
   await capture(page, testInfo, "manual-fx-entry-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate("document.documentElement.scrollWidth")).toBeLessThanOrEqual(390);

@@ -1,14 +1,13 @@
 import { useState } from "react";
 import type { ExchangeRateReference } from "../../../shared/contracts.js";
 import { displayKnownExampleNote, fxRateTypeLabel, fxSourceKindLabel } from "../../../shared/labels.js";
+import { fxDateBasisLabel, MANUAL_FX_NOTICE, manualFxDateIssue } from "../../../shared/manualFx.js";
 
 const BOT_EXCHANGE_RATE_URL = "https://www.bot.or.th/th/statistics/exchange-rate.html";
-const USER_SUPPLIED_SOURCE_LABEL = "ผู้ใช้กรอกเอง";
-const USER_SUPPLIED_NOTE = "อัตราที่ผู้ใช้กรอกเอง ระบบไม่ได้ดึงหรือยืนยันค่า";
 
 export function defaultFxBaseUnits(currencyCode: string | null): 1 | 100 | null {
   if (currencyCode === null) return null;
-  return currencyCode === "JPY" || currencyCode === "VND" ? 100 : 1;
+  return 1;
 }
 
 function hasStoredReference(reference: ExchangeRateReference): boolean {
@@ -17,15 +16,11 @@ function hasStoredReference(reference: ExchangeRateReference): boolean {
     .some((value) => value !== null && value !== "");
 }
 
-function canEditManualQuote(reference: ExchangeRateReference, currencyCode: string | null, remittanceDate: string | null): boolean {
-  return reference.rateType === "manual"
+function canEditManualQuote(reference: ExchangeRateReference, currencyCode: string | null): boolean {
+  return (reference.rateType === "manual" || reference.rateType === "bank_buying" || reference.rateType === "bot_average_buying")
     && reference.sourceKind === "user_supplied"
     && reference.currencyCode === currencyCode
-    && reference.baseUnits !== null
-    && reference.effectiveDate !== null
-    && reference.effectiveDate === remittanceDate
-    && reference.sourceLabel !== null
-    && reference.educationalAssumption !== null;
+    && reference.baseUnits !== null;
 }
 
 function safeHttpUrl(value: string | null): string | null {
@@ -36,17 +31,17 @@ function safeHttpUrl(value: string | null): string | null {
   } catch { return null; }
 }
 
-function freshManualQuote(currencyCode: string, remittanceDate: string | null): ExchangeRateReference {
+function freshManualQuote(currencyCode: string): ExchangeRateReference {
   return {
     currencyCode,
     thbRate: null,
     baseUnits: defaultFxBaseUnits(currencyCode),
-    effectiveDate: remittanceDate,
-    rateType: "manual",
+    effectiveDate: null,
+    rateType: "bot_average_buying",
     sourceKind: "user_supplied",
-    sourceLabel: USER_SUPPLIED_SOURCE_LABEL,
+    sourceLabel: null,
     sourceUrl: null,
-    educationalAssumption: USER_SUPPLIED_NOTE,
+    educationalAssumption: MANUAL_FX_NOTICE,
   };
 }
 
@@ -68,8 +63,8 @@ export function ManualFxFields({
   onReplaceLegacy: () => void;
 }) {
   const [replacementPrompt, setReplacementPrompt] = useState(false);
-  const hasReference = reference !== null && hasStoredReference(reference);
-  const isEditableManual = reference !== null && canEditManualQuote(reference, currencyCode, remittanceDate);
+  const hasReference = reference !== null && (hasStoredReference(reference) || reference.baseUnits === 100);
+  const isEditableManual = reference !== null && canEditManualQuote(reference, currencyCode);
 
   if (hasReference && !isEditableManual) {
     const saved = reference!;
@@ -102,33 +97,32 @@ export function ManualFxFields({
   }
 
   const update = (change: Partial<ExchangeRateReference>) => onChange({
-    ...(current ?? freshManualQuote(currencyCode, remittanceDate)),
+    ...(current ?? freshManualQuote(currencyCode)),
     ...change,
+    educationalAssumption: current?.educationalAssumption?.trim() ? current.educationalAssumption : MANUAL_FX_NOTICE,
   });
 
+  const method = current?.rateType ?? "bot_average_buying";
+  const dateIssue = manualFxDateIssue(method, current?.effectiveDate ?? null, remittanceDate);
   return <div className="field-grid details-grid field-span manual-fx-fields">
-    <label className="field field-span">
-      <span>อัตราที่ใช้สำหรับวันที่นำเงินได้เข้าไทย <span aria-hidden="true">*</span></span>
-      <span className="manual-fx-quotation" style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", alignItems: "center", gap: 8 }}>
-        <span>{units} {currencyCode} =</span>
-        <input
-          id={`source-${sourceIndex}-fxReference-thbRate`}
-          aria-label={`${units} ${currencyCode} = บาท`}
-          inputMode="decimal"
-          autoComplete="off"
-          value={current?.thbRate ?? ""}
-          onChange={(event) => update({ thbRate: nullableText(event.target.value) })}
-          placeholder="0.00"
-          required
-          aria-required="true"
-          readOnly={remittanceDate === null}
-          aria-readonly={remittanceDate === null}
-        />
-        <span>บาท</span>
-      </span>
-      <small className="field-hint">
-        อัตรานี้ใช้แปลง (D), (E) และ (F) โดยอิงวันที่ใช้แปลง {remittanceDate ?? "กรุณาระบุวันที่นำเงินเข้าไทย"}; ระบบไม่ดึงหรือยืนยันอัตรา
-      </small>
+    <div className="field-span"><strong>กรอกอัตราแลกเปลี่ยนด้วยตนเอง</strong><p className="field-hint">ใช้สกุลเงิน {currencyCode} และอัตราเดียวกันแปลง (D), (E) และ (F) เป็นบาท</p></div>
+    <label className="field"><span>วิธีอ้างอิงอัตราแลกเปลี่ยน <span aria-hidden="true">*</span></span>
+      <select id={`source-${sourceIndex}-fxReference-rateType`} value={method} required onChange={(event) => update({ rateType: event.target.value as ExchangeRateReference["rateType"] })}>
+        <option value="bot_average_buying">อัตราเฉลี่ยรับซื้อ ธปท. (แนะนำ)</option>
+        <option value="bank_buying">อัตรารับซื้อของธนาคารพาณิชย์</option>
+        {method === "manual" && <option value="manual">อัตราที่กรอกไว้เดิม · วันนำเข้าไทย</option>}
+      </select>
+    </label>
+    <label className="field"><span>อัตราแลกเปลี่ยน · บาทต่อ {units} {currencyCode} <span aria-hidden="true">*</span></span>
+      <input id={`source-${sourceIndex}-fxReference-thbRate`} aria-label={`อัตราแลกเปลี่ยน (บาทต่อ ${units} ${currencyCode})`} inputMode="decimal" autoComplete="off" value={current?.thbRate ?? ""} onChange={(event) => update({ thbRate: nullableText(event.target.value) })} placeholder="0.00" required aria-required="true" />
+    </label>
+    <label className="field"><span>วันที่อ้างอิงอัตราแลกเปลี่ยน <span aria-hidden="true">*</span></span>
+      <input id={`source-${sourceIndex}-fxReference-effectiveDate`} aria-label="วันที่อ้างอิงอัตราแลกเปลี่ยน" type="date" value={current?.effectiveDate ?? ""} onChange={(event) => update({ effectiveDate: nullableText(event.target.value) })} required aria-required="true" aria-invalid={dateIssue !== null} aria-describedby={`source-${sourceIndex}-fx-date-help`} />
+      <small id={`source-${sourceIndex}-fx-date-help`} className="field-hint">{fxDateBasisLabel(method)} · วันที่นำเข้าไทย {remittanceDate ?? "ยังไม่ระบุ"}</small>
+      {dateIssue && <small className="field-error">{dateIssue.message}</small>}
+    </label>
+    <label className="field"><span>แหล่งอัตราที่ผู้ใช้ระบุ <span aria-hidden="true">*</span></span>
+      <input id={`source-${sourceIndex}-fxReference-sourceLabel`} value={current?.sourceLabel ?? ""} maxLength={200} onChange={(event) => update({ sourceLabel: nullableText(event.target.value) })} placeholder="เช่น ธปท. อัตราเฉลี่ยรับซื้อ หรือชื่อธนาคาร" required aria-required="true" />
     </label>
     <label className="field field-span">
       <span>ลิงก์แหล่งอ้างอิงที่ผู้ใช้ระบุ (ไม่บังคับ)</span>
@@ -137,13 +131,12 @@ export function ManualFxFields({
         type="url"
         value={current?.sourceUrl ?? ""}
         onChange={(event) => update({ sourceUrl: nullableText(event.target.value) })}
-        readOnly={remittanceDate === null}
-        aria-readonly={remittanceDate === null}
       />
     </label>
     <p className="field-hint field-span">
-      <a href={BOT_EXCHANGE_RATE_URL} target="_blank" rel="noopener noreferrer">ดูข้อมูลอัตราแลกเปลี่ยนของ ธปท.</a>
-      <span> ลิงก์นี้เป็นแหล่งอ้างอิงเสริม ระบบไม่ดึงค่าอัตโนมัติ</span>
+      <a href={BOT_EXCHANGE_RATE_URL} target="_blank" rel="noopener noreferrer">แนะนำอัตราอ้างอิง ธปท.</a>
+      <span> · ระบบไม่ดึงค่าอัตโนมัติ</span>
     </p>
+    <p className="field-hint field-span">{MANUAL_FX_NOTICE}</p>
   </div>;
 }

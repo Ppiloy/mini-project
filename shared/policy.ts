@@ -31,7 +31,7 @@ export interface DemoPolicy extends Omit<PolicyReference, "sourceUrls" | "assump
 }
 
 export const DEMO_POLICY: DemoPolicy = Object.freeze({
-  id: "rd-ftc-2024plus-v2",
+  id: "rd-ftc-2024plus-v3",
   taxYear: 2025,
   effectiveFrom: "2024-01-01",
   effectiveTo: null,
@@ -52,10 +52,11 @@ export const DEMO_POLICY: DemoPolicy = Object.freeze({
     "An exceptional adjustment to E is shown with its user-supplied rationale and must not exceed tax actually paid.",
     "One remittance and one shared FX quote per source are recorded; cumulative prior-year tracking is not represented.",
     "Prepared THB worksheet inputs are already expressed in THB; original-currency D/E/F share one explicit FX quote.",
+    "User-entered BOT average-buying references use the preceding business-day convention; commercial-bank buying references use the remittance date. Rates and banking holidays are not independently verified by the prototype.",
     "All fixture FX values are synthetic educational values unless the fixture itself identifies a checked source row.",
   ]),
   roundingPolicy: "40 significant digits; sum unrounded country credits, then round total half-up to 2 decimals; display each country at 2 decimals and reconcile the difference.",
-  engineVersion: "ftc-engine-v5",
+  engineVersion: "ftc-engine-v6",
   supportedCountries: Object.freeze(Object.fromEntries(COUNTRY_CHOICES.map(({ code, storedName }) => [code, storedName]))),
   supportedIncomeTypes: SUPPORTED_INCOME_TYPES,
   minimumResidenceDays: 180,

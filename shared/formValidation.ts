@@ -47,7 +47,7 @@ export function validationTargetId(path: readonly (string | number)[] | undefine
     if (fields.length === 1 && fields[0] === "residenceDaysInEarnedYear") return "residence-period-add";
     if (fields.length === 1 && fields[0] === "countryName") fields[0] = "countryCode";
     if (fields.length === 1 && fields[0] === "earnedTaxYear") fields[0] = "earnedDate";
-    if (fields[0] === "fxReference") return `source-${path[1]}-fxReference-thbRate`;
+    if (fields[0] === "fxReference") return `source-${path[1]}-fxReference-${["effectiveDate", "sourceLabel", "rateType", "sourceUrl"].includes(fields[1] ?? "") ? fields[1] : "thbRate"}`;
     if (fields.length === 1 && fields[0] === "remittance") fields.push("remittanceDate");
     return fields.length > 0 ? `source-${path[1]}-${fields.join("-")}` : null;
   }
@@ -162,6 +162,8 @@ export function validateFormStep(draft: FtcCaseDraft, step: number): FormStepIss
       "fx.currency_mismatch",
       "fx.manual_provenance_missing",
       "fx.manual_date_mismatch",
+      "fx.bot_date_mismatch",
+      "fx.bank_date_mismatch",
       "fx.reference_unverified",
     ]);
     const residenceMessages = assessment.validationMessages.filter((issue) => issue.code.startsWith("residence."));

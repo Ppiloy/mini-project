@@ -99,6 +99,32 @@ function withSource(draft: FtcCaseDraft, index: number, changes: Partial<Foreign
 }
 
 describe("FTC calculator", () => {
+  it("uses the remittance date for a manually entered commercial-bank buying rate", () => {
+    const base = quotationPerHundredFixture.draft;
+    const reference = { ...base.sources[0]!.fxReference!, rateType: "bank_buying" as const, sourceKind: "user_supplied" as const,
+      sourceLabel: "ธนาคารที่ผู้ใช้ระบุ", educationalAssumption: "ผู้ใช้กรอกเอง ยังไม่ตรวจสอบ" };
+    expect(calculateFTC(withSource(base, 0, { fxReference: reference })).outcome).toBe("ready");
+    const mismatch = calculateFTC(withSource(base, 0, { fxReference: { ...reference, effectiveDate: "2024-12-31" } }));
+    expect(mismatch.validationMessages).toContainEqual(expect.objectContaining({ code: "fx.bank_date_mismatch", path: ["sources", 0, "fxReference", "effectiveDate"] }));
+    expect(mismatch.allowableCredit).toBeNull();
+  });
+  it("converts D E and F with one user-entered BOT reference from before remittance", () => {
+    const source = partialRemittanceFixture.draft.sources[0]!;
+    const draft = withSource(partialRemittanceFixture.draft, 0, {
+      inputMode: "original_currency", currencyCode: "USD", grossIncomeAmount: "1000", actualForeignTaxPaid: "100",
+      eligibleForeignTax: null, eligibilityRationale: null, remittedIncomeAmount: "500",
+      remittance: { ...source.remittance!, remittanceDate: "2025-10-01", transferTotalAmount: "500", transferCurrencyCode: "USD" },
+      fxReference: { currencyCode: "USD", thbRate: "36.15", baseUnits: 1, effectiveDate: "2025-09-30",
+        rateType: "bot_average_buying", sourceKind: "user_supplied", sourceLabel: "ธปท. อัตราเฉลี่ยรับซื้อ",
+        sourceUrl: "https://www.bot.or.th/th/statistics/exchange-rate.html", educationalAssumption: "ผู้ใช้กรอกเอง ยังไม่ตรวจสอบ" },
+    });
+    const result = calculateFTC(draft);
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_D")?.value).toBe("36150");
+    expect(result.lines.find(({ code }) => code === "source_E_paid")?.value).toBe("3615");
+    expect(result.lines.find(({ code }) => code === "source_F")?.value).toBe("18075");
+    expect(result.allowableCredit).toBe("1807.50");
+  });
   it("identifies an earned date after the claim year beside the earned-date field", () => {
     const draft = withSource(partialRemittanceFixture.draft, 0, { earnedDate: "2026-01-01", earnedTaxYear: 2026 });
     const result = calculateFTC(draft);

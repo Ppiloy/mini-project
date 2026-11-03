@@ -15,6 +15,7 @@ import { DEMO_POLICY, type DemoPolicy } from "./policy.js";
 import { assessResidenceYear, deriveResidenceDaysForDraft, validateResidencePeriods, validateResidenceYearPeriods } from "./residence.js";
 import { worksheetLabel } from "./labels.js";
 import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "./foreignTax.js";
+import { manualFxDateIssue } from "./manualFx.js";
 
 const CalcDecimal = Decimal.clone({ precision: DEMO_POLICY.precision, rounding: Decimal.ROUND_HALF_UP });
 type Outcome = CalculationResult["outcome"];
@@ -192,14 +193,18 @@ function assessFx(
   if (fx.currencyCode !== null && source.currencyCode !== null && fx.currencyCode !== source.currencyCode) {
     addReview(msg("fx.currency_mismatch", "สกุลเงินของอัตราแลกเปลี่ยนต้องตรงกับ D/E/F", [...path("fxReference"), "currencyCode"]));
   }
-  if (fx.rateType === "manual") {
+  if (fx.sourceKind === "user_supplied" && (fx.rateType === "bot_average_buying" || fx.rateType === "bank_buying")) {
+    if (!fx.sourceLabel?.trim() || !fx.educationalAssumption?.trim()) {
+      addReview(msg("fx.manual_provenance_missing", "อัตราที่กรอกเองต้องระบุแหล่งที่มาและแจ้งว่ายังไม่ผ่านการตรวจสอบ", path("fxReference")));
+    }
+    const dateIssue = manualFxDateIssue(fx.rateType, fx.effectiveDate, source.remittance?.remittanceDate);
+    if (dateIssue) addReview(msg(dateIssue.code, dateIssue.message, [...path("fxReference"), "effectiveDate"]));
+  } else if (fx.rateType === "manual") {
     if (fx.sourceKind !== "user_supplied" || fx.sourceLabel?.trim() === "" || fx.effectiveDate === null || fx.educationalAssumption?.trim() === "") {
       addReview(msg("fx.manual_provenance_missing", "อัตราที่กรอกเองต้องระบุวันที่ อัตรา แหล่งที่มา และสมมติฐานเพื่อการศึกษา", path("fxReference")));
     }
-    const remittanceDate = source.remittance?.remittanceDate;
-    if (fx.effectiveDate !== null && remittanceDate !== null && remittanceDate !== undefined && fx.effectiveDate !== remittanceDate) {
-      addReview(msg("fx.manual_date_mismatch", "วันที่ของอัตราที่กรอกเองต้องตรงกับวันที่นำเงินเข้าไทย", [...path("fxReference"), "thbRate"]));
-    }
+    const dateIssue = manualFxDateIssue(fx.rateType, fx.effectiveDate, source.remittance?.remittanceDate);
+    if (dateIssue) addReview(msg(dateIssue.code, dateIssue.message, [...path("fxReference"), "thbRate"]));
   } else if (!policy.approvedFxReferences.some((approved) =>
     exactFxReferenceMatch(fx, approved.reference) && source.remittance?.remittanceDate === approved.remittanceDate)) {
     addReview(msg("fx.reference_unverified", "อัตรานี้ยังไม่มีแหล่งอ้างอิงที่ตรวจสอบและอนุมัติไว้สำหรับวันที่นำเข้านี้", path("fxReference")));

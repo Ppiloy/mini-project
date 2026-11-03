@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { fxDateBasisLabel, MANUAL_FX_NOTICE } from "../../../shared/manualFx.js";
 import type { Row as ExcelRow, Worksheet as ExcelWorksheet } from "exceljs";
 import type { CalculationSnapshot as SavedCalculationSnapshot, EvidenceKind, ForeignIncomeSourceDraft } from "../../../shared/contracts.js";
 import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, worksheetLabel, WORKSHEET_SECTIONS } from "../../../shared/labels.js";
@@ -141,6 +142,9 @@ function appendSourceDetails(sheet: ExcelWorksheet, snapshot: SavedCalculationSn
     for (const [letter, amount] of [["D", source.grossIncomeAmount], ["E", effectiveForeignTaxAmount(source)], ["F", source.remittedIncomeAmount]] as const) {
       const row = addDetailsRow(sheet, sourceName, worksheetLabel(letter), amountCell(amount));
       row.getCell(3).numFmt = MONEY_FORMAT;
+      const converted = letter === "D" ? source.grossIncomeThb : letter === "E" ? source.eligibleForeignTaxThb ?? source.actualForeignTaxPaidThb : source.remittedIncomeThb;
+      const convertedRow = addDetailsRow(sheet, sourceName, `${worksheetLabel(letter)} (THB)`, amountCell(converted));
+      convertedRow.getCell(3).numFmt = MONEY_FORMAT;
     }
     if (hasEligibleTaxAdjustment(source)) {
       const actualRow = addDetailsRow(sheet, sourceName, "ภาษีที่ชำระทั้งหมดตามหลักฐาน", amountCell(source.actualForeignTaxPaid));
@@ -153,6 +157,10 @@ function appendSourceDetails(sheet: ExcelWorksheet, snapshot: SavedCalculationSn
       addDetailsRow(sheet, sourceName, "วิธีที่ใช้", fxMethodLabel(reference.rateType));
       addDetailsRow(sheet, sourceName, "แหล่งอัตราแลกเปลี่ยนที่ผู้ใช้ระบุ", reference.sourceLabel);
       addDetailsRow(sheet, sourceName, "ประเภทแหล่งอัตรา", fxSourceKindLabel(reference.sourceKind));
+      if (reference.sourceKind === "user_supplied") {
+        addDetailsRow(sheet, sourceName, "เกณฑ์วันที่อ้างอิง", fxDateBasisLabel(reference.rateType));
+        addDetailsRow(sheet, sourceName, "การตรวจสอบอัตรา", MANUAL_FX_NOTICE);
+      }
       if (reference.educationalAssumption) addDetailsRow(sheet, sourceName, "สมมติฐานที่บันทึก", displayKnownExampleNote(reference.educationalAssumption));
       const sourceUrl = safeFxSourceUrl(reference.sourceUrl);
       if (sourceUrl) {

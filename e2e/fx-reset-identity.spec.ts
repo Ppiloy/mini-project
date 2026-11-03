@@ -24,7 +24,7 @@ test("a pending quote reset stays bound to its source if another source is remov
     await page.locator(`#source-${index}-actualForeignTaxPaid`).fill(index === 1 ? "20" : "30");
     await page.locator(`#source-${index}-remittedIncomeAmount`).fill(index === 1 ? "50" : "40");
     await page.locator(`#source-${index}-remittance-remittanceDate`).fill(remittanceDate);
-    await page.getByRole("textbox", { name: "1 USD = บาท", exact: true }).nth(index - 1).fill(quote);
+    await page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true }).nth(index - 1).fill(quote);
   }
 
   const originalSecond = page.locator(".source-card").nth(1);
@@ -43,9 +43,9 @@ test("a pending quote reset stays bound to its source if another source is remov
   await expect(shiftedThird.getByRole("alertdialog", { name: "อัตราเดิมใช้กับวันที่นำเงินเข้าไทยที่เปลี่ยนไปไม่ได้" })).toHaveCount(0);
 
   await expect(shiftedSecond.getByLabel(/^วันที่นำเงินเข้าไทย/)).toHaveValue("2025-01-01");
-  await expect(shiftedSecond.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toHaveValue("36.25");
+  await expect(shiftedSecond.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toHaveValue("36.25");
   await expect(shiftedThird.getByLabel(/^วันที่นำเงินเข้าไทย/)).toHaveValue("2025-02-01");
-  await expect(shiftedThird.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toHaveValue("37.75");
+  await expect(shiftedThird.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toHaveValue("37.75");
 
   await shiftedSecond.getByLabel(/^วันที่นำเงินเข้าไทย/).fill("2025-01-02");
   const freshPrompt = shiftedSecond.getByRole("alertdialog", { name: "อัตราเดิมใช้กับวันที่นำเงินเข้าไทยที่เปลี่ยนไปไม่ได้" });
@@ -53,12 +53,12 @@ test("a pending quote reset stays bound to its source if another source is remov
   await freshPrompt.getByRole("button", { name: "เปลี่ยนและล้างข้อมูล", exact: true }).click();
 
   await expect(shiftedSecond.getByLabel(/^วันที่นำเงินเข้าไทย/)).toHaveValue("2025-01-02");
-  await expect(shiftedSecond.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toHaveValue("");
+  await expect(shiftedSecond.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toHaveValue("");
   await expect(shiftedSecond.locator("#source-0-grossIncomeAmount")).toHaveValue("100");
   await expect(shiftedSecond.locator("#source-0-actualForeignTaxPaid")).toHaveValue("20");
   await expect(shiftedSecond.locator("#source-0-remittedIncomeAmount")).toHaveValue("50");
   await expect(shiftedThird.getByLabel(/^วันที่นำเงินเข้าไทย/)).toHaveValue("2025-02-01");
-  await expect(shiftedThird.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toHaveValue("37.75");
+  await expect(shiftedThird.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toHaveValue("37.75");
   await expect(shiftedThird.locator("#source-1-grossIncomeAmount")).toHaveValue("200");
   await expect(originalThird).toHaveCount(0);
 });

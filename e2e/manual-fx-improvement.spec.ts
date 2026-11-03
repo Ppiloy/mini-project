@@ -28,14 +28,14 @@ test("new original-currency entry uses a readable manual quote and optional BOT 
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("original_currency");
   await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2025-01-01");
 
-  const quote = page.getByRole("textbox", { name: "1 USD = บาท", exact: true });
+  const quote = page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true });
   await expect(quote).toBeVisible();
   await expect(quote).toHaveValue("");
-  await expect(page.getByRole("link", { name: "ดูข้อมูลอัตราแลกเปลี่ยนของ ธปท.", exact: true }))
+  await expect(page.getByRole("link", { name: "แนะนำอัตราอ้างอิง ธปท.", exact: true }))
     .toHaveAttribute("href", "https://www.bot.or.th/th/statistics/exchange-rate.html");
-  await expect(page.getByLabel(/ประเภทอัตร/)).toHaveCount(0);
+  await expect(page.getByLabel("วิธีอ้างอิงอัตราแลกเปลี่ยน")).toHaveValue("bot_average_buying");
   await expect(page.getByLabel(/หน่วยของอัตร/)).toHaveCount(0);
-  await expect(page.getByLabel(/วันที่อัตราแลกเปลี่ยน/)).toHaveCount(0);
+  await expect(page.getByLabel("วันที่อ้างอิงอัตราแลกเปลี่ยน")).toBeVisible();
 
   const reference = page.getByLabel("ลิงก์แหล่งอ้างอิงที่ผู้ใช้ระบุ (ไม่บังคับ)", { exact: true });
   await reference.fill("https://example.test/fx");
@@ -66,7 +66,7 @@ test("changing the remittance date can clear only the old quote and converted va
   await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("50");
   const remittanceDate = page.getByLabel(/^วันที่นำเงินเข้าไทย/);
   await remittanceDate.fill("2025-01-01");
-  const quote = page.getByRole("textbox", { name: "1 USD = บาท", exact: true });
+  const quote = page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true });
   await quote.fill("36.25");
 
   await remittanceDate.fill("2025-01-02");
@@ -107,7 +107,7 @@ test("changing a source country preserves an explicitly selected currency and it
   await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("20");
   await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("50");
   await page.getByLabel(/^วันที่นำเงินเข้าไทย/).fill("2025-01-01");
-  const quote = page.getByRole("textbox", { name: "1 USD = บาท", exact: true });
+  const quote = page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true });
   await quote.fill("36.25");
 
   let resetPrompted = false;
@@ -148,10 +148,10 @@ test("a saved draft missing its manual quote links to the real rate field", asyn
   await expect(page.getByText(/แหล่งเงินได้ 1.*กรุณากรอกอัตราแลกเปลี่ยนให้ครบก่อนดำเนินการต่อ/)).toBeVisible();
   const correctionLink = page.getByRole("button", { name: "ไปยังอัตราแลกเปลี่ยนของแหล่งเงินได้ 1" });
   await correctionLink.click();
-  await expect(page.getByRole("textbox", { name: "1 USD = บาท", exact: true })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 USD)", exact: true })).toBeFocused();
 });
 
-test("yen and dong use readable per-100 quotes with correct conversion and explicit currency reset", async ({ page }) => {
+test("yen and dong use clear per-unit manual quotes with correct conversion and explicit currency reset", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await addResidencePeriod(page);
@@ -169,9 +169,12 @@ test("yen and dong use readable per-100 quotes with correct conversion and expli
   await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("50");
   await page.getByLabel(/^วันที่นำเงินเข้าไทย/).fill("2025-01-01");
 
-  const ratePer100Vnd = page.getByRole("textbox", { name: "100 VND = บาท", exact: true });
-  await expect(ratePer100Vnd).toBeVisible();
-  await ratePer100Vnd.fill("3500");
+  const ratePerUnitVnd = page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 VND)", exact: true });
+  await expect(ratePerUnitVnd).toBeVisible();
+  await page.getByLabel("วิธีอ้างอิงอัตราแลกเปลี่ยน").selectOption("bank_buying");
+  await page.getByLabel("วันที่อ้างอิงอัตราแลกเปลี่ยน").fill("2025-01-01");
+  await page.getByLabel("แหล่งอัตราที่ผู้ใช้ระบุ").fill("ธนาคารตัวอย่าง");
+  await ratePerUnitVnd.fill("35");
   const sourceTable = page.getByRole("table", { name: /แหล่งเงินได้ 1/ });
   await expect(sourceTable.getByLabel(/^จำนวนภาษีชำระไว้ในต่างประเทศสำหรับเงินได้พึงประเมินจากต่างประเทศ \(G\)/)).toHaveText("525.00 บาท");
 
@@ -182,7 +185,7 @@ test("yen and dong use readable per-100 quotes with correct conversion and expli
   await expect(resetPrompt).toBeVisible();
   await resetPrompt.getByRole("button", { name: "ยกเลิก", exact: true }).click();
   await expect(currency).toHaveValue("VND · ด่งเวียดนาม");
-  await expect(ratePer100Vnd).toHaveValue("3500");
+  await expect(ratePerUnitVnd).toHaveValue("35");
 
   await currency.fill("JPY");
   await page.getByRole("option", { name: /JPY · เยนญี่ปุ่น/ }).click();
@@ -190,5 +193,5 @@ test("yen and dong use readable per-100 quotes with correct conversion and expli
     .getByRole("button", { name: "เปลี่ยนและล้างข้อมูล", exact: true }).click();
   await expect(currency).toHaveValue("JPY · เยนญี่ปุ่น");
   await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toHaveValue("");
-  await expect(page.getByRole("textbox", { name: "100 JPY = บาท", exact: true })).toHaveValue("");
+  await expect(page.getByRole("textbox", { name: "อัตราแลกเปลี่ยน (บาทต่อ 1 JPY)", exact: true })).toHaveValue("");
 });

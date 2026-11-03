@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { fxDateBasisLabel, MANUAL_FX_NOTICE } from "../../shared/manualFx.js";
 import { Fragment, useEffect, useRef } from "react";
 import type { AttachmentMetadata, CalculationSnapshot, ForeignIncomeSourceDraft, FrozenEvidenceReference } from "../../shared/contracts.js";
 import { countryLabel, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, WORKSHEET_SECTIONS, type WorksheetLetter } from "../../shared/labels.js";
@@ -101,6 +102,7 @@ function FxReferenceDetails({ reference }: { reference: NonNullable<ForeignIncom
   const sourceUrl = safeFxSourceUrl(reference.sourceUrl);
   return <>
     <span>อัตรา {formatRate(reference.thbRate)} บาทต่อ {reference.baseUnits ?? "—"} {thaiCurrency(reference.currencyCode)} · วิธี: {fxRateTypeLabel(reference.rateType)} · แหล่งที่ผู้ใช้ระบุ: {reference.sourceLabel ?? "ไม่ระบุ"} · {fxSourceLabel(reference.sourceKind)} · วันที่ {formatDate(reference.effectiveDate)}</span>
+    {reference.sourceKind === "user_supplied" && <span>{fxDateBasisLabel(reference.rateType)} · {MANUAL_FX_NOTICE}</span>}
     {reference.educationalAssumption && <span className="worksheet-fx-assumption">{displayKnownExampleNote(reference.educationalAssumption)}</span>}
     {sourceUrl && <a className="worksheet-fx-link" href={sourceUrl} target="_blank" rel="noopener noreferrer">แหล่งอัตราแลกเปลี่ยน</a>}
   </>;
@@ -122,10 +124,10 @@ function SourceValues({ snapshot, source, index }: { snapshot: CalculationSnapsh
       </div>
       {source.inputMode === "original_currency" && <div className="worksheet-original-currency">
         <strong>จำนวนเงินต้นทาง</strong>
-        <span>เงินได้ {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>
-        <span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveTax)} {thaiCurrency(source.currencyCode)}</span>
+        <span>เงินได้ (D) {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "D")}</span>
+        <span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveTax)} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "E")}</span>
         {differentTaxAmount && <span>ภาษีที่ชำระทั้งหมดตามหลักฐาน {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}
-        <span>เงินได้ที่นำเข้า {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>
+        <span>เงินได้ที่นำเข้า (F) {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "F")}</span>
         {source.fxReference && <FxReferenceDetails reference={source.fxReference} />}
       </div>}
       {differentTaxAmount && <p className="worksheet-assumption-note">ภาษีที่ชำระจริง: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้คำนวณ (G): {formatMoney(sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb)} บาท</p>}
@@ -166,7 +168,12 @@ function SourceCards({ snapshot }: { snapshot: CalculationSnapshot }) {
         <span><strong>วันที่นำเข้าไทย:</strong> {formatDate(source.remittance?.remittanceDate)}</span>
         <SourceResidenceSummaryLink snapshot={snapshot} source={source} />
       </div>
-      {source.inputMode === "original_currency" && <div className="worksheet-original-currency"><strong>จำนวนเงินต้นทาง</strong><span>เงินได้ {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)}</span><span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveForeignTaxAmount(source))} {thaiCurrency(source.currencyCode)}</span>{hasEligibleTaxAdjustment(source) && <span>ภาษีที่ชำระจริง {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}<span>เงินได้ที่นำเข้า {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)}</span>{source.fxReference && <FxReferenceDetails reference={source.fxReference} />}</div>}
+      {source.inputMode === "original_currency" && <div className="worksheet-original-currency"><strong>จำนวนเงินต้นทาง</strong>
+        <span>เงินได้ (D) {formatMoney(source.grossIncomeAmount)} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "D")}</span>
+        <span>ภาษีจำนวน (E) ที่ใช้คำนวณ {formatMoney(effectiveForeignTaxAmount(source))} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "E")}</span>
+        {hasEligibleTaxAdjustment(source) && <span>ภาษีที่ชำระจริง {formatMoney(source.actualForeignTaxPaid)} {thaiCurrency(source.currencyCode)}</span>}
+        <span>เงินได้ที่นำเข้า (F) {formatMoney(source.remittedIncomeAmount)} {thaiCurrency(source.currencyCode)} = {sourceFieldValue(snapshot, source, index, "F")}</span>
+        {source.fxReference && <FxReferenceDetails reference={source.fxReference} />}</div>}
       {hasEligibleTaxAdjustment(source) && <p className="worksheet-assumption-note">ภาษีที่ชำระจริง: {formatMoney(source.actualForeignTaxPaidThb)} บาท · จำนวน (E) ที่ใช้คำนวณ (G): {formatMoney(sourceLineValue(snapshot, source, index, "source_E_eligible") ?? source.eligibleForeignTaxThb)} บาท</p>}
       {source.eligibilityRationale && <p className="worksheet-source-rationale"><strong>{hasEligibleTaxAdjustment(source) ? "เหตุผลการปรับจำนวน (E) ที่ผู้ใช้ระบุ:" : "หมายเหตุเดิมที่บันทึกไว้:"}</strong> {displayKnownExampleNote(source.eligibilityRationale)}</p>}
     </article>)}
