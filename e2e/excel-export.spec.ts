@@ -79,7 +79,7 @@ test("report workbook preserves the saved source, country, total, provenance, an
   expect(Number(china?.getCell(5).value)).toBe(22500);
 
   const thaiTaxEvidence = rowWithValue(sheet, "หลักฐานภาษีไทย");
-  const sourceEvidence = rowWithValue(sheet, "เวียดนาม · 40(1) เงินเดือนหรือค่าจ้าง");
+  const sourceEvidence = rowWithValue(sheet, "เวียดนาม · 40(1) เงินได้จากการจ้างแรงงาน");
   expect(thaiTaxEvidence).toBeDefined();
   expect(sourceEvidence).toBeDefined();
   expect(rowWithValue(sheet, "หลักฐานภาษีไทย.pdf")?.number).toBeGreaterThan(thaiTaxEvidence?.number ?? 0);
@@ -186,7 +186,7 @@ test("workbook H percentage preserves the report's rounded value for a non-termi
   const sheet = workbook.getWorksheet("ผลคำนวณ");
   expect(sheet).toBeDefined();
   if (!sheet) throw new Error("The saved report workbook is missing its result worksheet.");
-  const sourceRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(1).value === "เวียดนาม · 40(1) เงินเดือนหรือค่าจ้าง");
+  const sourceRow = sheet.getRows(1, sheet.rowCount)?.find((row) => row.getCell(1).value === "เวียดนาม · 40(1) เงินได้จากการจ้างแรงงาน");
   expect(sourceRow).toBeDefined();
   if (!sourceRow) throw new Error("The saved source worksheet row is missing.");
   expect(typeof sourceRow.getCell(9).value).toBe("number");

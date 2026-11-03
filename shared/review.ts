@@ -11,7 +11,7 @@ const unsupportedClassificationLabels: Record<UnsupportedClassification, string>
   unsupported_tax_year: "ปีภาษีอยู่นอกขอบเขตตัวอย่าง",
   cross_year_remittance: "เงินได้กับการนำเข้าอยู่คนละปีภาษี",
   nonresident_earned_income: "ข้อเท็จจริงเรื่องวันพำนักยังอยู่นอกกรณีตัวอย่าง",
-  unsupported_income_type: "ประเภทเงินได้อยู่นอกขอบเขตตัวอย่าง",
+  unsupported_income_type: "ต้องตรวจทานการจำแนกประเภทเงินได้ตามมาตรา 40",
   unknown_treaty_treatment: "การจัดประเภทตามอนุสัญญายังไม่ชัดเจน",
   mixed_principal_and_income: "ยอดโอนรวมทั้งเงินต้นและเงินได้",
   ambiguous_gross_net: "ยังไม่ชัดเจนว่ายอดเป็น gross หรือ net",

@@ -53,7 +53,7 @@ function sourceLineValue(snapshot: CalculationSnapshot, source: ForeignIncomeSou
 
 function sourceFieldValue(snapshot: CalculationSnapshot, source: ForeignIncomeSourceDraft, index: number, letter: typeof SOURCE_LETTERS[number]): string {
   if (letter === "A") return thaiYear(source.earnedTaxYear);
-  if (letter === "B") return countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ");
+  if (letter === "B") return countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName);
   if (letter === "C") return incomeTypeLabel(source);
   if (letter === "D") return `${formatMoney(source.grossIncomeThb)} บาท`;
   if (letter === "E") {
@@ -157,7 +157,7 @@ function SourceTotals({ snapshot }: { snapshot: CalculationSnapshot }) {
 function SourceCards({ snapshot }: { snapshot: CalculationSnapshot }) {
   return <div className="worksheet-source-cards">
     {snapshot.inputs.sources.map((source, index) => <article className="worksheet-source-card" key={source.id ?? `source-${index}`}>
-      <h3>{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · {incomeTypeLabel(source)}</h3>
+      <h3>{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · {incomeTypeLabel(source)}</h3>
       <dl>
         {SOURCE_LETTERS.map((letter) => <div key={letter}><dt><FieldLabel letter={letter} /></dt><dd>{sourceFieldValue(snapshot, source, index, letter)}</dd></div>)}
       </dl>
@@ -181,7 +181,7 @@ function CountryTable({ snapshot }: { snapshot: CalculationSnapshot }) {
     <thead><tr>{COUNTRY_LETTERS.map((letter) => <th key={letter} scope="col"><FieldLabel letter={letter} /></th>)}</tr></thead>
     <tbody>
       {countries.map((country) => <tr key={country.countryCode}>
-        <th scope="row">{countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")}</th>
+        <th scope="row">{countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", country.countryName)}</th>
         <td>{formatMoney(country.remittedIncome)} บาท</td>
         <td>{formatMoney(country.attributableForeignTax)} บาท</td>
         <td>{formatMoney(country.thaiTaxLimit)} บาท</td>
@@ -199,10 +199,10 @@ function CountryCards({ snapshot }: { snapshot: CalculationSnapshot }) {
   const totalAllocatedTax = sumValues(countries.map((country) => country.attributableForeignTax));
   return <div className="worksheet-country-cards">
     {countries.map((country) => <article className="worksheet-country-card" key={country.countryCode}>
-      <h3>{countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")}</h3>
+      <h3>{countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", country.countryName)}</h3>
       <dl>{COUNTRY_LETTERS.map((letter) => <div key={letter}>
         <dt><FieldLabel letter={letter} /></dt>
-        <dd>{letter === "M" ? countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ") : letter === "N" ? `${formatMoney(country.remittedIncome)} บาท` : letter === "O" ? `${formatMoney(country.attributableForeignTax)} บาท` : letter === "P" ? `${formatMoney(country.thaiTaxLimit)} บาท` : `${formatMoney(country.displayedAllowableCredit)} บาท`}</dd>
+        <dd>{letter === "M" ? countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", country.countryName) : letter === "N" ? `${formatMoney(country.remittedIncome)} บาท` : letter === "O" ? `${formatMoney(country.attributableForeignTax)} บาท` : letter === "P" ? `${formatMoney(country.thaiTaxLimit)} บาท` : `${formatMoney(country.displayedAllowableCredit)} บาท`}</dd>
       </div>)}</dl>
     </article>)}
     {countries.length === 0 && <p className="empty-cell">ยังไม่มีผลรายประเทศที่คำนวณได้</p>}
@@ -306,7 +306,7 @@ function WorksheetEvidence({ snapshot, attachments = [], mode }: { snapshot: Cal
     {frozen.length === 0 && <p className="empty-evidence">ไม่มีไฟล์แนบในผลคำนวณที่บันทึกไว้นี้</p>}
     <div className="worksheet-evidence-group"><h3>หลักฐานภาษีไทย</h3>{thaiTaxFiles.length ? <ul className="file-list">{thaiTaxFiles.map(renderFile)}</ul> : <p className="empty-evidence">ไม่มีหลักฐานภาษีไทยที่บันทึกไว้กับผลนี้</p>}{renderMissing(null)}</div>
     {sourceFiles.map(({ source, index, files }) => <div className="worksheet-evidence-group" key={source.id ?? `evidence-source-${index}`}>
-      <h3>{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · {incomeTypeLabel(source)}</h3>
+      <h3>{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · {incomeTypeLabel(source)}</h3>
       {files.length ? <ul className="file-list">{files.map(renderFile)}</ul> : <p className="empty-evidence">ไม่มีหลักฐานแนบสำหรับแหล่งเงินได้นี้</p>}
       {renderMissing(index)}
     </div>)}
@@ -353,7 +353,7 @@ export function Worksheet({ snapshot, attachments, evidenceMode, showEvidence = 
         <div className="worksheet-source-desktop table-scroll"><table aria-labelledby="worksheet-source-heading" className="data-table worksheet-source-table">
           <thead><tr>{SOURCE_LETTERS.map((letter) => <th key={letter} scope="col"><FieldLabel letter={letter} /></th>)}</tr></thead>
           <tbody>{snapshot.inputs.sources.map((source, index) => <Fragment key={source.id ?? `source-${index}`}>
-            <tr className="worksheet-source-name"><th colSpan={8} scope="rowgroup">{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · {incomeTypeLabel(source)}</th></tr>
+            <tr className="worksheet-source-name"><th colSpan={8} scope="rowgroup">{countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · {incomeTypeLabel(source)}</th></tr>
             <SourceValues snapshot={snapshot} source={source} index={index} />
           </Fragment>)}</tbody>
           <tfoot><tr><th colSpan={3} scope="row">รวมทุกแหล่งเงินได้</th><td>{formatMoney(sumValues(snapshot.inputs.sources.map((source) => source.grossIncomeThb)))} บาท</td><td>{formatMoney(sumValues(snapshot.result.lines.filter((line) => line.code === "source_E_eligible").map((line) => line.value)))} บาท</td><td>{formatMoney(snapshot.result.totalRemittedIncome)} บาท</td><td>{formatMoney(sumValues(snapshot.result.lines.filter((line) => line.code === "source_G").map((line) => line.value)))} บาท</td><td>—</td></tr></tfoot>

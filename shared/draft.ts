@@ -81,7 +81,10 @@ const foreignIncomeSourceBaseSchema = z.object({
   id: nullable(safeText.min(1).max(100)),
   countryCode: nullable(z.string().regex(/^[A-Z]{2}$/)),
   countryName: nullableText(100),
-  incomeType: z.enum(["salary_40_1", "dividend_40_4", "other"]).nullable(),
+  incomeType: z.enum([
+    "salary_40_1", "service_40_2", "rights_40_3", "dividend_40_4", "investment_40_4",
+    "property_40_5", "professional_40_6", "contract_40_7", "business_40_8", "other",
+  ]).nullable(),
   subtype: nullableText(100),
   earnedTaxYear: nullable(z.number().int().min(1900).max(2200)),
   earnedDate: nullable(isoDate),

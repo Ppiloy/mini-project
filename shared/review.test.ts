@@ -78,3 +78,29 @@ describe("submitted review classification for residence declarations", () => {
     expect(points[0]?.reason).toContain("ไม่ได้ตรวจสอบข้อเท็จจริงหรือวินิจฉัยสิทธิ FTC หรือ DTA");
   });
 });
+
+describe("submitted review classification for legacy income flags", () => {
+  it("asks taxpayers to review Section 40 classification without calling a formerly unsupported type out of scope", () => {
+    const legacyUnknown = submittedSnapshot({
+      incomeType: "other",
+      subtype: "other_unclassified",
+      unsupportedClassification: "unsupported_income_type",
+      unsupportedExplanation: null,
+    });
+    const newlyCoveredType = submittedSnapshot({
+      incomeType: "service_40_2",
+      subtype: "service",
+      unsupportedClassification: "unsupported_income_type",
+      unsupportedExplanation: null,
+    });
+
+    const reasons = [legacyUnknown, newlyCoveredType].map((snapshot) =>
+      classifySubmittedSnapshot(snapshot).find(({ code }) => code === "source.unsupported_classification")?.reason,
+    );
+
+    expect(reasons).toEqual([
+      "ข้อเท็จจริงของรายการนี้คือ: ต้องตรวจทานการจำแนกประเภทเงินได้ตามมาตรา 40",
+      "ข้อเท็จจริงของรายการนี้คือ: ต้องตรวจทานการจำแนกประเภทเงินได้ตามมาตรา 40",
+    ]);
+  });
+});

@@ -35,6 +35,10 @@
     {
       "name": "20261103000100_snapshot_submission_metadata.sql",
       "sha256": "a69971470337c89b978cd13e743e812b1ed752978b8e220a6184741f55bedf2e"
+    },
+    {
+      "name": "20261103000200_expand_income_type_40_categories.sql",
+      "sha256": "f6aa03de083bb745164631c1505024e0ac6a6c5027b54b876994972ca3fcaff4"
     }
   ]
 }

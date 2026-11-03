@@ -76,7 +76,7 @@ function assess(draft: FtcCaseDraft, policy: DemoPolicy): Assessment {
   }
 
   if (value.taxYear === null) addIncomplete(required(["taxYear"]));
-  else if (value.taxYear !== policy.taxYear) addReview(msg("case.unsupported_year", "ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)", ["taxYear"]));
+  else if (value.taxYear < 2024) addReview(msg("case.unsupported_year", "เครื่องมือนี้รองรับปีภาษีตั้งแต่ ค.ศ. 2024 เป็นต้นไป", ["taxYear"]));
   if (value.domesticAssessableIncome === null) addIncomplete(required(["domesticAssessableIncome"]));
   if (value.thaiTax.amountBeforeFtc === null) addIncomplete(required(["thaiTax", "amountBeforeFtc"]));
   if (value.thaiTax.amountBeforeFtc !== null && !isThaiTaxConfirmationCurrent(value)) {
@@ -116,15 +116,19 @@ function assessSource(
     ? policy.supportedCountries[source.countryCode]
     : undefined;
   if (source.countryCode !== null && supportedCountry === undefined) {
-    addReview(msg("source.unsupported_country", "ประเทศนี้ยังไม่อยู่ในขอบเขตตัวอย่างที่รองรับ", path("countryCode")));
+    addReview(msg("source.unsupported_country", "เครื่องมือนี้ต้องใช้ประเทศแหล่งเงินได้ที่มี DTA กับไทยและอยู่ในรายชื่อประเทศคู่สัญญาที่กรมสรรพากรระบุ", path("countryCode")));
   }
   if (source.incomeType !== null) {
     const allowedSubtypes = Object.prototype.hasOwnProperty.call(policy.supportedIncomeTypes, source.incomeType)
       ? policy.supportedIncomeTypes[source.incomeType]
       : undefined;
+    const requiresSubtype = source.incomeType === "other" || source.incomeType === "dividend_40_4";
     const subtypeSupported = allowedSubtypes !== undefined
-      && (source.incomeType === "salary_40_1" ? source.subtype === null || allowedSubtypes.includes(source.subtype) : source.subtype !== null && allowedSubtypes.includes(source.subtype));
-    if (!subtypeSupported) addReview(msg("source.unsupported_type", "ประเภทเงินได้หรือประเภทย่อยยังไม่รองรับในตัวอย่างนี้", path("incomeType")));
+      && (requiresSubtype ? source.subtype !== null && allowedSubtypes.includes(source.subtype) : source.subtype === null || allowedSubtypes.includes(source.subtype));
+    if (!subtypeSupported) addReview(msg("source.unsupported_type", "กรุณาจำแนกตามลักษณะจริงของเงินได้และหมวดมาตรา 40 ที่รายงานใน ภ.ง.ด.90/91; เครื่องมือนี้รองรับมาตรา 40(1)–(8)", path("incomeType")));
+  }
+  if (source.earnedTaxYear !== null && source.earnedTaxYear < 2024) {
+    addReview(msg("source.income_before_tool_window", "คู่มือเครื่องมือกรมสรรพากรกำหนดช่วงเงินได้จากต่างประเทศตั้งแต่วันที่ 1 มกราคม 2024", path("earnedTaxYear")));
   }
   if (source.unsupportedClassification !== null) {
     addReview(msg("source.unsupported_classification", source.unsupportedExplanation ?? "ข้อเท็จจริงของแหล่งเงินได้นี้ยังไม่รองรับ ต้องตรวจสอบเพิ่มเติม", path("unsupportedClassification")));
@@ -132,17 +136,11 @@ function assessSource(
   if (supportedCountry !== undefined && source.countryName !== null && supportedCountry !== source.countryName) {
     addReview(msg("source.country_name_mismatch", "ชื่อประเทศไม่ตรงกับรหัสประเทศที่เลือก", path("countryName")));
   }
-  if (source.earnedTaxYear !== null && taxYear !== null && source.earnedTaxYear !== taxYear) {
-    addReview(msg("source.cross_year_income", "ตัวอย่างนี้รองรับเงินได้และการนำเข้าภายในปีภาษีเดียวกัน", path("earnedTaxYear")));
-  }
-  if (source.earnedTaxYear !== null && source.earnedTaxYear !== policy.taxYear) {
-    addReview(msg("source.unsupported_income_year", "ต้นแบบรองรับเงินได้ที่เกิดในปี 2568 (ค.ศ. 2025) เท่านั้น", path("earnedTaxYear")));
-  }
-  if (source.earnedDate !== null && source.earnedDate.slice(0, 4) !== String(policy.taxYear)) {
-    addReview(msg("source.unsupported_earned_date", "วันที่เกิดเงินได้ต้องอยู่ในปี 2025 สำหรับตัวอย่างนี้", path("earnedDate")));
+  if (source.earnedDate !== null && source.earnedTaxYear !== null && source.earnedDate.slice(0, 4) !== String(source.earnedTaxYear)) {
+    addReview(msg("source.earned_date_year_mismatch", "ปีของวันที่เกิดเงินได้ต้องตรงกับปีภาษีที่ระบุว่าเกิดเงินได้", path("earnedDate")));
   }
   if (!residenceYearsAreAuthoritative && source.residenceDaysInEarnedYear !== null && source.residenceDaysInEarnedYear < policy.minimumResidenceDays) {
-    addReview(msg("source.nonresident_earned_income", "จำนวนวันพำนักต่ำกว่า 180 วัน จึงอยู่นอกกรณีตัวอย่างผู้มีถิ่นที่อยู่", path("residenceDaysInEarnedYear")));
+    addReview(msg("source.nonresident_earned_income", "เกณฑ์ตามมาตรา 41 กำหนดให้พำนักในประเทศไทยอย่างน้อย 180 วันในปีที่เกิดเงินได้สำหรับกรณีในเครื่องมือนี้", path("residenceDaysInEarnedYear")));
   }
   if (source.inputMode === "worksheet_thb" && source.currencyCode !== null && source.currencyCode !== "THB") {
     addReview(msg("source.worksheet_currency", "จำนวนเงินในโหมดตารางต้องเป็น THB", path("currencyCode")));
@@ -169,7 +167,7 @@ function assessSource(
   if (remittance === null) return;
   if (remittance.remittanceDate === null) addIncomplete(required([...path("remittance"), "remittanceDate"]));
   else {
-    if (remittance.remittanceDate.slice(0, 4) !== String(policy.taxYear)) addReview(msg("source.cross_year_remittance", "วันที่นำเข้าไทยต้องอยู่ในปี 2025 สำหรับตัวอย่างนี้", [...path("remittance"), "remittanceDate"]));
+    if (taxYear !== null && remittance.remittanceDate.slice(0, 4) !== String(taxYear)) addReview(msg("source.cross_year_remittance", "วันที่นำเข้าไทยต้องอยู่ในปีภาษีที่เลือกสำหรับกรณีนี้", [...path("remittance"), "remittanceDate"]));
     if (source.earnedDate !== null && remittance.remittanceDate < source.earnedDate) addReview(msg("source.remittance_before_earned", "วันที่นำเข้าไทยต้องไม่ก่อนวันที่เกิดเงินได้", [...path("remittance"), "remittanceDate"]));
   }
 }

@@ -124,7 +124,7 @@ function addDetailsRow(sheet: ExcelWorksheet, sourceName: string, label: string,
 }
 
 function appendSourceDetails(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot, source: ForeignIncomeSourceDraft, index: number): void {
-  const sourceName = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
+  const sourceName = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · ${incomeTypeLabel(source)}`;
   addDetailsRow(sheet, sourceName, "วันที่เกิดเงินได้", formatDate(source.earnedDate));
   addDetailsRow(sheet, sourceName, "วันที่นำเข้าไทย", formatDate(source.remittance?.remittanceDate));
   if (source.residenceDaysInEarnedYear !== null) addDetailsRow(sheet, sourceName, "วันพำนักในปีที่เกิดเงินได้", source.residenceDaysInEarnedYear);
@@ -252,7 +252,7 @@ function addEvidence(sheet: ExcelWorksheet, snapshot: SavedCalculationSnapshot):
   };
   appendGroup("หลักฐานภาษีไทย", snapshot.evidence.filter((file) => file.sourceId === null && file.kind === "thai_tax"));
   for (const [sourceIndex, source] of snapshot.inputs.sources.entries()) {
-    const name = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
+    const name = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · ${incomeTypeLabel(source)}`;
     appendGroup(name, snapshot.evidence.filter((file) => source.id !== null && file.sourceId === source.id), sourceIndex);
   }
   const other = snapshot.evidence.filter((file) => file.sourceId === null && file.kind !== "thai_tax");
@@ -291,13 +291,13 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
   section(sheet, WORKSHEET_SECTIONS[0]);
   const sourceHeader = tableHeader(sheet, ["แหล่งเงินได้", ...(["A", "B", "C", "D", "E", "F", "G", "H"] as const).map(worksheetLabel)]);
   for (const [index, source] of snapshot.inputs.sources.entries()) {
-    const heading = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ")} · ${incomeTypeLabel(source)}`;
+    const heading = `${countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName)} · ${incomeTypeLabel(source)}`;
     const g = sourceValue(snapshot, source, index, "source_G");
     const h = sourceValue(snapshot, source, index, "source_share");
     const row = sheet.addRow([
       heading,
       source.earnedTaxYear === null ? "—" : source.earnedTaxYear + 543,
-      countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ"),
+      countryLabel(source.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", source.countryName),
       incomeTypeLabel(source),
       amountCell(source.grossIncomeThb),
       amountCell(sourceValue(snapshot, source, index, "source_E_eligible")),
@@ -338,7 +338,7 @@ function buildWorksheet(workbook: ExcelWorkbook, snapshot: SavedCalculationSnaps
   tableHeader(sheet, (["M", "N", "O", "P", "Q"] as const).map(worksheetLabel));
   for (const country of snapshot.result.countries) {
     const row = sheet.addRow([
-      countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ"),
+      countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", country.countryName),
       amountCell(country.remittedIncome),
       amountCell(country.attributableForeignTax),
       amountCell(country.thaiTaxLimit),

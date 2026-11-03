@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link } from "react-router-dom";
 import type { CalculationSnapshot, FtcCaseRecord } from "../../../shared/contracts.js";
-import { DEMO_EXAMPLE_LABELS } from "../../../shared/labels.js";
+import { COUNTRY_CHOICES, DEMO_EXAMPLE_LABELS } from "../../../shared/labels.js";
 import { partialRemittanceFixture, slideDiscrepancyFixture } from "../../fixtures/index.js";
 import { apiFailureMessage, hostedApi } from "../../data/api.js";
 import { createDemoCase, createDemoCaseFromDraft, deleteDemoCase, findDemoCase, findDemoSnapshot, latestDemoPreview, listDemoCases } from "../../data/demoRepository.js";
@@ -15,6 +15,7 @@ type Mode = "demo" | "hosted";
 export function DashboardPage({ mode }: { mode: Mode }) {
   const navigate = useNavigate();
   const { user, csrfToken } = useAppSession();
+  const currentTaxYear = new Date().getFullYear();
   const [cases, setCases] = useState<FtcCaseRecord[]>([]);
   const [busy, setBusy] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
@@ -93,8 +94,8 @@ export function DashboardPage({ mode }: { mode: Mode }) {
       </div>
       <section className="summary-strip" aria-label="ข้อมูลบัญชี">
         <div><span className="summary-label">ผู้ใช้</span><strong>{user?.displayName ?? "ผู้เสียภาษีตัวอย่าง"}</strong></div>
-        <div><span className="summary-label">ปีภาษีที่รองรับ</span><strong>2568 <span className="muted-inline">(2025)</span></strong></div>
-        <div><span className="summary-label">ตัวอย่างคำนวณ</span><strong>เวียดนามและจีน · 40(1), เงินปันผล 40(4)</strong></div>
+        <div><span className="summary-label">ปีภาษีที่เลือกได้</span><strong>2567–{currentTaxYear + 543} <span className="muted-inline">(2024–{currentTaxYear})</span></strong></div>
+        <div><span className="summary-label">ประเทศและประเภทเงินได้</span><strong>{COUNTRY_CHOICES.length} ประเทศที่มีอนุสัญญาภาษีซ้อนกับไทย · มาตรา 40(1)–40(8)</strong></div>
       </section>
       {mode === "demo" && <section className="fixture-launch card"><div><h2>กรณีตัวอย่าง</h2><p>เปิดกรณีสาธิตที่มีข้อมูลตั้งต้น หรือเริ่มกรณีใหม่จากข้อมูลว่าง</p></div><div className="fixture-launch-actions"><button className="button button-secondary" onClick={() => startExample(partialRemittanceFixture.draft)}>{DEMO_EXAMPLE_LABELS.partialRemittance}</button><button className="button button-secondary" onClick={() => startExample(slideDiscrepancyFixture.draft)}>{DEMO_EXAMPLE_LABELS.vietnamAndChina}</button></div></section>}
       <section className="content-section">

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FtcCaseDraft } from "./contracts.js";
+import { INCOME_CHOICES } from "./coverage.js";
 import { createEmptyDraft, createEmptySource, draftSchema, parseDraft } from "./draft.js";
 
 const emptyDraft: FtcCaseDraft = {
@@ -72,6 +73,17 @@ describe("FTC draft parsing", () => {
     expect(parseDraft({ ...emptyDraft, sources: [{ ...source, inputMode: "worksheet_thb", currencyCode: "THB", grossIncomeThb: "70.123456789012" }] }).sources[0]?.grossIncomeThb).toBe("70.123456789012");
     expect(() => parseDraft({ ...emptyDraft, sources: [{ ...source, earnedDate: "2025-02-30" }] })).toThrow();
     expect(() => parseDraft({ ...emptyDraft, sources: [{ ...source, grossIncomeThb: "1000000000000000000" }] })).toThrow();
+  });
+
+  it("preserves every Section 40 income category and legacy other subtypes", () => {
+    for (const [index, choice] of INCOME_CHOICES.entries()) {
+      const source = { ...createEmptySource(), id: `source-${index}`, incomeType: choice.incomeType, subtype: choice.subtype };
+      const parsed = parseDraft({ ...createEmptyDraft(), sources: [source] });
+      expect(parsed.sources[0]).toMatchObject({ incomeType: choice.incomeType, subtype: choice.subtype });
+    }
+
+    const legacySource = { ...createEmptySource(), id: "legacy-source", incomeType: "other" as const, subtype: "40_2" };
+    expect(parseDraft({ ...createEmptyDraft(), sources: [legacySource] }).sources[0]).toMatchObject({ incomeType: "other", subtype: "40_2" });
   });
 
   it("enforces exact FX rate precision, positivity, maximum and quotation units", () => {

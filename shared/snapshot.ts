@@ -40,7 +40,7 @@ export function createCalculationSnapshot(input: CreateCalculationSnapshotInput)
     inputs: structuredClone(inputs),
     result: structuredClone(result),
     evidence: input.evidence.map((reference) => ({ ...reference })),
-    policy: policyReference(policy),
+    policy: policyReference(policy, inputs.taxYear ?? policy.taxYear),
     createdAt: input.createdAt,
     submissionMetadata: input.submissionMetadata ? structuredClone(input.submissionMetadata) : null,
   };

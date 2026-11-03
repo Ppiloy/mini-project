@@ -16,7 +16,17 @@ export type UserRole = "taxpayer" | "officer";
 export type CaseStatus = "draft" | "submitted";
 export type SnapshotKind = "preview" | "submitted";
 export type InputMode = "worksheet_thb" | "original_currency";
-export type IncomeType = "salary_40_1" | "dividend_40_4" | "other";
+export type IncomeType =
+  | "salary_40_1"
+  | "service_40_2"
+  | "rights_40_3"
+  | "dividend_40_4"
+  | "investment_40_4"
+  | "property_40_5"
+  | "professional_40_6"
+  | "contract_40_7"
+  | "business_40_8"
+  | "other";
 export type FxRateType = "bank_buying" | "bot_average_buying" | "manual" | "fixture";
 export type FxSourceKind = "bank" | "bot" | "user_supplied" | "fixture";
 export type EvidenceKind = "foreign_income" | "foreign_tax" | "remittance" | "thai_tax" | "other";

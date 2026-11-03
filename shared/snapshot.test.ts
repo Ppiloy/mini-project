@@ -22,8 +22,8 @@ describe("calculation snapshots", () => {
     expect(snapshot.inputs.sources[0]?.grossIncomeAmount).toBe("50000.00");
     expect(snapshot.inputs.sources[0]?.grossIncomeThb).toBe("50000");
     expect(snapshot.result.lines[0]?.value).toBe("50000");
-    expect(snapshot.policy.id).toBe("rd-ftc-demo-2568-v1");
-    expect(snapshot.result.engineVersion).toBe("ftc-engine-v3");
+    expect(snapshot.policy.id).toBe("rd-ftc-2024plus-v2");
+    expect(snapshot.result.engineVersion).toBe("ftc-engine-v4");
   });
 
   it("recomputes results from the exact frozen inputs and rejects a mismatched revision", () => {
@@ -44,5 +44,25 @@ describe("calculation snapshots", () => {
       id: "snapshot-revision-mismatch", caseId: draft.id!, revision: draft.revision + 1,
       kind: "preview", inputs: draft, evidence: [], createdAt: "2026-10-14T01:00:00.000Z",
     })).toThrow(/revision/i);
+  });
+
+  it("freezes policy dates for the selected claim year and current engine version", () => {
+    const draft = structuredClone(partialRemittanceFixture.draft);
+    draft.taxYear = 2024;
+    const snapshot = createCalculationSnapshot({
+      id: "snapshot-2024",
+      caseId: "case-2024",
+      revision: draft.revision,
+      kind: "preview",
+      inputs: draft,
+      evidence: [],
+      createdAt: "2026-11-03T01:00:00.000Z",
+    });
+
+    expect(snapshot.policy.taxYear).toBe(2024);
+    expect(snapshot.policy.effectiveFrom).toBe("2024-01-01");
+    expect(snapshot.policy.effectiveTo).toBe("2024-12-31");
+    expect(snapshot.policy.id).toBe("rd-ftc-2024plus-v2");
+    expect(snapshot.result.engineVersion).toBe("ftc-engine-v4");
   });
 });

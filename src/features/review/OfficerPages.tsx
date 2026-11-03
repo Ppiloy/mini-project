@@ -66,7 +66,7 @@ function reviewPointSourceLabel(point: OfficerReviewPoint, snapshot: Calculation
   if (point.sourceIndex === null) return "ข้อมูลภาพรวมของกรณี";
   const source = snapshot.inputs.sources[point.sourceIndex];
   if (!source) return `แหล่งเงินได้ ${point.sourceIndex + 1}`;
-  return `แหล่งเงินได้ ${point.sourceIndex + 1} · ${countryLabel(source.countryCode)} · ${incomeTypeLabel(source)}`;
+  return `แหล่งเงินได้ ${point.sourceIndex + 1} · ${countryLabel(source.countryCode, "ไม่ระบุประเทศ", source.countryName)} · ${incomeTypeLabel(source)}`;
 }
 
 export function OfficerQueuePage({ mode }: { mode: Mode }) {

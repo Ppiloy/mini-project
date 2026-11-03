@@ -44,7 +44,7 @@ export function ResultSummary({ snapshot }: { snapshot: CalculationSnapshot }) {
     </p>}
     {result.countries.length > 0
       ? <div className="result-country-summary-list">{result.countries.map((country) => {
-        const name = countryLabel(country.countryCode, country.countryName);
+        const name = countryLabel(country.countryCode, "ประเทศอื่นหรือยังไม่ระบุ", country.countryName);
         return <article className="result-country-summary" key={country.countryCode}>
           <h3>{name}</h3>
           <dl className="result-country-values">

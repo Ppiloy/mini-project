@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import { useEffect, useState, type ReactNode } from "react";
 import type { AttachmentMetadata, CalculationResult, EvidenceKind, FtcCaseDraft, ForeignIncomeSourceDraft, InputMode, UnsupportedClassification } from "../../../shared/contracts.js";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../../../shared/confirmations.js";
+import { INCOME_CHOICES, RD_DTA_REGISTER_URL } from "../../../shared/coverage.js";
 import { calculateFTC } from "../../../shared/calculator.js";
 import { formatCalculationIssues, stepForCalculationIssue, validationTargetId, validationTargetLabel, type FormStepIssue } from "../../../shared/formValidation.js";
 import { countryLabel, COUNTRY_CHOICES, CURRENCY_CHOICES, displayKnownExampleNote, EVIDENCE_LABELS, incomeTypeLabel, WORKSHEET_LABELS, WORKSHEET_SECTIONS, worksheetLabel, type WorksheetLetter } from "../../../shared/labels.js";
@@ -35,25 +36,16 @@ const evidenceKinds: Array<{ kind: EvidenceKind; label: string }> = [
 ];
 
 const PREVIEW_CONFIRMATION_AT = "2000-01-01T00:00:00.000Z";
+const RD_FTC_MANUAL_URL = "https://www.rd.go.th/fileadmin/user_upload/porphor/GuideTaxFromAbroad_EN.pdf";
+const RD_REVENUE_CODE_URL = "https://www.rd.go.th/5937.html";
+const ACTUAL_FOREIGN_TAX_HELP = "คำนวณจากภาษีเงินได้ที่ชำระจริงเท่านั้น ไม่รวมเบี้ยปรับ เงินเพิ่ม หรือภาษีที่ไม่ใช่ภาษีเงินได้";
 const SOURCE_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"] as const satisfies readonly WorksheetLetter[];
-const INCOME_CHOICES = [
-  { key: "40_1", label: "40(1) เงินได้จากการจ้างแรงงาน", incomeType: "salary_40_1", subtype: "salary", supported: true },
-  { key: "40_2", label: "40(2) เงินได้จากหน้าที่หรือตำแหน่งงาน หรือรับทำงานให้", incomeType: "other", subtype: "40_2", supported: false },
-  { key: "40_3", label: "40(3) ค่าแห่งลิขสิทธิ์ สิทธิอื่น และเงินปี", incomeType: "other", subtype: "40_3", supported: false },
-  { key: "40_4_interest", label: "40(4) ดอกเบี้ยหรือเงินได้จากการลงทุนอื่น", incomeType: "other", subtype: "40_4_interest", supported: false },
-  { key: "40_4_dividend", label: "40(4) เงินปันผล · ตัวอย่างที่รองรับ", incomeType: "dividend_40_4", subtype: "dividend", supported: true },
-  { key: "40_5", label: "40(5) เงินได้จากการให้เช่าทรัพย์สิน", incomeType: "other", subtype: "40_5", supported: false },
-  { key: "40_6", label: "40(6) เงินได้จากวิชาชีพอิสระ", incomeType: "other", subtype: "40_6", supported: false },
-  { key: "40_7", label: "40(7) เงินได้จากการรับเหมา", incomeType: "other", subtype: "40_7", supported: false },
-  { key: "40_8", label: "40(8) เงินได้จากธุรกิจหรือกิจการอื่น", incomeType: "other", subtype: "40_8", supported: false },
-  { key: "other_unclassified", label: "ประเภทอื่นที่ยังไม่รองรับ", incomeType: "other", subtype: "other_unclassified", supported: false },
-] as const;
-
 function incomeChoiceKey(source: ForeignIncomeSourceDraft): string {
   if (source.incomeType === null) return "";
-  if (source.incomeType === "salary_40_1") return "40_1";
-  if (source.incomeType === "dividend_40_4") return "40_4_dividend";
-  return INCOME_CHOICES.some((choice) => choice.key === source.subtype) ? source.subtype! : "other_unclassified";
+  if (source.incomeType === "other") return INCOME_CHOICES.some((choice) => choice.key === source.subtype) ? source.subtype! : "other_unclassified";
+  const exactChoice = INCOME_CHOICES.find((choice) => choice.incomeType === source.incomeType && choice.subtype === source.subtype);
+  if (exactChoice) return exactChoice.key;
+  return INCOME_CHOICES.find((choice) => choice.incomeType === source.incomeType)?.key ?? "";
 }
 
 function previewCalculation(draft: FtcCaseDraft, allowMissingDomestic: boolean): CalculationResult {
@@ -248,7 +240,11 @@ function pendingResetTargets(prompt: SourceResetPrompt | null, index: number, so
 
 export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
   const year = draft.taxYear;
-  const unsupported = year !== null && year !== 2025;
+  const currentYear = new Date().getFullYear();
+  const taxYearChoices = [...new Set([
+    ...Array.from({ length: Math.max(0, currentYear - 2024 + 1) }, (_, index) => 2024 + index),
+    ...(year === null ? [] : [year]),
+  ])].sort((left, right) => left - right);
   const updateResidenceYears = (residenceYears: NonNullable<FtcCaseDraft["residenceYears"]>) => {
     const next = { ...draft, residenceYears };
     delete next.residencePeriods;
@@ -258,18 +254,18 @@ export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
     <section className="step-panel" aria-labelledby="step-title">
       <h2 id="step-title">ข้อมูลเบื้องต้น</h2>
       <p className="muted">กำหนดปีภาษีและบันทึกวันพำนักตามปีที่เกิดเงินได้ ปีที่เกิดเงินได้ วันที่นำเงินเข้า และวันยื่นแบบเป็นคนละข้อเท็จจริง</p>
-      <section className="info-callout scope-overview" aria-label="ขอบเขตการคำนวณตัวอย่าง">
-        <strong>ขอบเขตการคำนวณตัวอย่าง</strong>
+      <section className="info-callout scope-overview" aria-label="ขอบเขตการคำนวณตามคู่มือกรมสรรพากร">
+        <strong>ขอบเขตตามคู่มือกรมสรรพากร</strong>
         <dl className="scope-rows">
-          <div><dt>ปีและเวลานำเข้า</dt><dd>ปี 2025 · เงินได้และการนำเข้าไทยในปีเดียวกัน · หนึ่งรายการนำเข้าต่อแหล่งเงินได้</dd></div>
-          <div><dt>ประเทศและประเภทเงินได้</dt><dd>เวียดนามหรือจีน · เงินเดือนตามมาตรา 40(1) · ตัวอย่างเงินปันผลที่เตรียมไว้ตามมาตรา 40(4)</dd></div>
-          <div><dt>จำนวนเงินและอัตรา</dt><dd>จำนวนเงิน THB หรืออัตราแลกเปลี่ยนที่ผู้ใช้ระบุพร้อมวันที่อ้างอิง</dd></div>
-          <div><dt>รายการนอกตัวอย่าง</dt><dd>บันทึกเป็นร่างได้ แต่ต้นแบบยังไม่สร้างยอดเครดิตให้รายการอื่น</dd></div>
+          <div><dt>ปีเงินได้และปีภาษี</dt><dd>เงินได้ที่เกิดตั้งแต่ปี 2024 · เลือกปีภาษีที่ตรงกับปีนำเงินเข้าไทย · วันที่เกิดเงินได้กับวันที่นำเข้าเป็นคนละข้อเท็จจริง</dd></div>
+          <div><dt>ประเทศและประเภทเงินได้</dt><dd>เลือกประเทศที่มีอนุสัญญาภาษีซ้อนกับไทย · จำแนกเงินได้ตามมาตรา 40(1)–40(8) ตามจริง</dd></div>
+          <div><dt>ผู้มีถิ่นที่อยู่</dt><dd>ตรวจวันพำนักในปีที่เกิดเงินได้ตามเกณฑ์อย่างน้อย 180 วันในมาตรา 41</dd></div>
+          <div><dt>จำนวนเงินและอัตรา</dt><dd>ระบุจำนวนตามตารางเป็น THB หรือเลือกสกุลเงินและอัตราอ้างอิงตามจริง</dd></div>
         </dl>
-        <p>รายละเอียดนี้อธิบายขอบเขตของต้นแบบเพื่อการศึกษา ไม่ใช่ข้อสรุปเรื่องสิทธิ FTC หรือ DTA</p>
+        <p>การผ่านเกณฑ์ดังกล่าวไม่ได้ยืนยันสิทธิ FTC หรือข้อสรุปตามอนุสัญญาภาษีซ้อน</p>
       </section>
       <label className="field field-narrow"><span>ปีภาษี (พ.ศ.) <RequiredMark /></span><select id="case-taxYear" required aria-required="true" value={year === null ? "" : String(year + 543)} onChange={(event) => onChange({ ...draft, taxYear: event.target.value === "" ? null : Number(event.target.value) - 543 })}>
-        <option value="">เลือกปีภาษี</option><option value="2568">2568 (2025)</option><option value="2567">2567 (2024) — ยังไม่รองรับ</option><option value="2569">2569 (2026) — ยังไม่รองรับ</option>
+        <option value="">เลือกปีภาษี</option>{taxYearChoices.map((taxYear) => <option key={taxYear} value={String(taxYear + 543)}>{taxYear + 543} ({taxYear})</option>)}
       </select></label>
       {validationErrors.filter((issue) => issue.path?.[0] === "taxYear").map((issue, index) => <div className="alert alert-error" role="alert" key={index}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></div>)}
       {validationErrors.filter((issue) => issue.path?.[0] === "residenceYears" || issue.path?.[0] === "residencePeriods").map((issue, index) => <div className="alert alert-error" role="alert" key={`residence-${index}`}><span>{issue.message}</span><ValidationFieldLink issue={issue} /></div>)}
@@ -281,7 +277,6 @@ export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
         onChange={(residencePeriods) => onChange(deriveResidenceDaysForDraft({ ...draft, residencePeriods }))}
         onResidenceYearsChange={updateResidenceYears}
       />
-      {unsupported && <div className="alert alert-warning" role="status"><strong>กรณีนี้อยู่นอกขอบเขตตัวอย่าง</strong><span>บันทึกร่างไว้แก้ไขได้ แต่ระบบจะไม่สร้างยอดเครดิตภาษี</span></div>}
       <div className="alert alert-info"><strong>ข้อมูลนี้เป็นตัวอย่างเพื่อการศึกษา</strong><span>ระบบไม่ได้ยืนยันสิทธิภาษีตามอนุสัญญา และไม่ใช่แบบยื่นภาษีหรือคำวินิจฉัยของกรมสรรพากร</span></div>
     </section>
   );
@@ -325,18 +320,34 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
   };
   const countryOptions: SearchOption[] = COUNTRY_CHOICES.map((country) => ({
     value: country.code,
-    label: `${country.label} (${country.code})${country.reviewed ? "" : " · ยังไม่รองรับในตัวอย่าง"}`,
+    label: `${country.label} (${country.code})`,
     searchText: country.code,
   }));
   const currencyOptions: SearchOption[] = CURRENCY_CHOICES.filter((currency) => currency.code !== "THB").map((currency) => ({ value: currency.code, label: `${currency.code} · ${currency.label}`, searchText: currency.label }));
 
   return <section className="step-panel" aria-labelledby="step-title">
     <div className="step-section-head"><div><h2 id="step-title">{WORKSHEET_SECTIONS[0]}</h2><p className="muted">ระบุข้อมูล (A)–(F) ในแหล่งเดียวกัน ระบบแสดง (G) และ (H) ตามสูตรเมื่อข้อมูลพร้อม รองรับไม่เกิน 20 แหล่ง</p></div><button className="button button-secondary button-small" onClick={add} type="button" disabled={draft.sources.length >= 20}>＋ เพิ่มแหล่งเงินได้</button></div>
-    <p className="field-hint">รายการเงินได้ตามมาตรา 40(1)–40(8) แสดงเพื่อบันทึกและคัดแยกกรณีเท่านั้น ตัวอย่างคำนวณยังรองรับเฉพาะ 40(1) และเงินปันผลตาม 40(4) ที่ทบทวนแล้ว</p>
+    <section className="info-callout source-entry-guidance" aria-label="หลักเกณฑ์กรมสรรพากรสำหรับข้อมูลแหล่งเงินได้">
+      <strong>หลักเกณฑ์และแหล่งอ้างอิง</strong>
+      <p>{ACTUAL_FOREIGN_TAX_HELP}</p>
+      <p>จำแนกตามลักษณะเงินจริงและประเภทที่รายงานใน ภ.ง.ด.90/91 โดยแยกแต่ละประเทศและมาตรา 40 เป็นคนละรายการ</p>
+      <p>อนุสัญญาภาษีซ้อนอาจกำหนดเงื่อนไขสิทธิและข้อจำกัด แต่วิธีคำนวณในตารางใช้สูตรเดียวกันทุกประเทศ</p>
+      <ul className="source-reference-links">
+        <li><a href={RD_FTC_MANUAL_URL} target="_blank" rel="noopener noreferrer">คู่มือกรมสรรพากรสำหรับการคำนวณเครดิตภาษีต่างประเทศ</a></li>
+        <li><a href={RD_REVENUE_CODE_URL} target="_blank" rel="noopener noreferrer">ประมวลรัษฎากร มาตรา 40 และมาตรา 41</a></li>
+        <li><a href={RD_DTA_REGISTER_URL} target="_blank" rel="noopener noreferrer">รายชื่ออนุสัญญาภาษีซ้อนและสถานะจากกรมสรรพากร</a></li>
+      </ul>
+    </section>
+    <p className="field-hint">จำแนกตามลักษณะเงินจริงและประเภทที่รายงานใน ภ.ง.ด.90/91 โดยแยกแต่ละประเทศและมาตรา 40 เป็นคนละรายการ</p>
     {validationErrors.filter((issue) => issue.path?.length === 1 && issue.path[0] === "sources").map((issue, index) => <div className="alert alert-error" role="alert" key={index}>{issue.message}</div>)}
     {draft.sources.length === 0 && <div className="empty-inline"><strong>ยังไม่มีแหล่งเงินได้</strong><span>เพิ่มรายการเพื่อบันทึกประเทศ ประเภทเงินได้ วันที่ และจำนวน (D), (E), (F)</span><button type="button" className="button button-secondary" onClick={add}>เพิ่มแหล่งเงินได้แรก</button></div>}
     <div className="source-list">{draft.sources.map((source, index) => {
       const remittance = source.remittance ?? { remittanceDate: null, transferTotalAmount: null, transferCurrencyCode: source.currencyCode, transferTotalThb: null, classification: null, classificationNote: null };
+      const sourceCountry = COUNTRY_CHOICES.find((item) => item.code === source.countryCode);
+      const legacyCountryOption = source.countryCode !== null && sourceCountry === undefined
+        ? { value: source.countryCode, label: `${source.countryName?.trim() || source.countryCode} (${source.countryCode}) · ไม่พบในรายชื่อ DTA ที่รองรับ`, searchText: `${source.countryName ?? ""} ${source.countryCode}` }
+        : null;
+      const sourceCountryOptions = legacyCountryOption ? [legacyCountryOption, ...countryOptions] : countryOptions;
       const residenceRecord = source.earnedTaxYear === null ? undefined : draft.residenceYears?.find((record) => record.earnedTaxYear === source.earnedTaxYear);
       const openResidenceRecord = () => {
         if (source.earnedTaxYear === null) return;
@@ -394,20 +405,24 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
           <tbody>
             <tr>
               <td data-label={worksheetLabel("A")}><output className="readonly-value" aria-label={worksheetLabel("A")}>พ.ศ. {thaiYear(source.earnedTaxYear)}</output></td>
-              <td data-label={`${worksheetLabel("B")} *`}><SearchableChoice id={`source-${index}-countryCode`} label={worksheetLabel("B")} hiddenLabel value={source.countryCode} options={countryOptions} required onChange={(code) => {
+              <td data-label={`${worksheetLabel("B")} *`}><SearchableChoice id={`source-${index}-countryCode`} label={worksheetLabel("B")} hiddenLabel value={source.countryCode} options={sourceCountryOptions} required onChange={(code) => {
                 const country = COUNTRY_CHOICES.find((item) => item.code === code);
                 const suggestedCurrency = source.inputMode === "original_currency" && source.currencyCode === null && !hasAmounts(source)
-                  ? country?.suggestedCurrency ?? null
+                  ? country?.suggestedCurrency && CURRENCY_CHOICES.some((currency) => currency.code === country.suggestedCurrency) ? country.suggestedCurrency : null
                   : source.currencyCode;
                 updateSource(index, { countryCode: code, countryName: country?.storedName ?? null,
                   ...(suggestedCurrency !== source.currencyCode ? { currencyCode: suggestedCurrency } : {}) });
               }} /></td>
               <td data-label={`${worksheetLabel("C")} *`}><label className="field"><span className="sr-only">{worksheetLabel("C")}</span><select id={`source-${index}-incomeType`} required aria-required="true" value={incomeChoiceKey(source)} onChange={(event) => {
                 const choice = INCOME_CHOICES.find((item) => item.key === event.target.value);
-                updateSource(index, { incomeType: (choice?.incomeType ?? null) as ForeignIncomeSourceDraft["incomeType"], subtype: choice?.subtype ?? null });
-              }}><option value="">เลือกประเภท</option>{INCOME_CHOICES.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select></label></td>
+                updateSource(index, {
+                  incomeType: (choice?.incomeType ?? null) as ForeignIncomeSourceDraft["incomeType"],
+                  subtype: choice?.subtype ?? null,
+                  ...(choice && source.unsupportedClassification === "unsupported_income_type" ? { unsupportedClassification: null } : {}),
+                });
+              }}><option value="">เลือกประเภท</option>{incomeChoiceKey(source) === "other_unclassified" && <option value="other_unclassified">รายการเดิมที่ยังไม่จำแนกตามมาตรา 40</option>}{INCOME_CHOICES.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}</select></label></td>
               <td data-label={`${worksheetLabel("D")} *`}><MoneyField id={`source-${index}-grossIncomeAmount`} label={<span className="sr-only">{worksheetLabel("D")}</span>} value={source.grossIncomeAmount} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { grossIncomeAmount: value })} /></td>
-              <td data-label={`${worksheetLabel("E")} *`}>{adjustmentOpen ? <output className="readonly-value" aria-label={worksheetLabel("E")}>{effectiveForeignTaxAmount(source) === null ? "—" : `${formatMoney(effectiveForeignTaxAmount(source))} ${amountUnit}`}</output> : <MoneyField id={`source-${index}-actualForeignTaxPaid`} label={<span className="sr-only">{worksheetLabel("E")}</span>} value={effectiveForeignTaxAmount(source)} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { actualForeignTaxPaid: value, ...(source.eligibleForeignTax !== null ? { eligibleForeignTax: value } : {}) })} />}</td>
+              <td data-label={`${worksheetLabel("E")} *`}>{adjustmentOpen ? <output className="readonly-value" aria-label={worksheetLabel("E")}>{effectiveForeignTaxAmount(source) === null ? "—" : `${formatMoney(effectiveForeignTaxAmount(source))} ${amountUnit}`}</output> : <MoneyField id={`source-${index}-actualForeignTaxPaid`} label={<span className="sr-only">{worksheetLabel("E")}</span>} value={effectiveForeignTaxAmount(source)} unit={amountUnit} required disabled={source.inputMode === null} hint={ACTUAL_FOREIGN_TAX_HELP} onChange={(value) => updateSource(index, { actualForeignTaxPaid: value, ...(source.eligibleForeignTax !== null ? { eligibleForeignTax: value } : {}) })} />}</td>
               <td data-label={`${worksheetLabel("F")} *`}><MoneyField id={`source-${index}-remittedIncomeAmount`} label={<span className="sr-only">{worksheetLabel("F")}</span>} value={source.remittedIncomeAmount} unit={amountUnit} required disabled={source.inputMode === null} onChange={(value) => updateSource(index, { remittedIncomeAmount: value })} /></td>
               <td data-label={worksheetLabel("G")}><output className="readonly-value" aria-label={worksheetLabel("G")}>{computedG === null ? "—" : `${formatMoney(computedG)} บาท`}</output></td>
               <td data-label={worksheetLabel("H")}><output className="readonly-value" aria-label={worksheetLabel("H")}>{formatPercentage(computedShare)}</output></td>
@@ -430,7 +445,8 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
                 if (source.inputMode === nextMode) return;
                 if (nextMode === "worksheet_thb") requestFullReset(index, "รูปแบบการกรอก", { inputMode: nextMode, currencyCode: "THB", fxReference: null });
                 else if (nextMode === "original_currency") {
-                  const suggestedCurrency = COUNTRY_CHOICES.find((country) => country.code === source.countryCode)?.suggestedCurrency ?? null;
+                  const currency = COUNTRY_CHOICES.find((country) => country.code === source.countryCode)?.suggestedCurrency ?? null;
+                  const suggestedCurrency = currency !== null && CURRENCY_CHOICES.some((choice) => choice.code === currency) ? currency : null;
                   requestFullReset(index, "รูปแบบการกรอก", { inputMode: nextMode, currencyCode: suggestedCurrency, fxReference: null });
                 } else requestFullReset(index, "รูปแบบการกรอก", { inputMode: null, currencyCode: null, fxReference: null });
               }}><option value="">เลือกรูปแบบ</option><option value="worksheet_thb">จำนวนเงินตามตาราง (THB)</option><option value="original_currency">สกุลเงินต้นทาง</option></select></label>
@@ -469,7 +485,11 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
             </div></td></tr>
           </tbody>
         </table></div>
-        <p className="field-hint">คำนวณ (G) จาก ((F) ÷ (D)) × (E) และ (H) จาก (F) ÷ (D) · ระบบไม่สรุปสิทธิภาษีจากประเทศที่เลือก</p>
+        {sourceCountry?.treatyUrl && <p className="field-hint source-treaty-reference" role="note">
+          <a href={sourceCountry.treatyUrl} target="_blank" rel="noopener noreferrer">ข้อมูลอนุสัญญาภาษีซ้อนของ{sourceCountry.label}</a>{" "}
+          <a href={RD_DTA_REGISTER_URL} target="_blank" rel="noopener noreferrer">ตรวจสอบสถานะและพิธีสารปัจจุบันในทะเบียนกรมสรรพากร</a>
+        </p>}
+        <p className="field-hint">คำนวณ (G) จาก ((F) ÷ (D)) × (E) และ (H) จาก (F) ÷ (D)</p>
         <UnsupportedEditor source={source} sourceIndex={index} onChange={(update) => updateSource(index, update)} />
       </article>;
     })}</div>
@@ -528,7 +548,7 @@ export function StepFour({ draft, onNavigateStep }: StepProps) {
 }
 
 export function StepFive({ draft, attachments, onUpload, onDeleteAttachment, busy, mode = "demo" }: StepProps) {
-  const allItems = [{ sourceId: null, sourceIndex: undefined as number | undefined, label: "ภาษีไทย · ที่มาของ (L)" }, ...draft.sources.map((source, index) => ({ sourceId: source.id, sourceIndex: index, label: `แหล่งเงินได้ ${index + 1} · ${countryLabel(source.countryCode, "ยังไม่เลือกประเทศ")} · ${incomeTypeLabel(source)}` }))];
+  const allItems = [{ sourceId: null, sourceIndex: undefined as number | undefined, label: "ภาษีไทย · ที่มาของ (L)" }, ...draft.sources.map((source, index) => ({ sourceId: source.id, sourceIndex: index, label: `แหล่งเงินได้ ${index + 1} · ${countryLabel(source.countryCode, "ยังไม่เลือกประเทศ", source.countryName)} · ${incomeTypeLabel(source)}` }))];
   const missingEvidence = missingEvidenceInventory(draft, attachments.filter((file) => file.status === "ready"));
   return <section className="step-panel" aria-labelledby="step-title">
     <h2 id="step-title">หลักฐานและตรวจทาน</h2>
@@ -553,16 +573,22 @@ export function StepFive({ draft, attachments, onUpload, onDeleteAttachment, bus
         </article>;
       })}
     </div>
+    <section className="info-callout foreign-tax-confirmation-guidance" aria-label="หลักเกณฑ์ยืนยันภาษีต่างประเทศ">
+      <strong>ตรวจทานจำนวน (E) ก่อนยืนยัน</strong>
+      <p>จำนวนภาษีที่นำมาใช้เป็น (E) ควรเป็นภาษีเงินได้ที่ชำระจริงเท่านั้น ไม่รวมเบี้ยปรับ เงินเพิ่ม หรือภาษีที่ไม่ใช่ภาษีเงินได้ และต้องตรวจเงื่อนไขตามอนุสัญญาภาษีซ้อนของประเทศนั้น</p>
+      <p>การตรวจสิทธิและข้อจำกัดตามอนุสัญญาไม่เปลี่ยนสูตรคำนวณ ตารางใช้สูตรเดียวกันทุกประเทศและแยกเพดานเครดิตตามประเทศ</p>
+      <a href={RD_FTC_MANUAL_URL} target="_blank" rel="noopener noreferrer">คู่มือกรมสรรพากรสำหรับการคำนวณเครดิตภาษีต่างประเทศ</a>
+    </section>
     <div className="review-assumptions"><h3>ขอบเขตและสมมติฐาน</h3><ul><li>การคำนวณนี้เป็นตัวอย่างทางการศึกษา ไม่ใช่การวินิจฉัยสิทธิหรือแบบยื่นภาษี</li><li>จำนวนภาษีไทย (L) มาจากข้อมูลที่ผู้ใช้ระบุ ไม่ได้อนุมานจาก (J)</li><li>ภาษีที่จ่ายจริงจะแสดงแยกจาก (E) เมื่อมีการระบุการปรับจำนวน (E)</li><li>เมื่อยืนยันข้อมูล ผลคำนวณจะใช้ข้อมูลต้นทางและอัตราแลกเปลี่ยนที่แสดงในรายงาน</li></ul></div>
     <p className="field-hint">ยืนยันจำนวน L และ E ได้จากปุ่มด้านล่าง ระบบจะบันทึกการยืนยันร่วมกับร่าง</p>
   </section>;
 }
 
 function UnsupportedEditor({ source, sourceIndex, onChange }: { source: ForeignIncomeSourceDraft; sourceIndex: number; onChange: (update: Partial<ForeignIncomeSourceDraft>) => void }) {
-  return <details className="unsupported-details"><summary>มีข้อเท็จจริงที่ยังไม่รองรับหรือไม่?</summary><div className="field-grid details-grid">
-    <label className="field"><span>สถานะตรวจสอบ</span><select id={`source-${sourceIndex}-unsupportedClassification`} value={source.unsupportedClassification ?? ""} onChange={(event) => onChange({ unsupportedClassification: (event.target.value || null) as UnsupportedClassification | null })}><option value="">ไม่มีข้อเท็จจริงเพิ่มเติม</option><option value="unknown_treaty_treatment">ยังไม่ทราบสิทธิ/เงื่อนไขตาม DTA</option><option value="cross_year_remittance">การนำเข้าอยู่คนละปีภาษี</option><option value="nonresident_earned_income">วันพำนักต่ำกว่าเกณฑ์ตัวอย่าง</option><option value="unsupported_income_type">ประเภทเงินได้ยังไม่รองรับ</option><option value="mixed_principal_and_income">ยอดโอนรวมเงินต้นและเงินได้</option><option value="ambiguous_gross_net">ข้อเท็จจริง gross/net กำกวม</option><option value="tax_refund">รายการเป็นเงินคืนภาษี</option><option value="multiple_remittances">มีการนำเข้าหลายครั้ง</option><option value="other">กรณีอื่นที่ต้องตรวจสอบ</option></select></label>
+  return <details className="unsupported-details"><summary>มีข้อเท็จจริงที่ต้องตรวจสอบเพิ่มเติมหรือไม่?</summary><div className="field-grid details-grid">
+    <label className="field"><span>สถานะตรวจสอบ</span><select id={`source-${sourceIndex}-unsupportedClassification`} value={source.unsupportedClassification ?? ""} onChange={(event) => onChange({ unsupportedClassification: (event.target.value || null) as UnsupportedClassification | null })}><option value="">ไม่มีข้อเท็จจริงเพิ่มเติม</option><option value="unknown_treaty_treatment">ยังไม่ทราบสิทธิหรือเงื่อนไขตามอนุสัญญาภาษีซ้อน</option><option value="cross_year_remittance">ปีที่นำเข้าไม่ตรงกับปีภาษีที่ขอเครดิต</option><option value="nonresident_earned_income">วันพำนักไม่ถึง 180 วันตามมาตรา 41 ในปีที่เกิดเงินได้</option><option value="unsupported_income_type">ยังจำแนกประเภทเงินได้ตามมาตรา 40 ไม่ได้</option><option value="mixed_principal_and_income">ยอดโอนรวมเงินต้นและเงินได้</option><option value="ambiguous_gross_net">ข้อเท็จจริง gross/net กำกวม</option><option value="tax_refund">รายการเป็นเงินคืนภาษี</option><option value="multiple_remittances">มีการนำเข้าเงินหลายครั้ง</option><option value="other">กรณีอื่นที่ต้องตรวจสอบ</option></select></label>
     <label className="field"><span>คำอธิบายเพิ่มเติม</span><textarea rows={2} value={source.unsupportedExplanation ?? ""} onChange={(event) => onChange({ unsupportedExplanation: nullableText(event.target.value) })} /></label>
-    {source.unsupportedClassification && <div className="field-span alert alert-warning">รายการนี้จะบันทึกร่างได้ แต่จะไม่คำนวณเครดิตเหมือนกรณีที่รองรับ</div>}
+    {source.unsupportedClassification && <div className="field-span alert alert-warning">เก็บรายการนี้เป็นข้อเท็จจริงที่ต้องตรวจสอบก่อนสรุปเครดิตภาษี</div>}
   </div></details>;
 }
 

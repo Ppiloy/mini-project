@@ -42,7 +42,7 @@ describe("the ordered migration release gate", () => {
   it("accepts exact committed bytes from a fresh checkout on Windows or Unix", async () => {
     const root = await freshCheckoutFixture();
 
-    await expect(verifyMigrations(root)).resolves.toBe(9);
+    await expect(verifyMigrations(root)).resolves.toBe(10);
   }, 20_000);
 
   it.each([
@@ -55,6 +55,7 @@ describe("the ordered migration release gate", () => {
     "20261014000700_restore_initialization_gate.sql",
     "20261102000100_residence_periods_allow_leap_year.sql",
     "20261103000100_snapshot_submission_metadata.sql",
+    "20261103000200_expand_income_type_40_categories.sql",
   ])("rejects CRLF conversion of the committed %s bytes", async (name) => {
     const root = await freshCheckoutFixture();
     const path = join(root, "netlify/database/migrations", name);

@@ -196,14 +196,14 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
           const sourceIndex = snapshot.inputs.sources.findIndex((source) => source.id === file.sourceId && source.id !== null);
           const source = sourceIndex < 0 ? null : snapshot.inputs.sources[sourceIndex]!;
           const groupLabel = file.kind === "thai_tax" && file.sourceId === null ? "ภาษีไทย"
-            : source ? `แหล่งเงินได้ ${sourceIndex + 1} · ${countryLabel(source.countryCode)} · ${incomeTypeLabel(source)}` : "เอกสารอื่นของกรณี";
+            : source ? `แหล่งเงินได้ ${sourceIndex + 1} · ${countryLabel(source.countryCode, "ไม่ระบุประเทศ", source.countryName)} · ${incomeTypeLabel(source)}` : "เอกสารอื่นของกรณี";
           return <li key={file.id}><strong>{file.displayName}</strong><small>{groupLabel} · {EVIDENCE_LABELS[file.kind]}</small></li>;
         })}</ul>}
         <p className="field-hint">ระบบจะตรวจสอบไฟล์ต้นฉบับอีกครั้งก่อนบันทึกผลส่งตรวจ</p>
       </div>
       {missingEvidence.length > 0 ? <ul className="missing-evidence-groups">{missingEvidence.map((group) => {
         const source = group.sourceIndex === null ? null : snapshot.inputs.sources[group.sourceIndex] ?? null;
-        const heading = source === null ? "ภาษีไทย" : `แหล่งเงินได้ ${group.sourceIndex! + 1} · ${countryLabel(source.countryCode)} · ${incomeTypeLabel(source)}`;
+        const heading = source === null ? "ภาษีไทย" : `แหล่งเงินได้ ${group.sourceIndex! + 1} · ${countryLabel(source.countryCode, "ไม่ระบุประเทศ", source.countryName)} · ${incomeTypeLabel(source)}`;
         return <li key={`${group.sourceId ?? "case"}-${group.sourceIndex ?? ""}`}><strong>{heading}</strong><span>{group.missingKinds.map((kind) => EVIDENCE_LABELS[kind]).join(" · ")}</span></li>;
       })}</ul> : <p className="empty-evidence">ไม่พบหมวดที่ยังไม่มีไฟล์พร้อมใช้งานตามข้อมูลปัจจุบัน</p>}
       {unresolvedAttachments.length > 0 && <div className="alert alert-warning" role="status"><strong>ยังส่งแบบร่างให้เจ้าหน้าที่ไม่ได้</strong><p>มีไฟล์กำลังอัปโหลดหรืออัปโหลดไม่สำเร็จ</p><ul>{unresolvedAttachments.map((file) => <li key={file.id}>{file.displayName} · {file.status === "pending" ? "กำลังตรวจสอบ" : "อัปโหลดไม่สำเร็จ"}</li>)}</ul><button className="button button-secondary button-small" onClick={calculateCurrent}>กลับไปตรวจสอบไฟล์</button></div>}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AttachmentMetadata, FtcCaseDraft, ForeignIncomeSourceDraft } from "./contracts.js";
 import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent, sourceEligibilityFingerprint, taxInputFingerprint } from "./confirmations.js";
 import { calculateFTC, validateSubmission, withCanonicalThbAmounts } from "./calculator.js";
+import { COUNTRY_CHOICES, INCOME_CHOICES } from "./coverage.js";
 import { DEMO_POLICY } from "./policy.js";
 import {
   countryLimitAboveFixture,
@@ -354,12 +355,185 @@ describe("FTC calculator", () => {
     expect(calculateFTC(supportedResidence).outcome).toBe("ready");
   });
 
-  it("rejects cross-year facts, mismatched common FX and missing original-currency references", () => {
+  it("calculates separate Section 40 entries with one shared formula", () => {
+    const base = partialRemittanceFixture.draft;
+    const source = base.sources[0]!;
+    const sources = INCOME_CHOICES.map((choice, index) => ({
+      ...source,
+      id: `income-${index}`,
+      incomeType: choice.incomeType,
+      subtype: choice.subtype,
+    }));
+    const draft = reconfirm({ ...base, sources });
+    const result = calculateFTC(draft);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.totalRemittedIncome).toBe("225000");
+    expect(result.lines.filter(({ code }) => code === "source_D")).toHaveLength(9);
+    expect(result.lines.filter(({ code }) => code === "source_G").map(({ value }) => value)).toEqual(Array(9).fill("2500"));
+    expect(result.countries).toEqual([expect.objectContaining({
+      countryCode: "CN",
+      remittedIncome: "225000",
+      attributableForeignTax: "22500",
+      thaiTaxLimit: "100000",
+      allowableCredit: "22500",
+    })]);
+  });
+
+  it("limits each country's credit independently without pooling excess foreign tax", () => {
+    const aboveLimit = countryLimitAboveFixture.draft.sources[0]!;
+    const belowLimit = countryLimitBelowFixture.draft.sources[0]!;
+    const draft = reconfirm({
+      ...countryLimitAboveFixture.draft,
+      sources: [
+        { ...aboveLimit, countryCode: "US", countryName: "United States" },
+        { ...belowLimit, countryCode: "SG", countryName: "Singapore" },
+      ],
+    });
+    const result = calculateFTC(draft);
+    const us = result.countries.find(({ countryCode }) => countryCode === "US")!;
+    const singapore = result.countries.find(({ countryCode }) => countryCode === "SG")!;
+
+    expect(result.outcome).toBe("ready");
+    expect(us.attributableForeignTax).toBe("15000");
+    expect(singapore.attributableForeignTax).toBe("5000");
+    expect(us.thaiTaxLimit).toBe(singapore.thaiTaxLimit);
+    expect(us.displayedAllowableCredit).toBe("6666.67");
+    expect(singapore.displayedAllowableCredit).toBe("5000.00");
+    expect(result.allowableCredit).toBe("11666.67");
+  });
+
+  it("continues calculating a saved legacy other income subtype", () => {
+    const legacy = withSource(partialRemittanceFixture.draft, 0, { incomeType: "other", subtype: "40_2" });
+    const result = calculateFTC(legacy);
+
+    expect(result.outcome).toBe("ready");
+    expect(result.lines.find(({ code }) => code === "source_G")?.value).toBe("2500");
+    expect(result.allowableCredit).toBe("2500.00");
+  });
+
+  it("accepts category-level entries without subtypes and preserves legacy Section 40(4) interest", () => {
+    const base = partialRemittanceFixture.draft;
+    for (const choice of INCOME_CHOICES.filter(({ incomeType }) => incomeType !== "dividend_40_4")) {
+      const result = calculateFTC(withSource(base, 0, { incomeType: choice.incomeType, subtype: null }));
+      expect(result.outcome).toBe("ready");
+      expect(result.allowableCredit).toBe("2500.00");
+    }
+
+    const legacyInterest = withSource(base, 0, { incomeType: "other", subtype: "40_4_interest" });
+    expect(calculateFTC(legacyInterest).outcome).toBe("ready");
+    const legacyInvestmentInterest = withSource(base, 0, { incomeType: "investment_40_4", subtype: "interest" });
+    expect(calculateFTC(legacyInvestmentInterest).outcome).toBe("ready");
+    const unclassifiedDividend = withSource(base, 0, { incomeType: "dividend_40_4", subtype: null });
+    expect(calculateFTC(unclassifiedDividend).outcome).toBe("needs_review");
+  });
+
+  it("uses the common calculation for every RD DTA country and excludes nonpartners", () => {
+    for (const country of COUNTRY_CHOICES) {
+      const source = { ...partialRemittanceFixture.draft.sources[0]!, countryCode: country.code, countryName: country.storedName };
+      const draft = reconfirm({ ...partialRemittanceFixture.draft, sources: [source] });
+      const result = calculateFTC(draft);
+      expect(result.outcome).toBe("ready");
+      expect(result.allowableCredit).toBe("2500.00");
+      expect(result.countries[0]?.countryCode).toBe(country.code);
+    }
+
+    for (const code of ["XX", "SA"]) {
+      const source = { ...partialRemittanceFixture.draft.sources[0]!, countryCode: code, countryName: "ประเทศอื่น" };
+      const result = calculateFTC(reconfirm({ ...partialRemittanceFixture.draft, sources: [source] }));
+      expect(result.outcome).toBe("needs_review");
+      expect(result.allowableCredit).toBeNull();
+      expect(result.validationMessages.map(({ code }) => code)).toContain("source.unsupported_country");
+    }
+  });
+
+  it("accepts qualifying foreign income earned in 2024 and remitted in the 2025 claim year", () => {
+    const base = partialRemittanceFixture.draft;
+    const source = {
+      ...base.sources[0]!,
+      earnedTaxYear: 2024,
+      earnedDate: "2024-12-31",
+      remittance: { ...base.sources[0]!.remittance!, remittanceDate: "2025-01-01" },
+    };
+    const result = calculateFTC(reconfirm({ ...base, sources: [source] }));
+
+    expect(result.outcome).toBe("ready");
+    expect(result.validationMessages).toEqual([]);
+    expect(result.allowableCredit).toBe("2500.00");
+  });
+
+  it("supports the 2024 tax year when the income and remittance meet that selected year", () => {
+    const base = partialRemittanceFixture.draft;
+    const source = {
+      ...base.sources[0]!,
+      earnedTaxYear: 2024,
+      earnedDate: "2024-02-01",
+      remittance: { ...base.sources[0]!.remittance!, remittanceDate: "2024-12-01" },
+    };
+    const result = calculateFTC(reconfirm({ ...base, taxYear: 2024, sources: [source] }));
+
+    expect(result.outcome).toBe("ready");
+    expect(result.validationMessages).toEqual([]);
+    expect(result.allowableCredit).toBe("2500.00");
+  });
+
+  it("uses the selected year for a 2026 remittance without a 2025 policy-year block", () => {
+    const base = partialRemittanceFixture.draft;
+    const source = {
+      ...base.sources[0]!,
+      earnedTaxYear: 2024,
+      earnedDate: "2024-02-01",
+      remittance: { ...base.sources[0]!.remittance!, remittanceDate: "2026-07-01" },
+    };
+    const result = calculateFTC(reconfirm({ ...base, taxYear: 2026, sources: [source] }));
+
+    expect(result.outcome).toBe("ready");
+    expect(result.allowableCredit).toBe("2500.00");
+  });
+
+  it("explains that foreign income earned before 2024 falls outside the RD tool window", () => {
+    const base = partialRemittanceFixture.draft;
+    const source = {
+      ...base.sources[0]!,
+      earnedTaxYear: 2023,
+      earnedDate: "2023-12-31",
+      remittance: { ...base.sources[0]!.remittance!, remittanceDate: "2024-01-01" },
+    };
+    const result = calculateFTC(reconfirm({ ...base, taxYear: 2024, sources: [source] }));
+
+    expect(result.outcome).toBe("needs_review");
+    expect(result.allowableCredit).toBeNull();
+    expect(result.validationMessages.map(({ code }) => code)).toContain("source.income_before_tool_window");
+  });
+
+  it("explains the RD DTA, Section 40 filing and residence criteria", () => {
+    const base = partialRemittanceFixture.draft;
+    const unknownCountry = withSource(base, 0, { countryCode: "XX", countryName: "ประเทศอื่น" });
+    const unclassifiedIncome = withSource(base, 0, { incomeType: "other", subtype: "other_unclassified" });
+    const belowResidence = withSource(base, 0, { residenceDaysInEarnedYear: 179 });
+    const countryMessage = calculateFTC(unknownCountry).validationMessages.find(({ code }) => code === "source.unsupported_country")?.message ?? "";
+    const incomeMessage = calculateFTC(unclassifiedIncome).validationMessages.find(({ code }) => code === "source.unsupported_type")?.message ?? "";
+    const residenceMessage = calculateFTC(belowResidence).validationMessages.find(({ code }) => code === "source.nonresident_earned_income")?.message ?? "";
+
+    expect(countryMessage).toContain("DTA กับไทย");
+    expect(countryMessage).toContain("กรมสรรพากร");
+    expect(incomeMessage).toContain("ภ.ง.ด.90/91");
+    expect(incomeMessage).toContain("มาตรา 40");
+    expect(residenceMessage).toContain("180 วัน");
+    expect(residenceMessage).toContain("มาตรา 41");
+  });
+
+  it("rejects dates inconsistent with their declared years, mismatched FX and missing references", () => {
     const fxDraft = quotationPerHundredFixture.draft;
-    const crossYear = withSource(fxDraft, 0, { earnedTaxYear: 2024, earnedDate: "2024-12-31" });
+    const mismatchedEarnedYear = withSource(fxDraft, 0, { earnedTaxYear: 2024, earnedDate: "2025-01-01" });
+    const mismatchedRemittanceYear = withSource(fxDraft, 0, {
+      remittance: { ...fxDraft.sources[0]!.remittance!, remittanceDate: "2024-12-31" },
+    });
     const mismatchedFx = withSource(fxDraft, 0, { fxReference: { ...fxDraft.sources[0]!.fxReference!, currencyCode: "EUR" } });
     const missingFx = withSource(fxDraft, 0, { fxReference: null });
-    expect(calculateFTC(crossYear).validationMessages.map(({ code }) => code)).toContain("source.unsupported_income_year");
+    expect(calculateFTC(mismatchedEarnedYear).validationMessages.map(({ code }) => code)).toContain("source.earned_date_year_mismatch");
+    expect(calculateFTC(mismatchedRemittanceYear).validationMessages.map(({ code }) => code)).toContain("source.cross_year_remittance");
+    expect(calculateFTC(mismatchedRemittanceYear).validationMessages.map(({ code }) => code)).toContain("source.remittance_before_earned");
     expect(calculateFTC(mismatchedFx).validationMessages.map(({ code }) => code)).toContain("fx.currency_mismatch");
     expect(calculateFTC(missingFx).outcome).toBe("incomplete");
   });
@@ -444,11 +618,11 @@ describe("FTC calculator", () => {
     expect(result.allowableCredit).toBe("2500.00");
   });
 
-  it("rejects inherited country keys from a custom policy", () => {
-    const usDraft = withSource(partialRemittanceFixture.draft, 0, { countryCode: "US", countryName: "United States" });
-    const inheritedCountries = Object.assign(Object.create({ US: "United States" }), DEMO_POLICY.supportedCountries) as Record<string, string>;
+  it("rejects inherited nonpartner country keys from a custom policy", () => {
+    const nonpartnerDraft = withSource(partialRemittanceFixture.draft, 0, { countryCode: "XX", countryName: "ประเทศอื่น" });
+    const inheritedCountries = Object.assign(Object.create({ XX: "ประเทศอื่น" }), DEMO_POLICY.supportedCountries) as Record<string, string>;
     const policy = { ...DEMO_POLICY, supportedCountries: inheritedCountries };
-    const result = calculateFTC(usDraft, policy);
+    const result = calculateFTC(nonpartnerDraft, policy);
     expect(result.outcome).toBe("needs_review");
     expect(result.allowableCredit).toBeNull();
     expect(result.validationMessages.map(({ code }) => code)).toContain("source.unsupported_country");

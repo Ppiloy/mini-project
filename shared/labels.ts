@@ -1,4 +1,7 @@
 import type { EvidenceKind, ForeignIncomeSourceDraft, FxRateType, FxSourceKind } from "./contracts.js";
+import { COUNTRY_CHOICES, INCOME_CHOICES } from "./coverage.js";
+
+export { COUNTRY_CHOICES } from "./coverage.js";
 
 export const WORKSHEET_LABELS = {
   A: "ปีภาษีที่เกิดเงินได้",
@@ -71,14 +74,6 @@ export function fxSourceKindLabel(value: FxSourceKind | null): string {
   }
 }
 
-export const COUNTRY_CHOICES = [
-  { code: "US", label: "สหรัฐอเมริกา", storedName: "United States", suggestedCurrency: "USD", reviewed: false },
-  { code: "SG", label: "สิงคโปร์", storedName: "Singapore", suggestedCurrency: "SGD", reviewed: false },
-  { code: "CN", label: "จีน", storedName: "China", suggestedCurrency: "CNY", reviewed: true },
-  { code: "VN", label: "เวียดนาม", storedName: "Vietnam", suggestedCurrency: "VND", reviewed: true },
-  { code: "XX", label: "ประเทศอื่น", storedName: "ประเทศอื่น", suggestedCurrency: null, reviewed: false },
-] as const;
-
 export const CURRENCY_CHOICES = [
   { code: "THB", label: "บาทไทย" },
   { code: "USD", label: "ดอลลาร์สหรัฐ" },
@@ -93,14 +88,24 @@ export const CURRENCY_CHOICES = [
 
 export type CurrencyCode = typeof CURRENCY_CHOICES[number]["code"];
 
-export function countryLabel(code: string | null | undefined, fallback = "ไม่ระบุประเทศ"): string {
-  return COUNTRY_CHOICES.find((country) => country.code === code)?.label ?? fallback;
+export function countryLabel(code: string | null | undefined, fallback = "ไม่ระบุประเทศ", storedName?: string | null): string {
+  const knownCountry = COUNTRY_CHOICES.find((country) => country.code === code);
+  if (knownCountry) return knownCountry.label;
+  const legacyName = storedName?.trim();
+  if (code && legacyName) return `${legacyName} (${code}) · ไม่พบในรายชื่อ DTA ที่รองรับ`;
+  return fallback;
 }
 
 export function incomeTypeLabel(source: Pick<ForeignIncomeSourceDraft, "incomeType" | "subtype">): string {
-  if (source.incomeType === "salary_40_1") return "40(1) เงินเดือนหรือค่าจ้าง";
-  if (source.incomeType === "dividend_40_4") return "40(4) เงินปันผล";
-  if (source.incomeType === "other") return "ประเภทเงินได้อื่น — ยังไม่รองรับ";
+  const choice = INCOME_CHOICES.find((item) => item.incomeType === source.incomeType && item.subtype === source.subtype);
+  if (choice) return choice.label;
+  const categoryChoice = INCOME_CHOICES.find((item) => item.incomeType === source.incomeType);
+  if (categoryChoice) return categoryChoice.label;
+  if (source.incomeType === "other") {
+    const legacyChoice = INCOME_CHOICES.find((item) => item.key === source.subtype);
+    if (legacyChoice) return legacyChoice.label;
+  }
+  if (source.incomeType === "other") return "รายการเดิมที่ยังไม่จำแนกตามมาตรา 40";
   return "ยังไม่ระบุประเภทเงินได้";
 }
 

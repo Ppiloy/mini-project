@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { apiSuccessSchemas } from "../../shared/contracts.js";
-import type { CalculationSnapshot } from "../../shared/contracts.js";
+import type { CalculationSnapshot, FtcCaseDraft } from "../../shared/contracts.js";
+import { createEmptySource } from "../../shared/draft.js";
 import { advance, browserApi, createCase, login, operatorSeed } from "./fixtures.js";
 import { assertFocusedSkipLinkIsScreenOnly } from "./print-acceptance.js";
 
@@ -277,49 +278,76 @@ test("real API rejects incomplete and unsupported input without inventing an ord
   const incomplete = await browserApi(page, `/api/snapshots/${incompleteId}`);
   expect((incomplete.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "incomplete", allowableCredit: null });
 
-  await page.goto(`/app/cases/${caseId}/edit`);
-  await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
-  await enterResidenceYear(page, 2024, "2024-01-01", "2024-12-31", 366);
-  await advance(page);
-  await page.getByRole("button", { name: "เพิ่มแหล่งเงินได้แรก" }).click();
-  const country = page.getByRole("combobox", { name: /ประเทศแหล่งเงินได้/ });
-  await country.fill("XX");
-  await page.getByRole("option", { name: /ประเทศอื่น \(XX\)/ }).click();
-  await page.getByRole("combobox", { name: /ประเภทเงินได้/ }).selectOption("other_unclassified");
-  await page.getByLabel("วันที่เกิดเงินได้").fill("2024-03-01");
-  await page.getByLabel("รูปแบบจำนวนเงินของช่อง (D), (E) และ (F)").selectOption("worksheet_thb");
-  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ }).fill("10000");
-  await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("1000");
-  await page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ }).fill("5000");
-  await page.getByLabel("วันที่นำเงินเข้าไทย").fill("2024-03-01");
-  await advance(page);
-  await page.getByRole("textbox", { name: /^เงินได้พึงประเมินในประเทศไทย \(J\)/ }).fill("10000");
-  await page.getByRole("textbox", { name: /^ภาษีที่ต้องชำระในประเทศไทย \(L\)/ }).fill("1000");
-  await advance(page);
-  await advance(page);
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีไทยก่อนเครดิต (L)" }).check();
-  await page.getByRole("checkbox", { name: "ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1" }).check();
-  await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
-
-  // Unsupported input stays editable in the form. Exercise the immutable needs_review snapshot
-  // through the authenticated API after saving, rather than expecting the editor to create it.
-  await expect(page.getByRole("alert").filter({ hasText: "ยังสร้างผลคำนวณไม่ได้ กรุณาแก้ไขรายการที่ระบุ" })).toBeVisible();
-  await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/edit$`));
-  const unsupportedDraftSave = page.waitForResponse((response) => response.url().endsWith(`/api/cases/${caseId}/draft`) && response.request().method() === "PUT");
-  await page.getByRole("button", { name: "บันทึกร่าง", exact: true }).click();
-  expect((await unsupportedDraftSave).status()).toBe(200);
-  const savedUnsupportedCase = (await browserApi(page, `/api/cases/${caseId}`)).json as { data: { case: { draft: { revision: number } } } };
+  const currentCase = (await browserApi(page, `/api/cases/${caseId}`)).json as { data: { case: { draft: FtcCaseDraft } } };
+  const unsupportedDraft = structuredClone(currentCase.data.case.draft);
+  unsupportedDraft.taxYear = 2024;
+  unsupportedDraft.domesticAssessableIncome = "10000.00";
+  unsupportedDraft.thaiTax = { amountBeforeFtc: "1000.00", provenance: "ผู้ใช้ระบุจำนวนภาษีไทยก่อนเครดิต", confirmedAt: null, confirmedInputFingerprint: null };
+  unsupportedDraft.residenceYears = [{
+    earnedTaxYear: 2024,
+    mode: "periods",
+    periods: [{ startDate: "2024-01-01", endDate: "2024-12-31" }],
+  }];
+  delete unsupportedDraft.residencePeriods;
+  unsupportedDraft.sources = [{
+    ...createEmptySource(),
+    countryCode: "XX",
+    countryName: "Other",
+    incomeType: "other",
+    subtype: "other_unclassified",
+    earnedTaxYear: 2024,
+    earnedDate: "2024-03-01",
+    inputMode: "worksheet_thb",
+    grossIncomeAmount: "10000.00",
+    currencyCode: "THB",
+    actualForeignTaxPaid: "1000.00",
+    remittedIncomeAmount: "5000.00",
+    remittance: {
+      remittanceDate: "2024-03-01",
+      transferTotalAmount: "5000.00",
+      transferCurrencyCode: "THB",
+      transferTotalThb: null,
+      classification: "income_only",
+      classificationNote: null,
+    },
+  }];
+  const unsupportedDraftSave = await browserApi(page, `/api/cases/${caseId}/draft`, {
+    method: "PUT",
+    csrfToken: session.csrfToken,
+    body: {
+      expectedRevision: unsupportedDraft.revision,
+      requestId: crypto.randomUUID(),
+      data: unsupportedDraft,
+      confirmations: { thaiTax: true, eligibleSourceIndexes: [0] },
+    },
+  });
+  expect(unsupportedDraftSave.status).toBe(200);
+  expect(apiSuccessSchemas.case.safeParse(unsupportedDraftSave.json).success).toBe(true);
+  const savedUnsupportedCase = unsupportedDraftSave.json as { data: { case: { draft: FtcCaseDraft } } };
   const unsupportedCalculation = await browserApi(page, `/api/cases/${caseId}/calculate`, {
     method: "POST", csrfToken: session.csrfToken,
     body: { expectedRevision: savedUnsupportedCase.data.case.draft.revision, requestId: crypto.randomUUID() },
   });
   expect(unsupportedCalculation.status).toBe(200);
+  expect(apiSuccessSchemas.snapshot.safeParse(unsupportedCalculation.json).success).toBe(true);
   const unsupportedId = (unsupportedCalculation.json as { data: { snapshot: { id: string } } }).data.snapshot.id;
   const unsupported = await browserApi(page, `/api/snapshots/${unsupportedId}`);
-  expect((unsupported.json as { data: { snapshot: { result: { outcome: string; allowableCredit: string | null } } } }).data.snapshot.result).toMatchObject({ outcome: "needs_review", allowableCredit: null });
+  const unsupportedSnapshot = (unsupported.json as { data: { snapshot: CalculationSnapshot } }).data.snapshot;
+  expect(apiSuccessSchemas.snapshot.safeParse(unsupported.json).success).toBe(true);
+  expect(unsupportedSnapshot.inputs).toMatchObject({
+    taxYear: 2024,
+    sources: [{ countryCode: "XX", incomeType: "other", subtype: "other_unclassified", earnedTaxYear: 2024 }],
+  });
+  expect(unsupportedSnapshot.result).toMatchObject({ outcome: "needs_review", allowableCredit: null });
+  const unsupportedCodes = unsupportedSnapshot.result.validationMessages.map(({ code }) => code);
+  expect(unsupportedCodes).toContain("source.unsupported_country");
+  expect(unsupportedCodes).toContain("source.unsupported_type");
+  expect(unsupportedCodes).not.toContain("case.unsupported_year");
+  expect(unsupportedCodes).not.toContain("source.income_before_tool_window");
   await page.goto(`/app/cases/${caseId}/result?preview=${unsupportedId}`);
   await expect(page).toHaveURL(new RegExp(`/app/cases/${caseId}/result\\?preview=`));
-  await expect(page.getByText("ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)")).toBeVisible();
+  await expect(page.getByText(/รายชื่อประเทศคู่สัญญาที่กรมสรรพากรระบุ/)).toBeVisible();
+  await expect(page.getByText(/เครื่องมือนี้รองรับมาตรา 40\(1\)–\(8\)/)).toBeVisible();
   await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
 });
 

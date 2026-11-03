@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
 import { createEmptySource } from "../shared/draft.js";
+import { INCOME_CHOICES } from "../shared/coverage.js";
 import type { ForeignIncomeSourceDraft, FtcCaseDraft } from "../shared/contracts.js";
 import { createCalculationSnapshot } from "../shared/snapshot.js";
 import { createApp } from "./app.js";
@@ -849,6 +850,77 @@ describe("hosted authentication and durable draft API", () => {
     const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
     expect(reloaded.body.data.case.draft.residencePeriods).toEqual(periods);
     expect(reloaded.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
+  });
+
+  it("round-trips every Section 40 income category through the authenticated API", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "income-coverage-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    draft.taxYear = 2025;
+    draft.sources = INCOME_CHOICES.map((choice) => ({
+      ...createEmptySource(),
+      countryCode: "US",
+      countryName: "United States",
+      incomeType: choice.incomeType,
+      subtype: choice.subtype,
+      earnedTaxYear: 2025,
+      earnedDate: "2025-01-01",
+    }));
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0,
+      requestId: "income-coverage-save",
+      data: draft,
+    });
+    expect(saved.status).toBe(200);
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.status).toBe(200);
+    expect(reloaded.body.data.case.draft.sources.map(({ incomeType, subtype }: { incomeType: string; subtype: string | null }) => [incomeType, subtype]))
+      .toEqual(INCOME_CHOICES.map(({ incomeType, subtype }) => [incomeType, subtype]));
+  });
+
+  it("reads an old-version snapshot with its original income type and policy intact", async () => {
+    const { app, pool } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "legacy-snapshot-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    const legacySource = createEmptySource();
+    legacySource.countryCode = "VN";
+    legacySource.countryName = "Vietnam";
+    legacySource.incomeType = "other";
+    legacySource.subtype = "40_2";
+    draft.sources = [legacySource];
+    const snapshot = createCalculationSnapshot({
+      id: randomUUID(),
+      caseId,
+      revision: draft.revision,
+      kind: "preview",
+      inputs: draft,
+      evidence: [],
+      createdAt: "2025-03-04T05:06:07.000Z",
+    });
+    snapshot.policy = {
+      ...snapshot.policy,
+      id: "rd-ftc-demo-2568-v1",
+      reviewedAt: "2026-10-14",
+      assumptions: ["Historical policy assumptions remain frozen."],
+    };
+    snapshot.result.policyVersion = "rd-ftc-demo-2568-v1";
+    snapshot.result.engineVersion = "ftc-engine-v3";
+    const historicalSnapshot = structuredClone(snapshot);
+    await pool.query(
+      `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+       VALUES ($1,$2,$3,'preview',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+      [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+        JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+    );
+
+    const readBack = await agent.get(`/api/snapshots/${snapshot.id}`).set("Origin", origin);
+    expect(readBack.status).toBe(200);
+    expect(readBack.body.data.snapshot).toEqual(historicalSnapshot);
   });
 
   it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {

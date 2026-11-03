@@ -293,18 +293,26 @@ test("retired transfer-total and classification controls are absent", async ({ p
   await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศที่นำเข้ามาในประเทศ \(F\)/ })).toHaveValue("25000.00");
 });
 
-test("unsupported tax year stays visible and does not produce an ordinary credit result", async ({ page }) => {
+test("a retained pre-2024 tax year stays visible and explains the RD calculator cutoff", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
-  await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2567");
-  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
-  await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
+  const caseId = new URL(page.url()).pathname.split("/")[3]!;
+  await page.evaluate((id) => {
+    const key = "ftc.prototype.fixture.v1";
+    const stored = JSON.parse(localStorage.getItem(key) ?? "null") as { cases?: Array<{ id: string; draft: { taxYear: number | null } }> } | null;
+    const record = stored?.cases?.find((item) => item.id === id);
+    if (!record) throw new Error("The demo case did not exist in local storage.");
+    record.draft.taxYear = 2023;
+    localStorage.setItem(key, JSON.stringify(stored));
+  }, caseId);
+  await page.reload();
+  const taxYear = page.getByLabel("ปีภาษี (พ.ศ.)");
+  await expect(taxYear).toHaveValue("2566");
+  await advanceToReview(page);
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   await expect(page.getByRole("heading", { name: "ข้อมูลเบื้องต้น" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "ข้อมูลเบื้องต้น" }).getByRole("alert").filter({ hasText: "ต้นแบบรองรับเฉพาะปีภาษี 2568 (ค.ศ. 2025)" })).toBeVisible();
+  await expect(page.locator(".step-panel .alert.alert-error").filter({ hasText: "เครื่องมือนี้รองรับปีภาษีตั้งแต่ ค.ศ. 2024 เป็นต้นไป" })).toBeVisible();
   await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
 });
 
@@ -432,7 +440,7 @@ test("Next explains the missing source while an incomplete draft can still be sa
   await page.getByLabel(/รูปแบบจำนวนเงินของช่อง/).selectOption("worksheet_thb");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText(/แหล่งเงินได้ 1 \(เวียดนาม · 40\(1\) เงินเดือนหรือค่าจ้าง\): กรุณากรอกจำนวนเงินได้ในต่างประเทศ \(D\)/)).toBeVisible();
+  await expect(page.getByText(/แหล่งเงินได้ 1 \(เวียดนาม · 40\(1\) เงินได้จากการจ้างแรงงาน\): กรุณากรอกจำนวนเงินได้ในต่างประเทศ \(D\)/)).toBeVisible();
   const grossIncomeLink = page.getByRole("button", { name: /ไปยังจำนวนเงินได้ในต่างประเทศ \(D\).*แหล่งเงินได้ 1/ });
   await grossIncomeLink.click();
   await expect(page.getByRole("textbox", { name: /^จำนวนเงินได้ในต่างประเทศ \(D\)/ })).toBeFocused();

@@ -6,11 +6,11 @@ test("a new case cannot leave the first step without an explicit income-earned-y
   await page.locator(".dashboard-heading .button-primary").click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเบื้องต้น" })).toBeVisible();
   const scope = page.locator(".info-callout");
-  await expect(scope).toContainText("ปี 2025");
-  await expect(scope).toContainText("หนึ่งรายการนำเข้าต่อแหล่งเงินได้");
-  await expect(scope).toContainText("เวียดนามหรือจีน");
-  await expect(scope).toContainText("40(1)");
-  await expect(scope).toContainText("40(4)");
+  await expect(scope).toContainText("เงินได้ที่เกิดตั้งแต่ปี 2024");
+  await expect(scope).toContainText("เลือกปีภาษีที่ตรงกับปีนำเงินเข้าไทย");
+  await expect(scope).toContainText("เลือกประเทศที่มีอนุสัญญาภาษีซ้อนกับไทย");
+  await expect(scope).toContainText("จำแนกเงินได้ตามมาตรา 40(1)–40(8) ตามจริง");
+  await expect(scope).toContainText("เกณฑ์อย่างน้อย 180 วันในมาตรา 41");
 
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
