@@ -254,6 +254,7 @@ export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
         <strong>ขอบเขตตามคู่มือกรมสรรพากร</strong>
         <dl className="scope-rows">
           <div><dt>ปีเงินได้และปีภาษี</dt><dd>เงินได้ที่เกิดตั้งแต่ปี 2024 · เลือกปีภาษีที่ตรงกับปีนำเงินเข้าไทย · วันที่เกิดเงินได้กับวันที่นำเข้าเป็นคนละข้อเท็จจริง</dd></div>
+          <div><dt>การนำเข้าไทย</dt><dd>ในแอปนี้ แหล่งเงินได้หนึ่งรายการบันทึกการนำเข้าไทยได้ครั้งเดียว · หลายครั้งยังคำนวณและส่งไม่ได้</dd></div>
           <div><dt>ประเทศและประเภทเงินได้</dt><dd>เลือกประเทศที่มีอนุสัญญาภาษีซ้อนกับไทย · จำแนกเงินได้ตามมาตรา 40(1)–40(8) ตามจริง</dd></div>
           <div><dt>ผู้มีถิ่นที่อยู่</dt><dd>ตรวจวันพำนักในปีที่เกิดเงินได้ตามเกณฑ์อย่างน้อย 180 วันในมาตรา 41</dd></div>
           <div><dt>จำนวนเงินและอัตรา</dt><dd>ระบุจำนวนตามตารางเป็น THB หรือเลือกสกุลเงินและอัตราอ้างอิงตามจริง</dd></div>
@@ -454,12 +455,12 @@ export function StepTwo({ draft, onChange, attachments, onNavigateStep, validati
                 const changed = currencyCode !== source.currencyCode;
                 if (changed) requestFullReset(index, "สกุลเงิน", { currencyCode, fxReference: null });
               }} />}
-              <label className="field"><span>วันที่นำเงินเข้าไทย <RequiredMark /></span><input id={`source-${index}-remittance-remittanceDate`} type="date" required aria-required="true" value={remittance.remittanceDate ?? ""} onChange={(event) => {
+              <div className="field"><label htmlFor={`source-${index}-remittance-remittanceDate`}>วันที่นำเงินเข้าไทย <RequiredMark /></label><input id={`source-${index}-remittance-remittanceDate`} type="date" required aria-required="true" aria-describedby={`source-${index}-remittance-date-help`} value={remittance.remittanceDate ?? ""} onChange={(event) => {
                 const nextDate = nullableText(event.target.value);
                 if (nextDate === remittance.remittanceDate) return;
                 if (hasFxQuote(source)) setPendingReset({ kind: "date", index, sourceId: source.id, sourceRef: source, remittanceDate: nextDate });
                 else updateSource(index, { remittance: { ...remittance, remittanceDate: nextDate, transferTotalThb: null } });
-              }} /></label>
+              }} /><small id={`source-${index}-remittance-date-help`} className="field-hint">หนึ่งรายการแทนการนำเข้าไทยหนึ่งครั้ง หากมีหลายครั้ง ให้เลือก “มีการนำเข้าเงินหลายครั้ง” ในส่วน “มีข้อเท็จจริงที่ต้องตรวจสอบเพิ่มเติมหรือไม่?” แล้วบันทึกร่างไว้ทบทวนภายหลัง ไม่ต้องคัดลอกรายการเงินได้ซ้ำ</small></div>
               {!adjustmentOpen && source.eligibilityRationale?.trim() && <p className="field-hint field-span" role="note">หมายเหตุเดิมที่บันทึกไว้: {displayKnownExampleNote(source.eligibilityRationale)}</p>}
               <details className="unsupported-details field-span" open={adjustmentOpen} onToggle={(event) => {
                 const nextOpen = event.currentTarget.open;
