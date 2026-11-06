@@ -10,7 +10,7 @@ import { CaseEditorPage } from "../features/cases/CaseEditorPage.js";
 import { CaseResultPage } from "../features/cases/CaseResultPage.js";
 import { OfficerCasePage, OfficerQueuePage } from "../features/review/OfficerPages.js";
 import { ReportPage } from "../features/reports/ReportPage.js";
-import { DemoEntryPage, LoginPage } from "../features/session/EntryPages.js";
+import { DemoEntryPage, LoginPage, RoleSelectionPage } from "../features/session/EntryPages.js";
 import { SiteFrame } from "../components/SiteFrame.js";
 
 interface AppSession {
@@ -412,7 +412,7 @@ function AuthorizedReportRoute({ mode }: { mode: "demo" | "hosted" }) {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/" element={<RoleSelectionPage />} />
       <Route path="/login" element={<LoginRoute />} />
       <Route path="/officer/login" element={<LoginRoute officer />} />
       <Route path="/demo" element={<DemoEntryRoute />} />

@@ -94,7 +94,7 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
   return (
     <main className="entry-page">
       <section className="entry-card card">
-        <a className="entry-brand" href="/login" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
+        <a className="entry-brand" href="/" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
         <h1>{officer ? "เข้าสู่ระบบเจ้าหน้าที่" : "เข้าสู่ระบบผู้เสียภาษี"}</h1>
         <p className="muted">เข้าสู่ระบบเพื่อดูและจัดการกรณีคำนวณเครดิตภาษีที่บันทึกไว้</p>
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
@@ -115,6 +115,28 @@ export function LoginPage({ officer, onLogin, onClearSession, activeSession, pen
         </form>
         <div className="entry-divider"><span>หรือ</span></div>
         <a className="button button-secondary button-wide" href="/demo">{DEMO_ENTRY_LABEL}</a>
+      </section>
+      <footer className="entry-footer">{EDUCATIONAL_NOTICE}</footer>
+    </main>
+  );
+}
+
+export function RoleSelectionPage() {
+  return (
+    <main className="entry-page">
+      <section className="entry-card card demo-card">
+        <a className="entry-brand" href="/" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
+        <h1>เข้าสู่ระบบ</h1>
+        <p className="muted">เลือกประเภทบัญชีเพื่อไปยังหน้าเข้าสู่ระบบ</p>
+        <nav className="demo-role-list" aria-label="เลือกประเภทบัญชี">
+          <a className="role-card" href="/login" aria-label="เข้าสู่ระบบผู้เสียภาษี">
+            <span className="role-icon" aria-hidden="true">ผ</span><span><strong>ผู้เสียภาษี</strong><small>จัดการกรณีและข้อมูลเครดิตภาษีของคุณ</small></span><span aria-hidden="true">→</span>
+          </a>
+          <a className="role-card" href="/officer/login" aria-label="เข้าสู่ระบบเจ้าหน้าที่">
+            <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เจ้าหน้าที่</strong><small>เข้าสู่ระบบเพื่อดูคิวและตรวจทานกรณี</small></span><span aria-hidden="true">→</span>
+          </a>
+        </nav>
+        <a className="text-link" href="/demo">เข้าสู่โหมดสาธิต</a>
       </section>
       <footer className="entry-footer">{EDUCATIONAL_NOTICE}</footer>
     </main>
@@ -148,7 +170,7 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
   return (
     <main className="entry-page">
       <section className="entry-card card demo-card">
-        <a className="entry-brand" href="/login" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
+        <a className="entry-brand" href="/" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
         <h1>{DEMO_ENTRY_LABEL}</h1>
         <p className="muted">เลือกบทบาทเพื่อเริ่มใช้ข้อมูลสาธิต</p>
         <div className="alert alert-info"><strong>โหมดสาธิตแยกจากบัญชีออนไลน์</strong><span>กรณีและไฟล์ที่สร้างจะเก็บไว้ในเบราว์เซอร์นี้เท่านั้น ทั้งสองบทบาทใช้ข้อมูลสาธิตชุดเดียวกัน</span></div>
