@@ -175,22 +175,26 @@ function ResidenceYearSection({ records, sources, onChange }: {
 
   return <section className="card residence-period-section" aria-labelledby="residence-period-heading">
     <div className="section-heading"><div><h2 id="residence-period-heading">ข้อมูลวันพำนักตามปีที่เกิดเงินได้</h2></div></div>
-    <p className="field-hint">เลือกข้อมูลแยกตามปีที่เกิดเงินได้ ไม่อนุมานจากปีภาษีหรือวันที่ยื่นแบบ ป้อนวันแรกและวันสุดท้ายที่อยู่ในประเทศไทยของแต่ละช่วง โดยนับวันต้นและวันปลายรวมกัน และนับวันปฏิทินที่ซ้ำกันครั้งเดียว</p>
-    <div className="field-grid residence-year-add">
-      <label className="field field-narrow" htmlFor="residence-year-add-input"><span>ปีที่เกิดเงินได้ (ค.ศ.)</span>
-        <input id="residence-year-add-input" type="number" min="1900" max="2200" step="1" aria-describedby="residence-year-add-help" value={newYear} onChange={(event) => setNewYear(event.target.value)} />
-      </label>
-      <div className="field-action"><button className="button button-secondary button-small" type="button" disabled={!Number.isInteger(Number(newYear)) || newYear === "" || Number(newYear) < 1900 || Number(newYear) > 2200 || recordFor(records, Number(newYear)) !== undefined} onClick={() => addYear(Number(newYear))}>เพิ่มปีที่เกิดเงินได้</button></div>
-      <small id="residence-year-add-help" className="field-hint field-span">ปีนี้ใช้จัดกลุ่มข้อมูลวันพำนักให้ตรงกับปีจากวันที่เกิดเงินได้ในขั้นถัดไป แยกจากปีนำเงินเข้าไทย</small>
-    </div>
+    {sourceYears.length === 0 && <>
+      <p className="field-hint">เพิ่มปีเกิดเงินได้ไว้ก่อน เมื่อกรอกวันที่เกิดเงินได้ในขั้นถัดไป ระบบจะเชื่อมปีจากวันที่กับข้อมูลวันพำนักให้อัตโนมัติ ไม่ต้องเลือกปีซ้ำ</p>
+      <div className="field-grid residence-year-add">
+        <label className="field field-narrow" htmlFor="residence-year-add-input"><span>ปีที่เกิดเงินได้ (ค.ศ.)</span>
+          <input id="residence-year-add-input" type="number" min="1900" max="2200" step="1" aria-describedby="residence-year-add-help" value={newYear} onChange={(event) => setNewYear(event.target.value)} />
+        </label>
+        <div className="field-action"><button className="button button-secondary button-small" type="button" disabled={!Number.isInteger(Number(newYear)) || newYear === "" || Number(newYear) < 1900 || Number(newYear) > 2200 || recordFor(records, Number(newYear)) !== undefined} onClick={() => addYear(Number(newYear))}>เพิ่มปีที่เกิดเงินได้</button></div>
+        <small id="residence-year-add-help" className="field-hint field-span">ปีนี้ใช้จัดกลุ่มข้อมูลวันพำนักให้ตรงกับปีจากวันที่เกิดเงินได้ในขั้นถัดไป แยกจากปีนำเงินเข้าไทย</small>
+      </div>
+    </>}
+    <p className="field-hint">ป้อนวันแรกและวันสุดท้ายที่อยู่ในประเทศไทยของแต่ละช่วง โดยนับวันต้นและวันปลายรวมกัน และนับวันปฏิทินที่ซ้ำกันครั้งเดียว</p>
     {years.length === 0 && <p className="muted-inline">ยังไม่มีข้อมูลวันพำนักตามปีที่เกิดเงินได้ ให้เพิ่มปีที่ต้องการบันทึกก่อนดำเนินการต่อ</p>}
     <div className="residence-year-record-list">
       {years.map((year) => {
         const record = recordFor(records, year);
         const assessment = assessResidenceYear(record, year);
         const issues = assessment.issues;
+        const isDerivedFromIncomeDate = sourceYears.includes(year);
         return <article className="card residence-year-card" key={year} aria-label={thaiYear(year)}>
-          <div className="section-heading"><h3>{thaiYear(year)}</h3>{record && <button className="button button-quiet button-small" type="button" aria-label={`ลบข้อมูลวันพำนัก ${thaiYear(year)}`} onClick={() => requestYearRemoval(year, record)}>ลบปีนี้</button>}</div>
+          <div className="section-heading"><div><h3>{thaiYear(year)}</h3>{isDerivedFromIncomeDate && <small className="field-hint">ปีนี้อ่านจากวันที่เกิดเงินได้ในรายการ (อ่านอย่างเดียว) และเชื่อมข้อมูลวันพำนักให้อัตโนมัติ</small>}</div>{record && <button className="button button-quiet button-small" type="button" aria-label={`ลบข้อมูลวันพำนัก ${thaiYear(year)}`} onClick={() => requestYearRemoval(year, record)}>ลบปีนี้</button>}</div>
           {pendingRemovalYear === year && <div className="alert alert-warning" role="alertdialog" aria-label="ยืนยันการลบข้อมูลวันพำนัก">
             <span>การลบจะลบข้อมูลวันและคำยืนยันทั้งหมดของปีนี้</span>
             <div className="form-actions-right"><button className="button button-secondary button-small" type="button" onClick={() => removeYear(year)}>ลบข้อมูลปีนี้</button><button className="button button-quiet button-small" type="button" onClick={() => setPendingRemovalYear(null)}>ยกเลิก</button></div>
@@ -230,7 +234,6 @@ function ResidenceYearSection({ records, sources, onChange }: {
         </article>;
       })}
     </div>
-    <p className="field-hint">เกณฑ์ 180 วันเป็นจำนวนวันพำนักในประเทศไทยตามมาตรา 41 แยกจากปีภาษี วันยื่นแบบ การรองรับของตัวอย่าง และสิทธิ FTC หรือ DTA รายละเอียดการนับวันจากหลักฐานเข้าออกขึ้นกับข้อเท็จจริงแต่ละกรณี</p>
   </section>;
 }
 

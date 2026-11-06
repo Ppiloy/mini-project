@@ -249,7 +249,7 @@ export function StepOne({ draft, onChange, validationErrors = [] }: StepProps) {
   return (
     <section className="step-panel" aria-labelledby="step-title">
       <h2 id="step-title">ข้อมูลเบื้องต้น</h2>
-      <p className="muted">กำหนดปีภาษีและบันทึกวันพำนักตามปีที่เกิดเงินได้ ปีที่เกิดเงินได้ วันที่นำเงินเข้า และวันยื่นแบบเป็นคนละข้อเท็จจริง</p>
+      <p className="muted">ปีภาษีที่เลือกด้านล่างใช้กับปีที่นำเงินเข้าไทยเพื่อขอเครดิต ส่วนสถานะผู้มีถิ่นที่อยู่ทางภาษีตรวจวันพำนักในปีที่เกิดเงินได้ (อย่างน้อย 180 วันตามมาตรา 41) จึงอาจเป็นคนละปีกัน</p>
       <section className="info-callout scope-overview" aria-label="ขอบเขตการคำนวณตามคู่มือกรมสรรพากร">
         <strong>ขอบเขตตามคู่มือกรมสรรพากร</strong>
         <dl className="scope-rows">
