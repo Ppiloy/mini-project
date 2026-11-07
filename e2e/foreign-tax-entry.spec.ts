@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("ordinary foreign tax entry uses one E amount without a reason or equality declaration", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await page.getByRole("spinbutton", { name: "ปีที่เกิดเงินได้ (ค.ศ.)" }).fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
@@ -28,7 +28,7 @@ test("ordinary foreign tax entry uses one E amount without a reason or equality 
 
 test("opening ordinary E details exposes one validation target and no duplicate E controls", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
@@ -64,7 +64,7 @@ test("opening ordinary E details exposes one validation target and no duplicate 
 
 test("L entry requests the amount and guidance without a free-text provenance field", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -76,7 +76,7 @@ test("L entry requests the amount and guidance without a free-text provenance fi
 
 test("an exceptional E adjustment keeps actual tax and used E distinct after save and reload", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
@@ -105,7 +105,7 @@ test("an exceptional E adjustment keeps actual tax and used E distinct after sav
 
 test("I and K follow edited source amounts and remain visible after save and reload", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 

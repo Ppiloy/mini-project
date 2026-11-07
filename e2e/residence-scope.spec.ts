@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("a new case cannot leave the first step without an explicit income-earned-year residence record", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.locator(".dashboard-heading .button-primary").click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเบื้องต้น" })).toBeVisible();
   const scope = page.locator(".info-callout");
@@ -20,7 +20,7 @@ test("a new case cannot leave the first step without an explicit income-earned-y
 
 test("a 179-day record cannot be switched to a declaration, while an explicit 180-day period can proceed", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.locator(".dashboard-heading .button-primary").click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
@@ -41,7 +41,7 @@ test("a 179-day record cannot be switched to a declaration, while an explicit 18
 
 test("a declaration-only record stays visibly unverified and does not invent an exact day total", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.locator(".dashboard-heading .button-primary").click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
@@ -60,7 +60,7 @@ test("a declaration-only record stays visibly unverified and does not invent an 
 
 test("the income worksheet labels a declaration as unverified and links back to its earned-year record", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.locator(".dashboard-heading .button-primary").click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
@@ -81,7 +81,7 @@ test("the income worksheet labels a declaration as unverified and links back to 
 
 test("an empty residence-year record directs the user to its add-period control", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.locator(".dashboard-heading .button-primary").click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();
@@ -95,7 +95,7 @@ test("an empty residence-year record directs the user to its add-period control"
 
 test("a legacy fixture with 179 earned-year residence days cannot leave the first step", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   await page.getByRole("button", { name: "เพิ่มช่วงเวลา" }).click();
   await page.getByLabel("วันแรกที่พำนัก · ช่วงที่ 1").fill("2025-01-01");

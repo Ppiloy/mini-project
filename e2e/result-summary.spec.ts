@@ -57,7 +57,7 @@ async function openHostedResult(
 
 test("taxpayer result explains the saved country limit before the full worksheet", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();

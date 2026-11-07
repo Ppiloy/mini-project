@@ -6,20 +6,20 @@ test("login and demo entry use concise Thai names and one shared educational not
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "เข้าสู่ระบบผู้เสียภาษี" })).toBeVisible();
   await expect(page.getByText(educationalNotice, { exact: true })).toHaveCount(1);
-  await expect(page.getByRole("link", { name: "ทดลองใช้ด้วยข้อมูลตัวอย่าง" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "ร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
   await expect(page.getByText("rd-ftc-demo-2568-v1", { exact: false })).toHaveCount(0);
 
   await page.goto("/demo");
-  await expect(page.getByRole("heading", { name: "ทดลองใช้ด้วยข้อมูลตัวอย่าง" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
   await expect(page.getByText(educationalNotice, { exact: true })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "เจ้าหน้าที่" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "เจ้าหน้าที่" })).toHaveCount(0);
   await expect(page.getByText("FIXTURE DEMONSTRATION", { exact: true })).toHaveCount(0);
 });
 
 test("dashboard uses descriptive examples and removes internal version and revision terms", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.getByRole("heading", { name: "รายการคำนวณเครดิตภาษี" })).toBeVisible();
   await expect(page.getByText(educationalNotice, { exact: true })).toHaveCount(1);

@@ -8,6 +8,7 @@ import { apiFailureMessage, apiFailureMessages, hostedApi, logoutAndConfirm } fr
 import type { LogoutIntent } from "../../app/App.js";
 import type { DemoPersona } from "../../data/demoRepository.js";
 import { DEMO_ENTRY_LABEL, EDUCATIONAL_NOTICE, PRODUCT_NAME } from "../../../shared/labels.js";
+import { GuestLimits } from "../../components/GuestLimits.js";
 
 const loginSchema = z.object({
   loginName: z.string().trim().min(1, "กรุณากรอกชื่อผู้ใช้"),
@@ -136,7 +137,8 @@ export function RoleSelectionPage() {
             <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เจ้าหน้าที่</strong><small>เข้าสู่ระบบเพื่อดูคิวและตรวจทานกรณี</small></span><span aria-hidden="true">→</span>
           </a>
         </nav>
-        <a className="text-link" href="/demo">เข้าสู่โหมดสาธิต</a>
+        <a className="button button-secondary button-wide" href="/demo">{DEMO_ENTRY_LABEL}</a>
+        <p className="fine-print">บันทึกเฉพาะในเบราว์เซอร์นี้ ไม่ส่งให้เจ้าหน้าที่</p>
       </section>
       <footer className="entry-footer">{EDUCATIONAL_NOTICE}</footer>
     </main>
@@ -159,12 +161,12 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
     try {
       const result = await onChoose(persona);
       if (!result.confirmed) {
-        setProblem(apiFailureMessages(result.errors, "ยังสลับไปโหมดสาธิตไม่ได้ เพราะเซิร์ฟเวอร์ยังยืนยันการออกจากระบบไม่สำเร็จ กรุณาลองอีกครั้ง"));
+        setProblem(apiFailureMessages(result.errors, "ยังเริ่มร่างโดยไม่เข้าสู่ระบบไม่ได้ เพราะเซิร์ฟเวอร์ยังยืนยันการออกจากระบบไม่สำเร็จ กรุณาลองอีกครั้ง"));
         return;
       }
       navigate(persona === "officer" ? "/demo/officer" : "/demo/app", { replace: true });
     } catch (error) {
-      setProblem(apiFailureMessage(error, "เปิดโหมดสาธิตไม่ได้ กรุณาลองอีกครั้ง"));
+      setProblem(apiFailureMessage(error, "เปิดร่างโดยไม่เข้าสู่ระบบไม่ได้ กรุณาลองอีกครั้ง"));
     } finally { setBusy(false); }
   };
   return (
@@ -172,8 +174,8 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
       <section className="entry-card card demo-card">
         <a className="entry-brand" href="/" aria-label={PRODUCT_NAME}><span className="brand-mark" aria-hidden="true">FTC</span><span>{PRODUCT_NAME}</span></a>
         <h1>{DEMO_ENTRY_LABEL}</h1>
-        <p className="muted">เลือกบทบาทเพื่อเริ่มใช้ข้อมูลสาธิต</p>
-        <div className="alert alert-info"><strong>โหมดสาธิตแยกจากบัญชีออนไลน์</strong><span>กรณีและไฟล์ที่สร้างจะเก็บไว้ในเบราว์เซอร์นี้เท่านั้น ทั้งสองบทบาทใช้ข้อมูลสาธิตชุดเดียวกัน</span></div>
+        <p className="muted">ใช้แบบฟอร์มและเครื่องคำนวณเดียวกับผู้เสียภาษีที่เข้าสู่ระบบ เริ่มร่างใหม่หรือทำร่างที่บันทึกในเบราว์เซอร์นี้ต่อ</p>
+        <GuestLimits />
         {sessionNotice && <div className="alert alert-error" role="alert">
           <span>{sessionNotice}</span>
           <div className="form-actions-right">
@@ -183,14 +185,9 @@ export function DemoEntryPage({ onChoose, sessionNotice, onRefreshHostedSession,
         </div>}
         {problem && <div className="alert alert-error" role="alert">{problem}</div>}
         <div className="demo-role-list">
-          <button className="role-card" aria-label="ผู้เสียภาษี" onClick={() => void select("taxpayer")} disabled={busy}>
-            <span className="role-icon" aria-hidden="true">ผ</span><span><strong>ผู้เสียภาษี</strong><small>สร้างและแก้ไขกรณีสาธิต ส่งเข้าคิวตรวจทานในโหมดสาธิต</small></span><span aria-hidden="true">→</span>
-          </button>
-          <button className="role-card" aria-label="เจ้าหน้าที่" onClick={() => void select("officer")} disabled={busy}>
-            <span className="role-icon role-icon-officer" aria-hidden="true">จ</span><span><strong>เจ้าหน้าที่</strong><small>ดูกรณีสาธิตที่ส่งเข้าคิวตรวจทาน</small></span><span aria-hidden="true">→</span>
-          </button>
+          <button className="button button-primary button-wide" onClick={() => void select("taxpayer")} disabled={busy}>{busy ? "กำลังเปิดร่าง…" : "เริ่มร่างโดยไม่เข้าสู่ระบบ"}</button>
         </div>
-        <a className="text-link" href="/login">เข้าสู่ระบบออนไลน์</a>
+        <a className="text-link" href="/">เข้าสู่ระบบด้วยบัญชีผู้เสียภาษีหรือเจ้าหน้าที่</a>
       </section>
       <footer className="entry-footer">{EDUCATIONAL_NOTICE}</footer>
     </main>

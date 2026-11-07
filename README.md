@@ -2,7 +2,7 @@
 
 This is an educational prototype for recording foreign income and remittances, calculating a bounded example credit, attaching evidence, and reviewing an unchanged result. It does not determine legal eligibility or prepare a tax filing. Use fictional information only.
 
-The browser-only example mode at `/demo` is the presentation fallback. It stores records in localStorage and original evidence files in IndexedDB within that browser profile. Files can be previewed and downloaded there; this does not share them across devices or profiles. The hosted database, officer queue, and authorized evidence store remain separate.
+Guest drafting at `/demo` uses the same taxpayer forms, calculator, and reports without login. Guests can create and resume local drafts, attach and download evidence, and export Excel or print PDF reports. Records stay in localStorage and original evidence files in IndexedDB within that browser profile. Clearing site data or using private browsing can lose drafts; other users of the same browser profile may access them. Guest drafts do not sync across devices, transfer automatically into an account, or submit to an officer. To submit a case, sign in and create it in the online account. The guest entry and workspace display these limits.
 
 ## Start and verify
 

@@ -33,7 +33,7 @@ export const WORKSHEET_SECTIONS = [
 ] as const;
 
 export const PRODUCT_NAME = "เครดิตภาษีต่างประเทศ";
-export const DEMO_ENTRY_LABEL = "ทดลองใช้ด้วยข้อมูลตัวอย่าง";
+export const DEMO_ENTRY_LABEL = "ร่างโดยไม่เข้าสู่ระบบ";
 export const EDUCATIONAL_NOTICE = "ระบบต้นแบบเพื่อการศึกษา ไม่ใช่ระบบของกรมสรรพากร ผลคำนวณใช้ประกอบการกรอก ภ.ง.ด.90/91 เท่านั้น";
 export const DEMO_EXAMPLE_LABELS = {
   partialRemittance: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน",

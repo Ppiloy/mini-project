@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 
 test("manual BOT conversion stays explicit, editable and reproducible in the saved report", async ({ page }, testInfo) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");

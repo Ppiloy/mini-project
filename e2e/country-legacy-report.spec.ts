@@ -37,9 +37,10 @@ test("legacy unknown country names remain visible in result evidence groups and 
   await page.goto(`/demo/cases/${caseId}/result?preview=${snapshotId}`);
 
   const countryLabel = "ประเทศอื่น (XX) · ไม่พบในรายชื่อ DTA ที่รองรับ";
-  const evidenceRow = page.locator(".submission-available-inventory li").filter({ hasText: "legacy-income.pdf" });
+  await page.locator("details.result-worksheet-details > summary").click();
+  const evidenceRow = page.locator(".worksheet-evidence-group").filter({ hasText: "legacy-income.pdf" });
   await expect(evidenceRow).toContainText(countryLabel);
-  const missingEvidenceRow = page.locator(".missing-evidence-groups li").filter({ hasText: countryLabel });
+  const missingEvidenceRow = page.locator(".worksheet-evidence-group").filter({ hasText: countryLabel });
   await expect(missingEvidenceRow).toContainText("หลักฐานภาษีต่างประเทศ");
   await expect(missingEvidenceRow).toContainText("หลักฐานการนำเงินเข้าไทย");
 

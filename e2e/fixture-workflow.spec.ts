@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 async function enterTaxpayerDemo(page: import("@playwright/test").Page) {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
 }
 
 async function advanceToReview(page: import("@playwright/test").Page) {
@@ -26,7 +26,7 @@ async function openPartialRemittance(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 }
 
-test("fixture partial-remittance example calculates, saves evidence, submits once, and reaches the officer report", async ({ page }) => {
+test("guest partial-remittance example calculates, saves evidence, and exports a draft report", async ({ page }) => {
   await enterTaxpayerDemo(page);
   await expect(page.getByRole("heading", { name: "รายการคำนวณเครดิตภาษี" })).toBeVisible();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
@@ -63,32 +63,10 @@ test("fixture partial-remittance example calculates, saves evidence, submits onc
   await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
   await page.goto(`/demo/cases/${caseId}/result?preview=${previewId}`);
   await expect(page.getByRole("region", { name: "สรุปเครดิตภาษี" })).toContainText("2,500.00 บาท");
-  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
-  await page.getByRole("checkbox", { name: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม" }).check();
-  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "หน้าหลักเครดิตภาษีต่างประเทศ" }).click();
-  await expect(dashboardCard).toContainText("ส่งแล้ว · ข้อมูลตัวอย่าง");
-  await expect(dashboardCard).toContainText("2,500.00");
-  await dashboardCard.getByRole("link", { name: "ดูรายงาน" }).click();
-  await expect(page).toHaveURL(new RegExp(`/demo/reports/[^/]+$`));
-  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
-  await expect(page.getByText("ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
+  await page.getByRole("link", { name: "ดูรายงาน", exact: true }).click();
+  await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง", { exact: true })).toBeVisible();
   await expect(page.getByText("ตัวอย่างหลักฐาน.pdf", { exact: true })).toHaveCount(4);
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
-  await page.reload();
-  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
-  await expect(page.getByRole("region", { name: "รวมเครดิตภาษีที่สามารถใช้ได้ตามกฎหมายไทย" })).toContainText("2,500.00 บาท");
-
-  await page.goto("/demo");
-  await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
-  await expect(page.getByRole("heading", { name: "คิวกรณีที่ส่งเข้าตรวจสอบ" })).toBeVisible();
-  await page.getByRole("link", { name: "ตรวจทาน" }).click();
-  await expect(page.getByText("ส่งแล้ว · อ่านอย่างเดียว")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "ประวัติการเข้าถึง" })).toBeVisible();
-  await page.getByRole("link", { name: "ดูรายงาน" }).click();
-  await expect(page.getByRole("heading", { name: "รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText("รายงานจากผลที่ส่งแล้ว · แสดงแบบอ่านอย่างเดียว")).toBeVisible();
   await page.emulateMedia({ media: "print" });
   await expect(page.getByRole("button", { name: "พิมพ์ / บันทึกเป็น PDF" })).toBeHidden();
   await expect(page.locator(".print-report")).toBeVisible();
@@ -252,7 +230,7 @@ test("source deletion keeps linked evidence reachable and asks before deleting a
   await expect(sourceCard).toHaveCount(0);
 });
 
-test("zero foreign tax permits missing categories under the available-evidence declaration", async ({ page }) => {
+test("guest zero foreign tax calculation permits missing evidence without a submission declaration", async ({ page }) => {
   await openPartialRemittance(page);
   await page.getByRole("textbox", { name: /^จำนวนภาษีชำระในต่างประเทศ \(E\)/ }).fill("0.00");
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -270,10 +248,7 @@ test("zero foreign tax permits missing categories under the available-evidence d
   await expect(page.getByText("รายงานรวม.pdf", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeDisabled();
-  await page.getByRole("checkbox", { name: "ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว และรับทราบว่าเจ้าหน้าที่อาจขอเอกสารเพิ่มเติม" }).check();
-  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" }).click();
-  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
 });
 
 test("zero remittance needs no source evidence checklist", async ({ page }) => {
@@ -395,7 +370,7 @@ test("an unsupported but well-formed draft saves, reloads, and warns before leav
 test("the fixture entry and form work by keyboard at a phone viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/demo");
-  const taxpayerEntry = page.getByRole("button", { name: "ผู้เสียภาษี" });
+  const taxpayerEntry = page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" });
   await taxpayerEntry.focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/demo\/app$/);

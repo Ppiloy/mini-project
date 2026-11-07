@@ -15,17 +15,17 @@ async function capture(page: import("@playwright/test").Page, testInfo: import("
 test("demo entry names the browser-local mode and the form leads with Thai field names", async ({ page }, testInfo) => {
   await page.goto("/demo");
   await expect(page.getByRole("heading", { name: DEMO_ENTRY_LABEL, exact: true })).toBeVisible();
-  await expect(page.getByText("กรณีและไฟล์ที่สร้างจะเก็บไว้ในเบราว์เซอร์นี้เท่านั้น ทั้งสองบทบาทใช้ข้อมูลสาธิตชุดเดียวกัน", { exact: true })).toBeVisible();
+  await expect(page.getByText("ร่างและไฟล์แนบเก็บเฉพาะในเบราว์เซอร์และอุปกรณ์นี้ ผู้ใช้อุปกรณ์เดียวกันอาจเข้าถึงได้", { exact: true })).toBeVisible();
   await expect(page.getByText(EDUCATIONAL_NOTICE, { exact: true })).toHaveCount(1);
 
-  await page.getByRole("button", { name: "ผู้เสียภาษี", exact: true }).click();
-  await expect(page.getByText("โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ", exact: true }).click();
+  await expect(page.getByText("ร่างโดยไม่เข้าสู่ระบบ · เก็บในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
   await expect(page.getByText(EDUCATIONAL_NOTICE, { exact: true })).toHaveCount(1);
   await expect(page.getByText("ข้อมูลตัวอย่างบันทึกไว้ในเบราว์เซอร์นี้เท่านั้นและไม่เชื่อมกับบัญชีออนไลน์", { exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 1280, height: 900 });
   await capture(page, testInfo, "demo-dashboard-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByText("โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
+  await expect(page.getByText("ร่างโดยไม่เข้าสู่ระบบ · เก็บในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
   expect(await page.evaluate("document.documentElement.scrollWidth")).toBeLessThanOrEqual(390);
   await capture(page, testInfo, "demo-dashboard-mobile.png");
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -74,7 +74,7 @@ test("demo entry names the browser-local mode and the form leads with Thai field
 
 test("result and report use the same clear local-mode wording", async ({ page }, testInfo) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี", exact: true }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ", exact: true }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   for (const heading of [
     "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ",
@@ -87,7 +87,7 @@ test("result and report use the same clear local-mode wording", async ({ page },
   }
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  await expect(page.getByText("โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
+  await expect(page.getByText("ร่างโดยไม่เข้าสู่ระบบ · เก็บในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 900 });
   await capture(page, testInfo, "result-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -97,7 +97,7 @@ test("result and report use the same clear local-mode wording", async ({ page },
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("link", { name: "ดูรายงาน", exact: true }).click();
   await expect(page.getByRole("heading", { name: "รายงานคำนวณเครดิตภาษีเงินได้จากต่างประเทศ" })).toBeVisible();
-  await expect(page.getByText("โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
+  await expect(page.getByText("ร่างโดยไม่เข้าสู่ระบบ · เก็บในเบราว์เซอร์นี้", { exact: true })).toBeVisible();
   await capture(page, testInfo, "report-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate("document.documentElement.scrollWidth")).toBeLessThanOrEqual(390);
@@ -106,7 +106,7 @@ test("result and report use the same clear local-mode wording", async ({ page },
 
 test("saved legacy FX quote and translated details remain visible after reload", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี", exact: true }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ", exact: true }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
   const legacyRate = {

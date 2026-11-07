@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("a pending quote reset stays bound to its source if another source is removed", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี", exact: true }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ", exact: true }).click();
   await page.locator(".dashboard-heading").getByRole("button", { name: /เริ่มคำนวณใหม่/ }).click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้" }).click();

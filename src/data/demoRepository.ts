@@ -78,7 +78,7 @@ function touchCase(store: DemoStore, caseId: string): void {
 export function demoUser(persona: DemoPersona): ApiUser {
   return persona === "officer"
     ? { id: "demo-officer", loginName: "officer-demo", displayName: "เจ้าหน้าที่ตัวอย่าง", role: "officer", maskedReference: null }
-    : { id: "demo-taxpayer", loginName: "taxpayer-demo", displayName: "ผู้เสียภาษีตัวอย่าง", role: "taxpayer", maskedReference: "ผู้เสียภาษี •• 2568" };
+    : { id: "demo-taxpayer", loginName: "taxpayer-demo", displayName: "ผู้ใช้โดยไม่เข้าสู่ระบบ", role: "taxpayer", maskedReference: null };
 }
 
 export function listDemoCases(persona: DemoPersona): FtcCaseRecord[] {

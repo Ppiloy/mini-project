@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("I J K L use a balanced desktop grid and a readable phone stack without changing amounts", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
@@ -50,7 +50,7 @@ test("I J K L use a balanced desktop grid and a readable phone stack without cha
 
 test("basic residence information keeps gutters and readable day totals at desktop and phone widths", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่" }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");

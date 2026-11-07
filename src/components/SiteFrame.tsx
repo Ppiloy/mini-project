@@ -1,6 +1,7 @@
 import type { ApiUser } from "../../shared/contracts.js";
 import { EDUCATIONAL_NOTICE, PRODUCT_NAME } from "../../shared/labels.js";
 import { Link } from "react-router-dom";
+import { GuestLimits } from "./GuestLimits.js";
 
 export function SiteFrame({ children, user, demo, onSignOut, signOutError, signingOut,
   hostedSessionNotice, onRefreshHostedSession, checkingHostedSession }: {
@@ -23,12 +24,14 @@ export function SiteFrame({ children, user, demo, onSignOut, signOutError, signi
           <span><strong>{PRODUCT_NAME}</strong></span>
         </Link>
         <div className="topbar-actions">
-          {demo && <span className="mode-tag">โหมดสาธิต · ข้อมูลอยู่ในเบราว์เซอร์นี้</span>}
+          {demo && <span className="mode-tag">ร่างโดยไม่เข้าสู่ระบบ · เก็บในเบราว์เซอร์นี้</span>}
+          {demo && <Link className="button button-secondary button-small" to="/">เข้าสู่ระบบ</Link>}
           <span className="user-name">{user.displayName}</span>
           {onSignOut && <button className="button button-quiet button-small" disabled={signingOut} onClick={() => void onSignOut()}>{signingOut ? "กำลังออกจากระบบ…" : signOutError ? "ลองออกจากระบบอีกครั้ง" : "ออกจากระบบ"}</button>}
         </div>
       </header>
       <main id="main-content" className="page-wrap">
+        {demo && <div className="no-print"><GuestLimits /></div>}
         {demo && hostedSessionNotice && <div className="alert alert-error" role="alert">
           <strong>สถานะบัญชีออนไลน์</strong>
           <span>{hostedSessionNotice}</span>

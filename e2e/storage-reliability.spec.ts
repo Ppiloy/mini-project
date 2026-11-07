@@ -4,7 +4,7 @@ const FAULT_KEY = "__FTC_TEST_LOCAL_STORAGE_READ__";
 
 async function createKnownDraft(page: import("@playwright/test").Page): Promise<string> {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   return new URL(page.url()).pathname.split("/")[3]!;

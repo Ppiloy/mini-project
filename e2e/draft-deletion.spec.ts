@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("a taxpayer confirms deletion of a draft from the dashboard", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
   const caseId = new URL(page.url()).pathname.split("/")[3]!;
@@ -39,7 +39,7 @@ test("loading a worked example leaves the browser clipboard unchanged", async ({
     });
   });
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/edit$/);
 

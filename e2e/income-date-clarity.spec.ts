@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("earned-date feedback is inline and never rewrites the remittance date", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   const source = page.locator(".source-card").first();

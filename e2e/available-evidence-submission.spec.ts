@@ -10,9 +10,9 @@ async function captureCleanScreenshot(page: import("@playwright/test").Page, pat
   await page.screenshot({ path, fullPage: true });
 }
 
-test("a zero-file demo case needs the current evidence declaration before submission", async ({ page }, testInfo) => {
+test("a zero-file guest case stays a draft without a submission declaration", async ({ page }, testInfo) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
 
@@ -23,37 +23,17 @@ test("a zero-file demo case needs the current evidence declaration before submis
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
 
-  const acknowledgement = page.getByRole("checkbox", { name: statement, exact: true });
-  const submit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true });
-  await expect(page.getByText("เมื่อส่งแล้ว รายการจะอยู่ในคิวสาธิตของเบราว์เซอร์นี้เท่านั้น", { exact: true })).toBeVisible();
-  await captureCleanScreenshot(page, testInfo.outputPath("zero-file-inventory-before-submit.png"));
-  await page.setViewportSize({ width: 390, height: 844 });
-  await captureCleanScreenshot(page, testInfo.outputPath("zero-file-inventory-mobile.png"));
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await expect(acknowledgement).not.toBeChecked();
-  await expect(submit).toBeDisabled();
-  await acknowledgement.check();
-  await expect(submit).toBeEnabled();
+  await expect(page.getByRole("checkbox", { name: statement, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true })).toHaveCount(0);
+  await captureCleanScreenshot(page, testInfo.outputPath("guest-zero-file-result.png"));
   await page.reload();
-  const reloadedAcknowledgement = page.getByRole("checkbox", { name: statement, exact: true });
-  const reloadedSubmit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true });
-  await expect(reloadedAcknowledgement).not.toBeChecked();
-  await expect(reloadedSubmit).toBeDisabled();
-  await reloadedAcknowledgement.check();
-  await expect(reloadedSubmit).toBeEnabled();
-  await reloadedSubmit.click();
-  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
-  await expect(page.getByText("รายการนี้อยู่ในคิวสาธิตของเบราว์เซอร์นี้เท่านั้น", { exact: true })).toBeVisible();
   await page.locator("details.result-worksheet-details > summary").click();
-  await expect(page.getByText(statement, { exact: true })).toBeVisible();
   await expect(page.getByText("ไม่มีไฟล์แนบในผลคำนวณที่บันทึกไว้นี้")).toBeVisible();
-  await expect(page.getByText(/ยังไม่มีไฟล์พร้อมใช้งานสำหรับ/).first()).toBeVisible();
-  await captureCleanScreenshot(page, testInfo.outputPath("zero-file-inventory-frozen.png"));
 });
 
-test("a submitted inventory preserves available filenames alongside the frozen declaration", async ({ page }, testInfo) => {
+test("a guest report exports available evidence filenames without a submission declaration", async ({ page }, testInfo) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   for (let step = 0; step < 4; step += 1) await page.getByRole("button", { name: "ถัดไป", exact: true }).click();
   await page.getByLabel("แนบ: หลักฐานเงินได้").setInputFiles({
@@ -64,24 +44,10 @@ test("a submitted inventory preserves available filenames alongside the frozen d
   await expect(page.getByText("available-income.pdf", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  const inventory = page.getByLabel("รายการไฟล์ที่บันทึกว่าพร้อมใช้งาน");
-  await expect(inventory).toContainText("ไฟล์ที่บันทึกว่าพร้อมใช้งาน (1)");
-  await expect(inventory).toContainText("available-income.pdf");
-  await expect(page.locator(".missing-evidence-groups")).toContainText("หลักฐานภาษีต่างประเทศ");
-  await expect(page.getByText("เมื่อส่งแล้ว รายการจะอยู่ในคิวสาธิตของเบราว์เซอร์นี้เท่านั้น", { exact: true })).toBeVisible();
-  await captureCleanScreenshot(page, testInfo.outputPath("available-file-inventory-before-submit.png"));
-  await page.setViewportSize({ width: 390, height: 844 });
-  await captureCleanScreenshot(page, testInfo.outputPath("available-file-inventory-mobile.png"));
-  await page.setViewportSize({ width: 1280, height: 900 });
-
-  await page.getByRole("checkbox", { name: statement, exact: true }).check();
-  await page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true }).click();
-  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
-  await expect(page.getByText("รายการนี้อยู่ในคิวสาธิตของเบราว์เซอร์นี้เท่านั้น", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true })).toHaveCount(0);
   await page.locator("details.result-worksheet-details > summary").click();
-  await expect(page.getByText(statement, { exact: true })).toBeVisible();
   await expect(page.getByText("available-income.pdf", { exact: true })).toBeVisible();
-  await captureCleanScreenshot(page, testInfo.outputPath("available-file-inventory-frozen.png"));
+  await captureCleanScreenshot(page, testInfo.outputPath("guest-available-evidence.png"));
   await page.getByRole("link", { name: "ดูรายงาน", exact: true }).click();
   const downloadReady = page.waitForEvent("download");
   await page.getByRole("button", { name: "ส่งออก Excel", exact: true }).click();
@@ -96,7 +62,7 @@ test("a submitted inventory preserves available filenames alongside the frozen d
   const values: string[] = [];
   worksheet!.eachRow((row) => row.eachCell((cell) => values.push(String(cell.text ?? cell.value ?? ""))));
   const exportedText = values.join("\n");
-  expect(exportedText).toContain(statement);
+  expect(exportedText).not.toContain(statement);
   expect(exportedText).toContain("available-income.pdf");
   expect(exportedText).toContain("หมวดที่ยังไม่มีไฟล์พร้อมใช้งาน");
   for (const kind of ["หลักฐานภาษีไทย", "หลักฐานภาษีต่างประเทศ", "หลักฐานการนำเงินเข้าไทย"]) {

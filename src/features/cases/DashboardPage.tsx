@@ -86,7 +86,7 @@ export function DashboardPage({ mode }: { mode: Mode }) {
     <>
       <div className="dashboard-heading">
         <PageHeading title="รายการคำนวณเครดิตภาษี">
-          {mode === "demo" ? "เริ่มคำนวณใหม่หรือทำร่างตัวอย่างที่บันทึกไว้ต่อ" : "เริ่มคำนวณใหม่หรือทำร่างที่บันทึกไว้ต่อ"}
+          {mode === "demo" ? "เริ่มร่างใหม่หรือทำร่างที่บันทึกในเบราว์เซอร์นี้ต่อ โดยไม่ต้องเข้าสู่ระบบ" : "เริ่มคำนวณใหม่หรือทำร่างที่บันทึกไว้ต่อ"}
         </PageHeading>
         <button className="button button-primary" onClick={startCase} disabled={creating}>
           <span aria-hidden="true">＋</span> {creating ? "กำลังสร้าง…" : "เริ่มคำนวณใหม่"}

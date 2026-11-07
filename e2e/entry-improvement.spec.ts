@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 async function enterTaxpayerDemo(page: import("@playwright/test").Page) {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
 }
 
 test("country and currency choices stay searchable and usable within the source worksheet", async ({ page }, testInfo) => {

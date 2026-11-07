@@ -6,7 +6,7 @@ import { createCalculationSnapshot } from "../shared/snapshot.js";
 
 async function enterVietnamChinaResult(page: import("@playwright/test").Page) {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: เงินได้จากเวียดนามและจีน" }).click();
   for (let step = 0; step < 4; step += 1) {
     await page.getByRole("button", { name: "ถัดไป" }).click();
@@ -29,7 +29,7 @@ test("taxpayer result presents the Vietnam–China calculation as the canonical 
   await expect(page.getByText(/ยังไม่ได้ยื่นแบบภาษีต่อกรมสรรพากร/)).toBeVisible();
   await expect(page.getByRole("link", { name: "ดูรายงาน" })).toBeVisible();
   await expect(page.getByRole("button", { name: "แก้ไขข้อมูล" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ" })).toHaveCount(0);
 
   const worksheetDetails = page.locator(".result-worksheet-details");
   await expect(worksheetDetails).not.toHaveAttribute("open", "");
@@ -176,9 +176,9 @@ test("printable report uses the same Thai A–Q worksheet for the saved calculat
   await testInfo.attach("worksheet-a4-pdf", { path: pdfPath, contentType: "application/pdf" });
 });
 
-test("officer detail reuses the worksheet and groups frozen evidence by source and Thai tax", async ({ page }) => {
+test("guest draft report reuses the worksheet and groups evidence by source and Thai tax", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "ตัวอย่าง: นำเงินได้เข้าไทยบางส่วน" }).click();
   await advanceToReview(page);
 
@@ -194,26 +194,17 @@ test("officer detail reuses the worksheet and groups frozen evidence by source a
   await page.getByLabel("ยืนยันจำนวนภาษีต่างประเทศ (E) · แหล่งเงินได้ 1").check();
   await page.getByRole("button", { name: "คำนวณเครดิตภาษี", exact: true }).click();
   await expect(page).toHaveURL(/\/demo\/cases\/[^/]+\/result\?preview=/);
-  const submit = page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true });
-  await expect(submit).toBeDisabled();
-  await page.getByRole("checkbox", { name: /ฉันยืนยันว่าได้แนบเอกสารที่มีอยู่ในขณะนี้แล้ว/ }).check();
-  await expect(submit).toBeEnabled();
-  await submit.click();
-  await expect(page.getByText("ส่งเข้าคิวสาธิตแล้ว", { exact: true })).toBeVisible();
-
-  await page.goto("/demo");
-  await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
-  await page.getByRole("link", { name: "ตรวจทาน" }).click();
+  await expect(page.getByRole("button", { name: "ส่งให้เจ้าหน้าที่ตรวจ", exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "ดูรายงาน", exact: true }).click();
   await expect(page.getByRole("heading", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" })).toBeVisible();
   const sourceTable = page.getByRole("table", { name: "ข้อมูลเงินได้พึงประเมินที่นำเข้ามาจากต่างประเทศ" });
   await expect(sourceTable.getByText("50.00%", { exact: true })).toBeVisible();
   await expect(sourceTable.getByText("หมายเหตุเดิมที่บันทึกไว้:", { exact: false })).toBeVisible();
   await expect(page.getByRole("region", { name: "ข้อมูลเงินได้พึงประเมินที่ต้องนำมาคำนวณเครดิตภาษี" })).toContainText("ก่อนใช้เครดิตภาษีต่างประเทศ");
   const evidence = page.getByRole("region", { name: "เอกสารประกอบที่บันทึกกับผลนี้" });
-  await expect(page.getByRole("link", { name: "ดูรายงาน" })).toHaveCount(1);
+  await expect(page.getByText("ร่าง — ยังไม่ได้ส่ง", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "กลับไปหน้ารายการ" })).toBeVisible();
   await expect(evidence.getByRole("heading", { name: "หลักฐานภาษีไทย" })).toBeVisible();
   await expect(evidence.getByRole("heading", { name: /จีน.*เงินปันผล/ })).toBeVisible();
   await expect(evidence.getByText("หลักฐานตัวอย่าง.pdf", { exact: true })).toHaveCount(4);
-  await expect(page.getByRole("cell", { name: "เปิดดูกรณี" })).toBeVisible();
 });

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("explains why residence is checked in the income-earned year before asking for dates", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
 
   const firstStep = page.getByRole("region", { name: "ข้อมูลเบื้องต้น" });
@@ -29,7 +29,7 @@ test("explains why residence is checked in the income-earned year before asking 
 
 test("uses the source earned date to link residence without asking for the same year again", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   await page.getByLabel("ปีภาษี (พ.ศ.)").selectOption("2568");
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2024");

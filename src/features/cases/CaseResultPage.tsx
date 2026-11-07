@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import type { AttachmentMetadata, CalculationSnapshot, FtcCaseRecord, SubmissionAcknowledgement } from "../../../shared/contracts.js";
-import { validateSubmission } from "../../../shared/calculator.js";
 import { missingEvidenceInventory } from "../../../shared/evidenceInventory.js";
 import { AVAILABLE_EVIDENCE_STATEMENT_V1, countryLabel, EVIDENCE_LABELS, incomeTypeLabel } from "../../../shared/labels.js";
 import { DEMO_POLICY } from "../../../shared/policy.js";
@@ -10,7 +9,7 @@ import { PageHeading } from "../../components/SiteFrame.js";
 import { Worksheet } from "../../components/Worksheet.js";
 import { ResultSummary } from "./ResultSummary.js";
 import { ApiClientError, apiFailureContext, apiFailureMessage, hostedApi } from "../../data/api.js";
-import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview, submitDemoCase } from "../../data/demoRepository.js";
+import { findDemoCase, findDemoSnapshot, listDemoAttachments, latestDemoPreview } from "../../data/demoRepository.js";
 import { useAppSession } from "../../app/App.js";
 
 type Mode = "demo" | "hosted";
@@ -73,11 +72,11 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
   const acknowledgementKey = record && snapshot ? `${record.id}:${record.draft.revision}:${snapshot.id}` : null;
   const acknowledgementCurrent = acknowledgementKey !== null && acknowledgedPreviewKey === acknowledgementKey;
   const unresolvedAttachments = attachments.filter((item) => item.status === "pending" || item.status === "failed");
-  const canSubmit = !isSubmitted && snapshot?.kind === "preview" && isCurrent && snapshot.result.outcome === "ready"
+  const canSubmit = mode === "hosted" && !isSubmitted && snapshot?.kind === "preview" && isCurrent && snapshot.result.outcome === "ready"
     && unresolvedAttachments.length === 0 && acknowledgementCurrent;
 
   const submit = async () => {
-    if (!record || !snapshot || !isCurrent || snapshot.kind !== "preview" || !acknowledgementCurrent) return;
+    if (mode !== "hosted" || !record || !snapshot || !isCurrent || snapshot.kind !== "preview" || !acknowledgementCurrent) return;
     const evidenceAcknowledgement: SubmissionAcknowledgement = {
       version: 1,
       acknowledged: true,
@@ -99,61 +98,27 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     setSubmitProblems([]);
     setSubmitFieldProblems([]);
     try {
-      if (mode === "demo") {
-        const messages = validateSubmission(record.draft, snapshot.result, {
-          currentRevision: record.draft.revision,
-          previewRevision: snapshot.revision,
-          attachments,
-        });
-        if (messages.length) { setSubmitProblems(messages.map((item) => item.message)); return; }
-        let submitted: Awaited<ReturnType<typeof submitDemoCase>>;
-        try {
-          submitted = await submitDemoCase(record.id, evidenceAcknowledgement);
-        } catch (error) {
-          const latest = findDemoCase(record.id, "taxpayer");
-          if (latest) {
-            setRecord(latest);
-            setAttachments(listDemoAttachments(record.id));
-            setAcknowledgedPreviewKey(null);
-            if (latest.status === "submitted" && latest.submittedSnapshotId) {
-              const committedSnapshot = findDemoSnapshot(latest.submittedSnapshotId);
-              if (committedSnapshot) {
-                setSnapshot(committedSnapshot);
-                setConfirmedSubmitted(true);
-                return;
-              }
-            }
-            const latestPreview = latestDemoPreview(record.id, latest.draft.revision);
-            if (latestPreview) setSnapshot(latestPreview);
-          }
-          throw error;
-        }
-        setRecord(submitted.case);
-        setSnapshot(submitted.snapshot);
+      if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+      try {
+        const response = await hostedApi.submit(record.id, record.draft.revision, snapshot.id, csrfToken, evidenceAcknowledgement, requestId);
+        setRecord(response.case);
+        setSnapshot(response.snapshot);
         setConfirmedSubmitted(true);
-      } else {
-        if (!csrfToken) throw new Error("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
-        try {
-          const response = await hostedApi.submit(record.id, record.draft.revision, snapshot.id, csrfToken, evidenceAcknowledgement, requestId);
-          setRecord(response.case);
-          setSnapshot(response.snapshot);
+      } catch (error) {
+        // A lost response may follow a committed submission. Read the case before offering a retry.
+        const latestDetail = await hostedApi.getCase(record.id);
+        const latest = latestDetail.case;
+        if (latest.status === "submitted" && latest.submittedSnapshotId) {
+          const original = (await hostedApi.snapshot(latest.submittedSnapshotId)).snapshot;
+          setRecord(latest);
+          setSnapshot(original);
           setConfirmedSubmitted(true);
-        } catch (error) {
-          // A lost response may follow a committed submission. Read the case before offering a retry.
-          const latestDetail = await hostedApi.getCase(record.id);
-          const latest = latestDetail.case;
-          if (latest.status === "submitted" && latest.submittedSnapshotId) {
-            const original = (await hostedApi.snapshot(latest.submittedSnapshotId)).snapshot;
-            setRecord(latest);
-            setSnapshot(original);
-            setConfirmedSubmitted(true);
-          } else {
-            setRecord(latest);
-            setAttachments(latestDetail.attachments ?? []);
-            if (latest.draft.revision > snapshot.revision) {
-              setProblem(`มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง${apiFailureContext(error)}`);
-            } else throw error;
-          }
+        } else {
+          setRecord(latest);
+          setAttachments(latestDetail.attachments ?? []);
+          if (latest.draft.revision > snapshot.revision) {
+            setProblem(`มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่ง${apiFailureContext(error)}`);
+          } else throw error;
         }
       }
     } catch (error) {
@@ -186,10 +151,10 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     {stale && <div className="alert alert-warning" role="status"><strong>{staleBecauseDraftChanged ? "ผลนี้เป็นข้อมูลก่อนการแก้ไขล่าสุด" : "ผลคำนวณนี้ใช้เงื่อนไขหรือวิธีคำนวณรุ่นก่อน"}</strong><span>{staleBecauseDraftChanged ? "มีการเปลี่ยนแปลงในร่างหลังบันทึกผลนี้ กรุณาบันทึกและคำนวณใหม่ก่อนส่งเข้าคิว" : "ระบบมีการเปลี่ยนแปลงเงื่อนไขหรือวิธีคำนวณหลังบันทึกผลนี้ กรุณาคำนวณใหม่ก่อนส่งเข้าคิว"}</span></div>}
     {snapshot.result.outcome !== "ready" && <div className={`alert ${snapshot.result.outcome === "needs_review" ? "alert-warning" : "alert-info"}`} role="status"><strong>{outcomeText}</strong><ul>{snapshot.result.validationMessages.map((message, index) => <li key={`${message.code}-${index}`}>{message.message}</li>)}</ul></div>}
     {!stale && <ResultSummary snapshot={snapshot} />}
-    {!isSubmitted && snapshot.kind === "preview" && isCurrent && snapshot.result.outcome === "ready" && <section className="card submission-acknowledgement" aria-labelledby="submission-acknowledgement-heading">
+    {mode === "hosted" && !isSubmitted && snapshot.kind === "preview" && isCurrent && snapshot.result.outcome === "ready" && <section className="card submission-acknowledgement" aria-labelledby="submission-acknowledgement-heading">
       <h2 id="submission-acknowledgement-heading">ทบทวนเอกสารก่อนส่ง</h2>
       <p>รายการด้านล่างแสดงหมวดที่ยังไม่มีไฟล์พร้อมใช้งานจากข้อมูลปัจจุบัน การมีไฟล์ไม่ได้ยืนยันเนื้อหาหรือความถูกต้องของเอกสาร</p>
-      <p className="field-hint">{mode === "demo" ? "เมื่อส่งแล้ว รายการจะอยู่ในคิวสาธิตของเบราว์เซอร์นี้เท่านั้น" : "เมื่อส่งแล้ว รายการจะไปยังเจ้าหน้าที่ที่ได้รับมอบหมายในบัญชีระบบที่เชื่อมต่อ"}</p>
+      <p className="field-hint">เมื่อส่งแล้ว รายการจะไปยังเจ้าหน้าที่ที่ได้รับมอบหมายในบัญชีระบบที่เชื่อมต่อ</p>
       <div className="submission-available-inventory" aria-label="รายการไฟล์ที่บันทึกว่าพร้อมใช้งาน">
         <h3>ไฟล์ที่บันทึกว่าพร้อมใช้งาน ({snapshot.evidence.length})</h3>
         {snapshot.evidence.length === 0 ? <p className="empty-evidence">ไม่มีไฟล์แนบ (0)</p> : <ul>{snapshot.evidence.map((file) => {
@@ -215,7 +180,7 @@ export function CaseResultPage({ mode }: { mode: Mode }) {
     </details>
     <div className="result-actions">
       <a className="button button-secondary" href={reportHref}>ดูรายงาน</a>
-      {!isSubmitted && <><button className="button button-quiet" onClick={calculateCurrent}>แก้ไขข้อมูล</button><button className="button button-primary" disabled={!canSubmit || busy} onClick={() => void submit()}>{busy ? "กำลังตรวจสอบสถานะ…" : "ส่งให้เจ้าหน้าที่ตรวจ"}</button></>}
+      {!isSubmitted && <><button className="button button-quiet" onClick={calculateCurrent}>แก้ไขข้อมูล</button>{mode === "hosted" && <button className="button button-primary" disabled={!canSubmit || busy} onClick={() => void submit()}>{busy ? "กำลังตรวจสอบสถานะ…" : "ส่งให้เจ้าหน้าที่ตรวจ"}</button>}</>}
       {isSubmitted && <div className="alert alert-success"><strong>ส่งแล้วเมื่อ {formatDate(record.submittedAt)}</strong><span>แสดงผลที่ส่งแล้วแบบอ่านอย่างเดียว</span></div>}
     </div>
     {submitProblems.length > 0 && <div className="alert alert-warning" role="alert"><strong>ยังส่งแบบร่างให้เจ้าหน้าที่ไม่ได้</strong><ul>{submitProblems.map((message, index) => <li key={index}>{message}</li>)}</ul><button className="button button-secondary button-small" onClick={calculateCurrent}>กลับไปแก้ข้อมูลและหลักฐาน</button></div>}

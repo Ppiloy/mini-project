@@ -468,7 +468,7 @@ test("real hosted and fixture identities cannot cross route modes; fixture choic
   // Selecting the fixture persona from a hosted session confirms server logout first.
   await page.goto("/demo");
   const logoutResponse = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   expect((await logoutResponse).status()).toBe(200);
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.locator(".mode-tag")).toBeVisible();
@@ -523,12 +523,12 @@ test("fixture chooser waits for the real initial hosted session response before 
     await page.goto("/demo");
     await realSessionReady;
     await expect(page.getByRole("status").filter({ hasText: "กำลังตรวจสอบเซสชัน" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" })).toHaveCount(0);
 
     releaseSession();
-    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
     const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
     expect((await logoutResponsePromise).status()).toBe(200);
     await expect(page).toHaveURL(/\/demo\/app$/);
     expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
@@ -550,12 +550,12 @@ test("offline fixture fallback discloses that an existing hosted session could n
     const page = await offlineContext.newPage();
     await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"));
     await page.goto("/demo");
-    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" })).toBeEnabled();
     const sessionWarning = page.getByRole("alert");
     await expect(sessionWarning).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
     await expect(sessionWarning).not.toContainText("rd-ftc-demo-2568-v1");
 
-    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
     await expect(page).toHaveURL(/\/demo\/app$/);
     await expect(page.locator(".mode-tag")).toBeVisible();
     const persistentWarning = page.getByRole("alert");
@@ -567,8 +567,9 @@ test("offline fixture fallback discloses that an existing hosted session could n
     await expect(page.getByRole("alert").filter({ hasText: "ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว" })).toBeVisible();
     await page.goto("/demo");
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
-    await page.getByRole("button", { name: "เจ้าหน้าที่" }).click();
-    await expect(page).toHaveURL(/\/demo\/officer$/);
+    await expect(page.getByRole("button", { name: "เจ้าหน้าที่", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ", exact: true }).click();
+    await expect(page).toHaveURL(/\/demo\/app$/);
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
     await page.unroute("**/api/auth/session");
     expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
@@ -601,7 +602,7 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
     await page.route("**/api/auth/session", (route) => route.abort("internetdisconnected"), { times: 1 });
     await page.goto("/demo");
     await expect(page.getByRole("alert")).toContainText("ไม่สามารถยืนยันได้ว่าบัญชีออนไลน์ออกจากระบบแล้ว");
-    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
     await expect(page).toHaveURL(/\/demo\/app$/);
 
     let oldResponseFetched!: () => void;
@@ -658,9 +659,9 @@ test("a delayed real session refresh cannot restore an obsolete warning after ho
       browser.history.pushState({}, "", "/demo");
       browser.dispatchEvent(new browser.PopStateEvent("popstate", { state: null }));
     });
-    await expect(page.getByRole("button", { name: "ผู้เสียภาษี" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
     const logoutResponsePromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+    await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
     expect((await logoutResponsePromise).status()).toBe(200);
     await expect(page).toHaveURL(/\/demo\/app$/);
     expect((await browserApi(page, "/api/auth/session")).status).toBe(401);
@@ -809,7 +810,7 @@ test("fixture mode switch keeps the hosted session visible after a real logout r
   }, { times: 1 });
 
   const failedLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   const failedLogout = await failedLogoutPromise;
   expect(failedLogout.status()).toBe(403);
   const failureEnvelope = await failedLogout.json() as { error?: { requestId?: string } };
@@ -822,7 +823,7 @@ test("fixture mode switch keeps the hosted session visible after a real logout r
   expect((await browserApi(page, "/api/auth/session")).status).toBe(200);
 
   const retryLogoutPromise = page.waitForResponse((response) => response.url().endsWith("/api/auth/logout") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   expect((await retryLogoutPromise).status()).toBe(200);
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.locator(".mode-tag")).toBeVisible();

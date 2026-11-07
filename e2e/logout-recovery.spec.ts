@@ -238,7 +238,7 @@ test("fixture sign-out clears the local demo identity without a hosted logout ca
   await page.route("**/api/auth/session", (route) => route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "No hosted session", requestId: "anonymous" } } }));
   await page.route("**/api/auth/logout", (route) => { logoutCalls += 1; return route.fulfill({ status: 500 }); });
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await expect(page).toHaveURL(/\/demo\/app$/);
   await page.getByRole("button", { name: "ออกจากระบบ" }).click();
   await expect(page).toHaveURL(/\/login$/);

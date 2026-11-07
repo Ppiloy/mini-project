@@ -3,8 +3,8 @@ import { expect, test } from "@playwright/test";
 test("taxpayer can enter the isolated fixture demo and start a draft", async ({ page }) => {
   await page.goto("/demo");
 
-  await expect(page.getByRole("heading", { name: "ทดลองใช้ด้วยข้อมูลตัวอย่าง" })).toBeVisible();
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await expect(page.getByRole("heading", { name: "ร่างโดยไม่เข้าสู่ระบบ" })).toBeVisible();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
 
   await expect(page).toHaveURL(/\/demo\/app$/);
   await expect(page.getByRole("heading", { name: "รายการคำนวณเครดิตภาษี" })).toBeVisible();

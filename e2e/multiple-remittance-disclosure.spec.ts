@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("explains the single-transfer limit before entry", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
 
   const scope = page.getByRole("region", { name: "ขอบเขตการคำนวณตามคู่มือกรมสรรพากร" });
@@ -12,7 +12,7 @@ test("explains the single-transfer limit before entry", async ({ page }) => {
 
 test("links the remittance-date guidance to the field and directs multiple transfers to review", async ({ page }) => {
   await page.goto("/demo");
-  await page.getByRole("button", { name: "ผู้เสียภาษี" }).click();
+  await page.getByRole("button", { name: "เริ่มร่างโดยไม่เข้าสู่ระบบ" }).click();
   await page.getByRole("button", { name: "เริ่มคำนวณใหม่", exact: true }).click();
   await page.getByLabel("ปีที่เกิดเงินได้ (ค.ศ.)").fill("2025");
   await page.getByRole("button", { name: "เพิ่มปีที่เกิดเงินได้", exact: true }).click();
