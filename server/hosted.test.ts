@@ -1,0 +1,1192 @@
+import { randomUUID } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+import request from "supertest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import { sourceEligibilityFingerprint, taxInputFingerprint } from "../shared/confirmations.js";
+import { createEmptySource } from "../shared/draft.js";
+import { INCOME_CHOICES } from "../shared/coverage.js";
+import type { ForeignIncomeSourceDraft, FtcCaseDraft } from "../shared/contracts.js";
+import { createCalculationSnapshot } from "../shared/snapshot.js";
+import { createApp } from "./app.js";
+import { hashPasswordForTest } from "./passwords.js";
+import type { PgPoolLike, PgQueryable } from "./postgres.js";
+import { createFunctionHandler, createModernFunctionHandler } from "../netlify/functions/api.js";
+import { resolveRuntimeEnvironmentConfig } from "./runtime/environment.js";
+import {
+  createPreviewDatabaseIdentityDiagnostics,
+  createPreviewEnvironmentDiagnostics,
+  createPreviewEnvironmentProof,
+  FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER,
+  FTC_ENVIRONMENT_CHALLENGE_HEADER,
+  FTC_ENVIRONMENT_DIAGNOSTICS_HEADER,
+  FTC_ENVIRONMENT_PROOF_HEADER,
+} from "./runtime/preview-environment-proof.js";
+
+class PGlitePool implements PgPoolLike {
+  constructor(private readonly database: PGlite) {}
+
+  query<Row = Record<string, unknown>>(text: string, values?: unknown[], callback?: (error: Error | null, result?: { rows: Row[]; rowCount: number }) => void) {
+    const operation = this.database.query<Row>(text, values).then(({ rows, affectedRows }) => ({ rows, rowCount: affectedRows ?? rows.length }));
+    if (callback) {
+      operation.then((result) => callback(null, result), (error: Error) => callback(error));
+    }
+    return operation;
+  }
+
+  async connect(): Promise<PgQueryable> {
+    return {
+      query: (text, values, callback) => this.query(text, values, callback),
+      release: () => undefined,
+    };
+  }
+}
+
+class DelayedUserLookupPool implements PgPoolLike {
+  private releaseLookup!: () => void;
+  private lookupStarted!: () => void;
+  readonly lookupReady = new Promise<void>((resolve) => { this.lookupStarted = resolve; });
+  private readonly lookupGate = new Promise<void>((resolve) => { this.releaseLookup = resolve; });
+
+  constructor(private readonly pool: PgPoolLike) {}
+
+  release() { this.releaseLookup(); }
+
+  async query<Row = Record<string, unknown>>(text: string, values?: unknown[], callback?: (error: Error | null, result?: { rows: Row[]; rowCount: number }) => void) {
+    const operation = (async () => {
+      const result = await this.pool.query<Row>(text, values);
+      if (/^\s*SELECT users\.id, users\.login_name, users\.display_name, profiles\.masked_reference, users\.role, users\.active/i.test(text)) {
+        this.lookupStarted();
+        await this.lookupGate;
+      }
+      return result;
+    })();
+    if (callback) operation.then((result) => callback(null, result), (error: Error) => callback(error));
+    return operation;
+  }
+
+  async connect(): Promise<PgQueryable> {
+    return {
+      query: (text, values, callback) => this.query(text, values, callback),
+      release: () => undefined,
+    };
+  }
+}
+
+const origin = "https://ftc.example.test";
+const afterEachCallbacks: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  while (afterEachCallbacks.length) await afterEachCallbacks.pop()?.();
+});
+
+async function setup(
+  trustedHttps = false,
+  clock?: () => number,
+  environment?: ReturnType<typeof resolveRuntimeEnvironmentConfig>,
+  sessionSecret = "test-only-session-secret-with-sufficient-entropy",
+) {
+  const database = new PGlite();
+  afterEachCallbacks.push(() => database.close());
+  const migrations = (await readdir("netlify/database/migrations"))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const migrationName of migrations) {
+    await database.exec(await readFile(`netlify/database/migrations/${migrationName}`, "utf8"));
+  }
+  const pool = new PGlitePool(database);
+  const passwordHash = await hashPasswordForTest("demo-password-1");
+  await pool.query(
+    `INSERT INTO app_users (id, login_name, display_name, password_hash, role)
+     VALUES ($1, 'taxpayer-a', 'Taxpayer A', $2, 'taxpayer'),
+            ($3, 'taxpayer-b', 'Taxpayer B', $2, 'taxpayer'),
+            ($4, 'officer-a', 'Officer A', $2, 'officer')`,
+    ["00000000-0000-4000-8000-000000000001", passwordHash, "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000003"],
+  );
+  await pool.query("INSERT INTO user_profiles(user_id, masked_reference) VALUES ($1, '***-01'), ($2, '***-02')", ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"]);
+  const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps, clock, environment });
+  return { app, pool };
+}
+
+async function login(app: ReturnType<typeof createApp>, loginName: string) {
+  const agent = request.agent(app);
+  const response = await agent.post("/api/auth/login").set("Origin", origin).send({ loginName, password: "demo-password-1" });
+  expect(response.status).toBe(200);
+  return { agent, csrfToken: response.body.data.csrfToken as string, user: response.body.data.user, cookie: String(response.headers["set-cookie"]?.[0] ?? "") };
+}
+
+async function createStoredWorklistSubmission(
+  pool: PgPoolLike,
+  input: { ownerId: string; officerId: string; environmentMarkerId: string; draft: FtcCaseDraft; createdAt: string; submittedAt: string; activeAssignment?: boolean },
+): Promise<{ caseId: string }> {
+  const caseId = randomUUID();
+  const draft = { ...structuredClone(input.draft), id: caseId };
+  await pool.query(
+    `INSERT INTO ftc_cases(id,owner_id,draft,create_request_id,environment_marker_id)
+     VALUES ($1,$2,$3::jsonb,$4,$5)`,
+    [caseId, input.ownerId, JSON.stringify(draft), `worklist-${caseId}`, input.environmentMarkerId],
+  );
+  const snapshot = createCalculationSnapshot({ id: randomUUID(), caseId, revision: draft.revision, kind: "submitted",
+    inputs: draft, evidence: [], createdAt: input.createdAt });
+  snapshot.result.allowableCredit = "1.23";
+  snapshot.result.outcome = "ready";
+  snapshot.result.validationMessages = [];
+  await pool.query(
+    `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+     VALUES ($1,$2,$3,'submitted',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+    [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+      JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+  );
+  await pool.query("INSERT INTO officer_case_assignments(case_id,officer_id,assigned_by,active) VALUES ($1,$2,$2,$3)",
+    [caseId, input.officerId, input.activeAssignment ?? true]);
+  await pool.query(
+    "UPDATE ftc_cases SET status='submitted',assigned_officer_id=$2,submitted_snapshot_id=$3,submitted_at=$4::timestamptz WHERE id=$1",
+    [caseId, input.officerId, snapshot.id, input.submittedAt],
+  );
+  return { caseId };
+}
+
+describe("hosted authentication and durable draft API", () => {
+  it("restores a server identity from the regenerated secure session and destroys it on logout", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken, user, cookie } = await login(app, "taxpayer-a");
+
+    expect(user).toEqual({ id: "00000000-0000-4000-8000-000000000001", loginName: "taxpayer-a", displayName: "Taxpayer A", role: "taxpayer", maskedReference: "***-01" });
+    expect(JSON.stringify(user)).not.toContain("password");
+    expect(cookie).toContain("ftc.sid=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Domain=");
+
+    const restored = await agent.get("/api/auth/session").set("Origin", origin);
+    expect(restored.status).toBe(200);
+    expect(restored.body.data.user).toEqual(user);
+    expect(restored.headers["set-cookie"]).toBeUndefined();
+    const cases = await agent.get("/api/cases").set("Origin", origin);
+    expect(cases.status).toBe(200);
+    expect(cases.headers["set-cookie"]).toBeUndefined();
+
+    const logout = await agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", csrfToken);
+    expect(logout.status).toBe(200);
+    expect(logout.headers["set-cookie"]).toBeUndefined();
+    expect((await agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+  });
+
+  it("does not resurrect a session when an authenticated lookup finishes after logout", async () => {
+    const { app, pool } = await setup();
+    const loggedIn = await login(app, "taxpayer-a");
+    const delayedPool = new DelayedUserLookupPool(pool);
+    const delayedApp = createApp({ pool: delayedPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps: false });
+    const lateRequest = request(delayedApp).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    const pendingResponse = lateRequest.then((response) => response);
+
+    await delayedPool.lookupReady;
+    const logout = await loggedIn.agent.post("/api/auth/logout").set("Origin", origin).set("X-CSRF-Token", loggedIn.csrfToken);
+    expect(logout.status).toBe(200);
+    delayedPool.release();
+    const lateResponse = await pendingResponse;
+    expect(lateResponse.status).toBe(401);
+    expect(lateResponse.headers["set-cookie"]).toBeUndefined();
+
+    const afterLateResponse = await request(app).get("/api/auth/session").set("Origin", origin).set("Cookie", loggedIn.cookie.split(";")[0] ?? "");
+    expect(afterLateResponse.status).toBe(401);
+  });
+
+  it("sets a Secure host-only cookie when the trusted adapter marks hosted HTTPS", async () => {
+    const { app } = await setup(true);
+    const response = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1" });
+    const cookie = String(response.headers["set-cookie"]?.[0] ?? "");
+    expect(response.status).toBe(200);
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Domain=");
+  });
+
+  it("serves the public API through the Netlify Lambda wrapper and normalizes direct function URLs", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const { app } = await setup(true);
+    const handler = createFunctionHandler(() => app);
+    const response = await handler({
+      httpMethod: "POST",
+      path: "/.netlify/functions/api/auth/login",
+      rawUrl: `${origin}/.netlify/functions/api/auth/login`,
+      headers: {
+        host: "ftc.example.test",
+        origin,
+        "content-type": "application/json",
+        "x-forwarded-proto": "http",
+        "x-forwarded-host": "attacker.example",
+      },
+      requestContext: { identity: { sourceIp: "127.0.0.1" }, requestId: "netlify-test-request" },
+      body: JSON.stringify({ loginName: "taxpayer-a", password: "demo-password-1" }),
+      isBase64Encoded: false,
+    }, {});
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(String(response.body)).data.user.loginName).toBe("taxpayer-a");
+    const cookie = response.multiValueHeaders?.["set-cookie"]?.join("; ") ?? response.cookies?.join("; ") ?? "";
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+
+    const health = await handler({
+      httpMethod: "GET",
+      path: "/.netlify/functions/api/api/health",
+      rawUrl: `${origin}/.netlify/functions/api/api/health`,
+      headers: { host: "ftc.example.test", "x-forwarded-proto": "http" },
+      requestContext: { identity: { sourceIp: "127.0.0.1" } }, body: "", isBase64Encoded: false,
+    }, {});
+    expect(health.statusCode).toBe(200);
+    expect(JSON.parse(String(health.body)).data.status).toBe("ok");
+    expect(String(health.headers["cache-control"])).toContain("no-store");
+
+    for (const rawUrl of [undefined, "http://ftc.example.test/api/health", "https://attacker.example/api/health"]) {
+      const insecure = await handler({
+        httpMethod: "GET", path: "/api/health", ...(rawUrl ? { rawUrl } : {}),
+        headers: { host: "ftc.example.test", "x-forwarded-proto": "https" },
+        requestContext: { identity: { sourceIp: "127.0.0.1" } }, body: "", isBase64Encoded: false,
+      }, {});
+      expect(insecure.statusCode).toBe(403);
+      expect(JSON.parse(String(insecure.body)).error.code).toBe("forbidden");
+      expect(String(insecure.headers["cache-control"])).toContain("no-store");
+    }
+  });
+
+  it("serves the same API through the modern Request handler without losing multipart bytes, binary responses, or repeated cookies", async () => {
+    // Netlify build contexts inject FTC_ALLOWED_ORIGIN. This adapter fixture
+    // owns its configured origin so preview/production build variables cannot
+    // turn its intentionally local Request URLs into hosted-origin failures.
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const app = express();
+    app.post("/api/upload", express.raw({ type: "multipart/form-data" }), (req, res) => {
+      const bytes = req.body as Buffer;
+      res.json({ bytes: [...bytes] });
+    });
+    app.get("/api/file", (_req, res) => {
+      res.append("Set-Cookie", "download=ready; Path=/; HttpOnly");
+      res.type("application/pdf").send(Buffer.from([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]));
+    });
+    app.get("/api/cookies", (_req, res) => {
+      res.append("Set-Cookie", "first=one; Path=/; HttpOnly");
+      res.append("Set-Cookie", "second=two; Path=/; HttpOnly");
+      res.status(200).end();
+    });
+    app.get("/api/no-content", (_req, res) => {
+      res.append("Set-Cookie", "no-content=kept; Path=/; HttpOnly");
+      res.status(204).end();
+    });
+    const handler = createModernFunctionHandler(() => app);
+
+    const multipartBytes = Buffer.from([45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 13, 10, 255, 0, 13, 10, 45, 45, 98, 111, 117, 110, 100, 97, 114, 121, 45, 45]);
+    const runtimeContext = { requestId: "modern-handler-test" } as Parameters<typeof handler>[1];
+    const uploaded = await handler(new Request(`${origin}/.netlify/functions/api/upload`, {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=boundary" },
+      body: multipartBytes,
+    }), runtimeContext);
+    expect(uploaded.status).toBe(200);
+    const uploadedBody = await uploaded.json() as { bytes: number[] };
+    expect(uploadedBody.bytes).toEqual([...multipartBytes]);
+
+    const file = await handler(new Request(`${origin}/.netlify/functions/api/file`), runtimeContext);
+    expect(file.status).toBe(200);
+    expect(file.headers.get("content-type")).toContain("application/pdf");
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([0x25, 0x50, 0x44, 0x46, 0x00, 0xff]);
+    const etag = file.headers.get("etag");
+    expect(etag).toBeTruthy();
+    const conditionalFile = await handler(new Request(`${origin}/.netlify/functions/api/file`, {
+      headers: { "if-none-match": etag! },
+    }), runtimeContext);
+    expect(conditionalFile.status).toBe(304);
+    expect(conditionalFile.headers.get("etag")).toBe(etag);
+    expect(conditionalFile.headers.getSetCookie()).toContain("download=ready; Path=/; HttpOnly");
+
+    const noContent = await handler(new Request(`${origin}/.netlify/functions/api/no-content`), runtimeContext);
+    expect(noContent.status).toBe(204);
+    expect(noContent.headers.getSetCookie()).toContain("no-content=kept; Path=/; HttpOnly");
+
+    const cookies = await handler(new Request(`${origin}/.netlify/functions/api/cookies`), runtimeContext);
+    expect(cookies.status).toBe(200);
+    expect(cookies.headers.getSetCookie()).toEqual([
+      "first=one; Path=/; HttpOnly",
+      "second=two; Path=/; HttpOnly",
+    ]);
+  });
+
+  it("preserves the hosted origin and regenerated Secure session cookie through the modern handler", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const { app } = await setup(true);
+    const handler = createModernFunctionHandler(() => app);
+    const context = { requestId: "modern-login-test" } as Parameters<typeof handler>[1];
+    const loginResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/login`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ loginName: "taxpayer-a", password: "demo-password-1" }),
+    }), context);
+    expect(loginResponse.status).toBe(200);
+    const cookie = loginResponse.headers.getSetCookie()[0] ?? "";
+    expect(cookie).toContain("ftc.sid=");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+
+    const sessionResponse = await handler(new Request(`${origin}/.netlify/functions/api/auth/session`, {
+      headers: { origin, cookie: cookie.split(";")[0] ?? "" },
+    }), context);
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = await sessionResponse.json() as { data: { user: { loginName: string } } };
+    expect(sessionBody.data.user.loginName).toBe("taxpayer-a");
+  });
+
+  it("fails closed through the Lambda boundary when deployment context and platform markers are absent", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    vi.stubEnv("SESSION_SECRET", "test-only-session-secret-with-sufficient-entropy");
+    const { app } = await setup(true);
+    const functionEnvironment = {
+      NETLIFY_DB_URL: "postgres://ftc_role:synthetic-secret@db.example.test/production",
+      FTC_ALLOWED_ORIGIN: origin,
+      SESSION_SECRET: "test-only-session-secret-with-sufficient-entropy",
+    } as NodeJS.ProcessEnv;
+    let appWasBuilt = false;
+    const handler = createFunctionHandler(() => {
+      resolveRuntimeEnvironmentConfig(functionEnvironment);
+      appWasBuilt = true;
+      return app;
+    });
+    const response = await handler({
+      httpMethod: "GET", path: "/api/health", rawUrl: `${origin}/api/health`,
+      headers: { host: "ftc.example.test" }, body: "", isBase64Encoded: false,
+    }, {});
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(String(response.body)).error.code).toBe("service_unavailable");
+    expect(String(response.headers["cache-control"])).toContain("no-store");
+    expect(appWasBuilt).toBe(false);
+  });
+
+  it("proves database readiness with SELECT 1 and returns a safe unavailable response on query failure", async () => {
+    const { app, pool } = await setup();
+    const ready = await request(app).get("/api/health");
+    expect(ready.status).toBe(200);
+    expect(ready.body.data).toEqual({ status: "ok" });
+
+    const failingPool: PgPoolLike = {
+      query: (text, values, callback) => text === "SELECT 1"
+        ? Promise.reject(new Error("synthetic database outage"))
+        : pool.query(text, values, callback),
+      connect: () => pool.connect(),
+    };
+    const failingApp = createApp({
+      pool: failingPool,
+      sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+      allowedOrigin: origin,
+      trustedHttps: false,
+    });
+    const unavailable = await request(failingApp).get("/api/health");
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body.error.code).toBe("service_unavailable");
+    expect(unavailable.body.error.requestId).toEqual(expect.any(String));
+    expect(unavailable.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("returns a nonce-bound preview environment proof only after modern health succeeds", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "9f0b3d2c7a6e5f401122334455667788";
+    const previewEnvironment = (branch: string) => resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: `postgresql://ftc_role:fixture@preview-db.example.test/${branch}`,
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const firstEnvironment = previewEnvironment("branch-a");
+    const secondEnvironment = previewEnvironment("branch-b");
+    const secret = "test-only-session-secret-with-sufficient-entropy";
+    const { pool } = await setup(false, undefined, firstEnvironment, secret);
+    const databaseUrl = (environment: ReturnType<typeof previewEnvironment>) => environment === secondEnvironment
+      ? "postgresql://ftc_role:fixture@preview-db.example.test/branch-b"
+      : "postgresql://ftc_role:fixture@preview-db.example.test/branch-a";
+    const healthHandler = (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret) => {
+      const connectionString = databaseUrl(environment);
+      const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+        previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+          challenge, environment, connectionString, sessionSecret,
+        ) });
+      return createModernFunctionHandler(() => app);
+    };
+    const requestHealth = async (environment: ReturnType<typeof previewEnvironment>, sessionSecret = secret, challenge: string | null = nonce, verifyExpressRoute = false) => {
+      const handler = healthHandler(environment, sessionSecret);
+      if (verifyExpressRoute) {
+        const connectionString = databaseUrl(environment);
+        const app = createApp({ pool, sessionSecret, allowedOrigin: origin, trustedHttps: false, environment,
+          previewDatabaseIdentityDiagnostics: (challenge) => createPreviewDatabaseIdentityDiagnostics(
+            challenge, environment, connectionString, sessionSecret,
+          ) });
+        const direct = await request(app).get("/api/health").set(FTC_ENVIRONMENT_CHALLENGE_HEADER, challenge ?? "");
+        expect(direct.status).toBe(200);
+        expect(direct.headers[FTC_ENVIRONMENT_PROOF_HEADER]).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+        expect(direct.headers[FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER]).toEqual(expect.any(String));
+      }
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: challenge === null ? {} : { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: challenge },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    const first = await requestHealth(firstEnvironment, secret, nonce, true);
+    const firstProof = first.headers.get(FTC_ENVIRONMENT_PROOF_HEADER);
+    const firstDiagnosticsHeader = first.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER);
+    const firstDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, secret);
+    const firstDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
+    expect(first.status).toBe(200);
+    expect(firstProof).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+    expect(firstDiagnostics).toEqual({
+      key: expect.stringMatching(/^[a-f0-9]{64}$/),
+      database: expect.stringMatching(/^[a-f0-9]{64}$/),
+      store: expect.stringMatching(/^[a-f0-9]{64}$/),
+      region: expect.stringMatching(/^[a-f0-9]{64}$/),
+      context: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(firstDiagnosticsHeader).toBe(JSON.stringify(firstDiagnostics));
+    const healthBody = await first.json();
+    expect(healthBody).toMatchObject({ data: { status: "ok" } });
+    expect(JSON.stringify(healthBody)).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(firstProof).toBe(createPreviewEnvironmentProof(nonce, firstEnvironment, secret));
+    expect(firstDiagnosticsHeader).not.toContain(firstEnvironment.databaseFingerprint);
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(firstDatabaseDiagnostics));
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("preview-db.example.test");
+    expect(first.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).not.toContain("ftc_role");
+
+    // Reusing a challenge is safe for comparison: the same branch is stable,
+    // while another preview branch receives a different proof for that nonce.
+    const repeated = await requestHealth(firstEnvironment);
+    const freshNonce = "0123456789abcdef0123456789abcdef";
+    const freshChallenge = await requestHealth(firstEnvironment, secret, freshNonce);
+    const otherBranch = await requestHealth(secondEnvironment);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(firstProof);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    expect(repeated.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(firstDiagnosticsHeader);
+    const freshDiagnostics = createPreviewEnvironmentDiagnostics(freshNonce, firstEnvironment, secret);
+    const otherBranchDiagnostics = createPreviewEnvironmentDiagnostics(nonce, secondEnvironment, secret);
+    const freshDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(freshNonce, firstEnvironment, databaseUrl(firstEnvironment), secret);
+    const otherBranchDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, secondEnvironment, databaseUrl(secondEnvironment), secret);
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDiagnostics));
+    expect(freshDiagnostics).not.toEqual(firstDiagnostics);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(freshDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDiagnostics));
+    expect(otherBranchDiagnostics?.key).toBe(firstDiagnostics?.key);
+    expect(otherBranchDiagnostics?.database).not.toBe(firstDiagnostics?.database);
+    expect(otherBranchDiagnostics?.store).not.toBe(firstDiagnostics?.store);
+    expect(otherBranchDiagnostics?.region).toBe(firstDiagnostics?.region);
+    expect(otherBranchDiagnostics?.context).toBe(firstDiagnostics?.context);
+    expect(otherBranch.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(otherBranchDatabaseDiagnostics));
+    expect(otherBranchDatabaseDiagnostics?.protocol).toBe(firstDatabaseDiagnostics?.protocol);
+    expect(otherBranchDatabaseDiagnostics?.role).toBe(firstDatabaseDiagnostics?.role);
+    expect(otherBranchDatabaseDiagnostics?.host).toBe(firstDatabaseDiagnostics?.host);
+    expect(otherBranchDatabaseDiagnostics?.port).toBe(firstDatabaseDiagnostics?.port);
+    expect(otherBranchDatabaseDiagnostics?.path).not.toBe(firstDatabaseDiagnostics?.path);
+    expect(otherBranchDatabaseDiagnostics?.routing).toBe(firstDatabaseDiagnostics?.routing);
+    expect(freshChallenge.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(freshDatabaseDiagnostics));
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(freshDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
+    expect(freshChallenge.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(
+      createPreviewEnvironmentProof(freshNonce, firstEnvironment, secret),
+    );
+    expect(otherBranch.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecret = await requestHealth(firstEnvironment, `${secret}-wrong`);
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_PROOF_HEADER)).not.toBe(firstProof);
+    const wrongSecretDiagnostics = createPreviewEnvironmentDiagnostics(nonce, firstEnvironment, `${secret}-wrong`);
+    for (const field of ["key", "database", "store", "region", "context"] as const) {
+      expect(wrongSecretDiagnostics?.[field]).not.toBe(firstDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDiagnostics));
+    const wrongSecretDatabaseDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, databaseUrl(firstEnvironment), `${secret}-wrong`);
+    for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+      expect(wrongSecretDatabaseDiagnostics?.[field]).not.toBe(firstDatabaseDiagnostics?.[field]);
+    }
+    expect(wrongSecret.headers.get(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(JSON.stringify(wrongSecretDatabaseDiagnostics));
+
+    const invalidNonce = await requestHealth(firstEnvironment, secret, "not-a-challenge");
+    expect(invalidNonce.status).toBe(200);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(invalidNonce.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+    const noChallenge = await requestHealth(firstEnvironment, secret, null);
+    expect(noChallenge.status).toBe(200);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(noChallenge.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+
+    const fieldChanges: Array<[
+      "databaseFingerprint" | "storageStore" | "storageRegion" | "deploymentContext",
+      string,
+      "database" | "store" | "region" | "context",
+    ]> = [
+      ["databaseFingerprint", "a".repeat(64), "database"],
+      ["storageStore", `${firstEnvironment.storageStore}-changed`, "store"],
+      ["storageRegion", "eu-central-1", "region"],
+      ["deploymentContext", "branch-deploy", "context"],
+    ];
+    for (const [property, changedValue, diagnosticField] of fieldChanges) {
+      const changedEnvironment = { ...firstEnvironment, [property]: changedValue };
+      const changedDiagnostics = createPreviewEnvironmentDiagnostics(nonce, changedEnvironment, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDiagnostics) throw new Error("Expected eligible preview diagnostics");
+      for (const field of ["key", "database", "store", "region", "context"] as const) {
+        expect(changedDiagnostics[field] === firstDiagnostics[field]).toBe(field !== diagnosticField);
+      }
+    }
+
+    const urlChanges: Array<[string, keyof NonNullable<typeof firstDatabaseDiagnostics>]> = [
+      ["postgres://ftc_role:fixture@preview-db.example.test/branch-a", "protocol"],
+      ["postgresql://other_role:fixture@preview-db.example.test/branch-a", "role"],
+      ["postgresql://ftc_role:fixture@other-db.example.test/branch-a", "host"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test:6543/branch-a", "port"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-b", "path"],
+      ["postgresql://ftc_role:fixture@preview-db.example.test/branch-a?application_name=ftc", "routing"],
+    ];
+    for (const [changedUrl, changedField] of urlChanges) {
+      const changedDiagnostics = createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, changedUrl, secret);
+      expect(changedDiagnostics).not.toBeNull();
+      if (!changedDiagnostics || !firstDatabaseDiagnostics) throw new Error("Expected eligible database diagnostics");
+      for (const field of ["protocol", "role", "host", "port", "path", "routing"] as const) {
+        expect(changedDiagnostics[field] === firstDatabaseDiagnostics[field]).toBe(field !== changedField);
+      }
+    }
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:another-password@preview-db.example.test/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment,
+      "postgresql://ftc_role:fixture@preview-db.example.test:5432/branch-a", secret)).toEqual(firstDatabaseDiagnostics);
+    expect(createPreviewDatabaseIdentityDiagnostics(nonce, firstEnvironment, "not a URL", secret)).toBeNull();
+  });
+
+  it("never emits environment proofs for production, local, or unavailable health", async () => {
+    vi.stubEnv("FTC_ALLOWED_ORIGIN", origin);
+    const nonce = "11223344556677889900aabbccddeeff";
+    const productionEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "production",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@prod-db.example.test/production",
+      SITE_ID: "preview-proof-fixture",
+    } as NodeJS.ProcessEnv);
+    const localEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "dev",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@127.0.0.1:5432/local",
+    } as NodeJS.ProcessEnv);
+    const previewEnvironment = resolveRuntimeEnvironmentConfig({
+      FTC_DEPLOYMENT_CONTEXT: "deploy-preview",
+      NETLIFY_DB_URL: "postgresql://ftc_role:fixture@preview-db.example.test/preview",
+      SITE_ID: "preview-proof-fixture",
+      FTC_BLOB_REGION: "us-east-2",
+    } as NodeJS.ProcessEnv);
+    const { pool } = await setup(false, undefined, productionEnvironment);
+    const requestHealth = async (environment: ReturnType<typeof resolveRuntimeEnvironmentConfig>, failing = false) => {
+      const connectionString = environment.kind === "preview"
+        ? "postgresql://ftc_role:fixture@preview-db.example.test/preview"
+        : environment.kind === "production"
+          ? "postgresql://ftc_role:fixture@prod-db.example.test/production"
+          : "postgresql://ftc_role:fixture@127.0.0.1:5432/local";
+      const previewDatabaseIdentityDiagnostics = (challenge: string) => createPreviewDatabaseIdentityDiagnostics(
+        challenge, environment, connectionString, "test-only-session-secret-with-sufficient-entropy",
+      );
+      const app = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
+      if (!failing) {
+        const handler = createModernFunctionHandler(() => app);
+        return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+          headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+        }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+      }
+      const failingPool: PgPoolLike = {
+        query: (text, values, callback) => text === "SELECT 1"
+          ? Promise.reject(new Error("synthetic database outage"))
+          : pool.query(text, values, callback),
+        connect: () => pool.connect(),
+      };
+      const failingApp = createApp({ pool: failingPool, sessionSecret: "test-only-session-secret-with-sufficient-entropy",
+        allowedOrigin: origin, trustedHttps: false, environment, previewDatabaseIdentityDiagnostics });
+      const handler = createModernFunctionHandler(() => failingApp);
+      return handler(new Request(`${origin}/.netlify/functions/api/api/health`, {
+        headers: { [FTC_ENVIRONMENT_CHALLENGE_HEADER]: nonce },
+      }), { requestId: "preview-health-proof-test" } as Parameters<typeof handler>[1]);
+    };
+
+    for (const environment of [productionEnvironment, localEnvironment]) {
+      const response = await requestHealth(environment);
+      expect(response.status).toBe(200);
+      expect(response.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+      expect(response.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+    }
+    const unavailable = await requestHealth(previewEnvironment, true);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toContain("no-store");
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_PROOF_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_ENVIRONMENT_DIAGNOSTICS_HEADER)).toBe(false);
+    expect(unavailable.headers.has(FTC_DATABASE_IDENTITY_DIAGNOSTICS_HEADER)).toBe(false);
+  });
+
+  it("restores the authenticated identity from PostgreSQL in a separate app instance", async () => {
+    const { app, pool } = await setup();
+    const { cookie, user } = await login(app, "taxpayer-a");
+    const otherInstance = createApp({ pool, sessionSecret: "test-only-session-secret-with-sufficient-entropy", allowedOrigin: origin, trustedHttps: false });
+    const persisted = await request(otherInstance).get("/api/auth/session").set("Origin", origin).set("Cookie", cookie.split(";")[0] ?? "");
+    expect(persisted.status).toBe(200);
+    expect(persisted.body.data.user).toEqual(user);
+  });
+
+  it("expires sessions at the 30-minute idle limit and eight-hour absolute limit", async () => {
+    let currentTime = Date.now();
+    const { app } = await setup(false, () => currentTime);
+    const idleLogin = await login(app, "taxpayer-a");
+    currentTime += 30 * 60 * 1000 + 1;
+    expect((await idleLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+
+    currentTime = Date.now();
+    const absoluteLogin = await login(app, "taxpayer-b");
+    for (let interval = 0; interval < 17; interval += 1) {
+      currentTime += 25 * 60 * 1000;
+      expect((await absoluteLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(200);
+    }
+    currentTime += 60 * 60 * 1000 + 1;
+    expect((await absoluteLogin.agent.get("/api/auth/session").set("Origin", origin)).status).toBe(401);
+  });
+
+  it("requires allowed origin and the session CSRF token for authenticated writes", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+
+    expect((await agent.post("/api/cases").set("Origin", "https://attacker.test").send({ requestId: "create-1" })).status).toBe(403);
+    expect((await agent.post("/api/cases").set("Origin", origin).send({ requestId: "create-1" })).status).toBe(403);
+    expect((await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "create-1" })).status).toBe(201);
+  });
+
+  it("maps shared-boundary NUL rejection to a private structured 422 response", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "nul-case-1" });
+    const draft = created.body.data.case.draft;
+    draft.thaiTax.provenance = "invalid\u0000text";
+    const response = await agent.put(`/api/cases/${created.body.data.case.id}/draft`)
+      .set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "nul-save-1", data: draft });
+    expect(response.status).toBe(422);
+    expect(response.body.error.code).toBe("invalid_input");
+    expect(response.headers["cache-control"]).toContain("no-store");
+    expect(response.body.error.fields).toEqual(expect.arrayContaining([expect.objectContaining({ path: ["thaiTax", "provenance"] })]));
+  });
+
+  it("rejects NUL characters in login names and persisted request identifiers as client errors", async () => {
+    const { app } = await setup();
+    const badLogin = await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer\u0000-a", password: "demo-password-1" });
+    expect(badLogin.status).toBe(400);
+    expect(badLogin.body.error.code).toBe("invalid_input");
+
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const badRequestId = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ requestId: "case\u0000id" });
+    expect(badRequestId.status).toBe(400);
+    expect(badRequestId.body.error.code).toBe("invalid_input");
+    expect(badRequestId.headers["cache-control"]).toContain("no-store");
+  });
+
+  it("keeps cases owner-scoped, makes create retries idempotent, and rejects stale draft revisions", async () => {
+    const { app } = await setup();
+    const taxpayerA = await login(app, "taxpayer-a");
+    const taxpayerB = await login(app, "taxpayer-b");
+
+    const created = await taxpayerA.agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ requestId: "create-retry-1" });
+    const retried = await taxpayerA.agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ requestId: "create-retry-1" });
+    expect(created.status).toBe(201);
+    expect(retried.status).toBe(200);
+    expect(retried.body.data.case.id).toBe(created.body.data.case.id);
+
+    const id = created.body.data.case.id as string;
+    expect((await taxpayerB.agent.get(`/api/cases/${id}`).set("Origin", origin)).status).toBe(404);
+    const current = await taxpayerA.agent.get(`/api/cases/${id}`).set("Origin", origin);
+    expect(current.body.data.case.draft.revision).toBe(0);
+    expect(current.body.data.case.draft.domesticAssessableIncome).toBeNull();
+
+    const body = { expectedRevision: 0, requestId: "save-1", data: current.body.data.case.draft };
+    const crossOwnerWrite = await taxpayerB.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerB.csrfToken).send({ ...body, requestId: "steal-case" });
+    expect(crossOwnerWrite.status).toBe(404);
+    const saved = await taxpayerA.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send(body);
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.case.draft.revision).toBe(1);
+    const stale = await taxpayerA.agent.put(`/api/cases/${id}/draft`).set("Origin", origin).set("X-CSRF-Token", taxpayerA.csrfToken).send({ ...body, requestId: "save-stale-1" });
+    expect(stale.status).toBe(409);
+    expect((await taxpayerA.agent.get(`/api/cases/${id}`).set("Origin", origin)).body.data.case.draft.revision).toBe(1);
+  });
+
+  it("rejects client role escalation, saves exact nullable monetary facts, and enforces the ten-case owner quota", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const elevated = await agent.post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1", role: "officer" });
+    expect(elevated.status).toBe(400);
+
+    const first = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "quota-0" });
+    const caseId = first.body.data.case.id as string;
+    const draft = first.body.data.case.draft;
+    draft.domesticAssessableIncome = "123456.78";
+    draft.thaiTax.amountBeforeFtc = null;
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ expectedRevision: 0, requestId: "save-exact", data: draft });
+    expect(saved.status).toBe(200);
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.domesticAssessableIncome).toBe("123456.78");
+    expect(reloaded.body.data.case.draft.thaiTax.amountBeforeFtc).toBeNull();
+
+    for (let index = 1; index < 10; index += 1) {
+      expect((await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: `quota-${index}` })).status).toBe(201);
+    }
+    const overQuota = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "quota-10" });
+    expect(overQuota.status).toBe(429);
+    expect((await agent.get(`/api/cases/${caseId}`).set("Origin", origin)).body.data.case.draft.domesticAssessableIncome).toBe("123456.78");
+  });
+
+  it("persists relational date/decimal facts and stamps confirmations only from explicit server-side intent", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "confirm-case-1" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    draft.taxYear = 2025;
+    draft.domesticAssessableIncome = "100000.12";
+    draft.thaiTax.amountBeforeFtc = "125.12";
+    draft.thaiTax.provenance = "Tax statement supplied by taxpayer";
+    draft.thaiTax.confirmedAt = "1999-01-01T00:00:00.000Z";
+    draft.thaiTax.confirmedInputFingerprint = "forged";
+    const source: ForeignIncomeSourceDraft = {
+      id: null, countryCode: null, countryName: null, incomeType: null, subtype: null,
+      earnedTaxYear: null, earnedDate: null, residenceDaysInEarnedYear: null, inputMode: null,
+      grossIncomeAmount: null, currencyCode: null, grossIncomeThb: null,
+      actualForeignTaxPaid: null, actualForeignTaxPaidThb: null, eligibleForeignTax: null, eligibleForeignTaxThb: null,
+      eligibilityRationale: null, eligibilityConfirmedAt: null, eligibilityConfirmedInputFingerprint: null,
+      remittance: null, remittedIncomeAmount: null, remittedIncomeThb: null, fxReference: null,
+      unsupportedClassification: null, unsupportedExplanation: null, evidenceChecklist: [],
+    };
+    source.countryCode = "US";
+    source.countryName = "United States";
+    source.incomeType = "salary_40_1";
+    source.earnedTaxYear = 2025;
+    source.earnedDate = "2025-01-15";
+    source.residenceDaysInEarnedYear = 365;
+    source.inputMode = "original_currency";
+    source.grossIncomeAmount = "98765.43";
+    source.currencyCode = "USD";
+    source.grossIncomeThb = "999999999.99";
+    source.actualForeignTaxPaid = "1234.56";
+    source.eligibleForeignTax = "1234.56";
+    source.eligibilityRationale = "Explicit educational assumption";
+    source.eligibilityConfirmedAt = "1999-01-01T00:00:00.000Z";
+    source.eligibilityConfirmedInputFingerprint = "forged";
+    source.remittance = { remittanceDate: "2025-02-28", transferTotalAmount: "98765.43", transferCurrencyCode: "USD", transferTotalThb: "999999999999999999.999999999999", classification: "income_only", classificationNote: null };
+    source.remittedIncomeAmount = "98765.43";
+    source.fxReference = { currencyCode: "USD", thbRate: "35.12345678", baseUnits: 1, effectiveDate: "2025-02-28", rateType: "manual", sourceKind: "user_supplied", sourceLabel: "User quote", sourceUrl: null, educationalAssumption: "Synthetic for persistence test" };
+    const secondSource = structuredClone(source);
+    secondSource.countryCode = "CA";
+    secondSource.countryName = "Canada";
+    secondSource.grossIncomeAmount = "1.25";
+    draft.sources = [source, secondSource];
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0, requestId: "confirm-save-1", data: draft,
+      confirmations: { thaiTax: true, eligibleSourceIndexes: [0] },
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.case.draft.thaiTax.confirmedAt).not.toBe("1999-01-01T00:00:00.000Z");
+    expect(saved.body.data.case.draft.thaiTax.confirmedInputFingerprint).toBe(taxInputFingerprint(saved.body.data.case.draft));
+    expect(saved.body.data.case.draft.sources[0].eligibilityConfirmedAt).not.toBe("1999-01-01T00:00:00.000Z");
+    expect(saved.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBe(sourceEligibilityFingerprint(saved.body.data.case.draft.sources[0]));
+
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    const roundTripped = reloaded.body.data.case.draft;
+    expect(roundTripped.domesticAssessableIncome).toBe("100000.12");
+    expect(roundTripped.sources[0].grossIncomeAmount).toBe("98765.43");
+    expect(roundTripped.sources[0].countryCode).toBe("US");
+    expect(roundTripped.sources[1].countryCode).toBe("CA");
+    expect(roundTripped.sources[0].grossIncomeThb).toBe("3468983.3119631154");
+    expect(roundTripped.sources[0].earnedDate).toBe("2025-01-15");
+    expect(roundTripped.sources[0].remittance.remittanceDate).toBe("2025-02-28");
+    expect(roundTripped.sources[0].remittance.transferTotalThb).toBe("3468983.3119631154");
+    expect(roundTripped.sources[0].fxReference.effectiveDate).toBe("2025-02-28");
+
+    roundTripped.domesticAssessableIncome = "100001";
+    roundTripped.sources[0].grossIncomeAmount = "98766";
+    const changed = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 1, requestId: "confirm-save-2", data: roundTripped,
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.body.data.case.draft.thaiTax.confirmedAt).toBeNull();
+    expect(changed.body.data.case.draft.thaiTax.confirmedInputFingerprint).toBeNull();
+    expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedAt).toBeNull();
+    expect(changed.body.data.case.draft.sources[0].eligibilityConfirmedInputFingerprint).toBeNull();
+  });
+
+  it("persists inclusive legacy residence periods and derives the source total from its earned year", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "residence-case-1" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const source = createEmptySource();
+    source.earnedTaxYear = 2024;
+    source.earnedDate = "2024-02-29";
+    source.residenceDaysInEarnedYear = 1;
+    const periods = [
+      { startDate: "2024-01-01", endDate: "2024-12-31" },
+      { startDate: "2024-02-01", endDate: "2024-02-29" },
+    ];
+    draft.sources = [source];
+    delete draft.residenceYears;
+    draft.residencePeriods = periods;
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0, requestId: "residence-save-1", data: draft,
+    });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.data.case.draft.residencePeriods).toEqual(periods);
+    expect(saved.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
+
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.residencePeriods).toEqual(periods);
+    expect(reloaded.body.data.case.draft.sources[0].residenceDaysInEarnedYear).toBe(366);
+  });
+
+  it("retains manually entered FX method, date and original amounts in a frozen API snapshot", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const headers = { Origin: origin, "X-CSRF-Token": csrfToken };
+    const created = await agent.post("/api/cases").set(headers).send({ requestId: "manual-fx-case" });
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    const caseId = created.body.data.case.id as string;
+    const reference: NonNullable<ForeignIncomeSourceDraft["fxReference"]> = {
+      currencyCode: "USD", thbRate: "36.15", baseUnits: 1, effectiveDate: "2025-09-30", rateType: "bot_average_buying",
+      sourceKind: "user_supplied", sourceLabel: "ธปท. ตามข้อมูลที่ผู้ใช้กรอก", sourceUrl: null, educationalAssumption: "อัตราทดสอบที่ผู้ใช้กรอก ไม่ได้ตรวจสอบ",
+    };
+    Object.assign(draft, { taxYear: 2025, domesticAssessableIncome: "0", thaiTax: { amountBeforeFtc: "100000", provenance: null, confirmedAt: null, confirmedInputFingerprint: null },
+      residenceYears: [{ earnedTaxYear: 2025, mode: "declared", declaration: "at_least_180_days" }],
+      sources: [{ ...createEmptySource(), countryCode: "US", countryName: "United States", incomeType: "salary_40_1", subtype: "salary", earnedTaxYear: 2025,
+        earnedDate: "2025-01-01", inputMode: "original_currency", currencyCode: "USD", grossIncomeAmount: "1000", actualForeignTaxPaid: "100", remittedIncomeAmount: "500", fxReference: reference,
+        remittance: { remittanceDate: "2025-10-01", transferTotalAmount: null, transferCurrencyCode: null, transferTotalThb: null, classification: "income_only", classificationNote: null } }],
+    });
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set(headers).send({ expectedRevision: 0, requestId: "manual-fx-save", data: draft, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(saved.status).toBe(200);
+    const revision = saved.body.data.case.draft.revision as number;
+    const loaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(loaded.body.data.case.draft.sources[0].fxReference).toEqual(reference);
+    const calculated = await agent.post(`/api/cases/${caseId}/calculate`).set(headers).send({ expectedRevision: revision, requestId: "manual-fx-calculate" });
+    expect(calculated.status).toBe(200);
+    const snapshot = calculated.body.data.snapshot;
+    expect(snapshot.result).toMatchObject({ outcome: "ready", allowableCredit: "1807.50" });
+    expect(snapshot.inputs.sources[0]).toMatchObject({ currencyCode: "USD", grossIncomeAmount: "1000", actualForeignTaxPaid: "100", remittedIncomeAmount: "500", grossIncomeThb: "36150", remittedIncomeThb: "18075", fxReference: reference });
+    const changed = loaded.body.data.case.draft;
+    changed.sources[0].fxReference.thbRate = "37";
+    const resaved = await agent.put(`/api/cases/${caseId}/draft`).set(headers).send({ expectedRevision: revision, requestId: "manual-fx-change", data: changed, confirmations: { thaiTax: true, eligibleSourceIndexes: [0] } });
+    expect(resaved.status).toBe(200);
+    const oldSnapshot = await agent.get(`/api/snapshots/${snapshot.id}`).set("Origin", origin);
+    expect(oldSnapshot.body.data.snapshot).toEqual(snapshot);
+  });
+
+  it("round-trips every Section 40 income category through the authenticated API", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "income-coverage-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    draft.taxYear = 2025;
+    draft.sources = INCOME_CHOICES.map((choice) => ({
+      ...createEmptySource(),
+      countryCode: "US",
+      countryName: "United States",
+      incomeType: choice.incomeType,
+      subtype: choice.subtype,
+      earnedTaxYear: 2025,
+      earnedDate: "2025-01-01",
+    }));
+
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken).send({
+      expectedRevision: 0,
+      requestId: "income-coverage-save",
+      data: draft,
+    });
+    expect(saved.status).toBe(200);
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.status).toBe(200);
+    expect(reloaded.body.data.case.draft.sources.map(({ incomeType, subtype }: { incomeType: string; subtype: string | null }) => [incomeType, subtype]))
+      .toEqual(INCOME_CHOICES.map(({ incomeType, subtype }) => [incomeType, subtype]));
+  });
+
+  it("reads an old-version snapshot with its original income type and policy intact", async () => {
+    const { app, pool } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "legacy-snapshot-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft as FtcCaseDraft;
+    const legacySource = createEmptySource();
+    legacySource.countryCode = "VN";
+    legacySource.countryName = "Vietnam";
+    legacySource.incomeType = "other";
+    legacySource.subtype = "40_2";
+    draft.sources = [legacySource];
+    const snapshot = createCalculationSnapshot({
+      id: randomUUID(),
+      caseId,
+      revision: draft.revision,
+      kind: "preview",
+      inputs: draft,
+      evidence: [],
+      createdAt: "2025-03-04T05:06:07.000Z",
+    });
+    snapshot.policy = {
+      ...snapshot.policy,
+      id: "rd-ftc-demo-2568-v1",
+      reviewedAt: "2026-10-14",
+      assumptions: ["Historical policy assumptions remain frozen."],
+    };
+    snapshot.result.policyVersion = "rd-ftc-demo-2568-v1";
+    snapshot.result.engineVersion = "ftc-engine-v3";
+    const historicalSnapshot = structuredClone(snapshot);
+    await pool.query(
+      `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+       VALUES ($1,$2,$3,'preview',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+      [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+        JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+    );
+
+    const readBack = await agent.get(`/api/snapshots/${snapshot.id}`).set("Origin", origin);
+    expect(readBack.status).toBe(200);
+    expect(readBack.body.data.snapshot).toEqual(historicalSnapshot);
+  });
+
+  it("rejects duplicate canonical source UUIDs atomically and refuses caller-created source IDs", async () => {
+    const { app } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "duplicate-source-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const unsupported = createEmptySource();
+    unsupported.id = "a1111111-1111-4111-8111-111111111111";
+    unsupported.unsupportedClassification = "other";
+    const otherwiseSupported = createEmptySource();
+    otherwiseSupported.id = "a1111111-1111-4111-8111-111111111111".toUpperCase();
+    draft.sources = [unsupported, otherwiseSupported];
+
+    const duplicateSave = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "duplicate-source-save", data: draft });
+    expect(duplicateSave.status).toBe(400);
+    expect(duplicateSave.body.error.code).toBe("invalid_input");
+    const afterDuplicate = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(afterDuplicate.body.data.case.draft.sources).toEqual([]);
+    expect(afterDuplicate.body.data.case.draft.revision).toBe(0);
+
+    draft.sources = [otherwiseSupported];
+    const unownedId = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "caller-source-id", data: draft });
+    expect(unownedId.status).toBe(409);
+    expect((await agent.get(`/api/cases/${caseId}`).set("Origin", origin)).body.data.case.draft.sources).toEqual([]);
+  });
+
+  it("returns a conflict before clearing or removing remittances referenced by evidence", async () => {
+    const { app, pool } = await setup();
+    const { agent, csrfToken } = await login(app, "taxpayer-a");
+    const created = await agent.post("/api/cases").set("Origin", origin).set("X-CSRF-Token", csrfToken).send({ requestId: "remittance-evidence-case" });
+    const caseId = created.body.data.case.id as string;
+    const draft = created.body.data.case.draft;
+    const source = createEmptySource();
+    source.remittance = {
+      remittanceDate: "2025-02-01", transferTotalAmount: "100", transferCurrencyCode: "USD", transferTotalThb: null,
+      classification: "income_only", classificationNote: null,
+    };
+    draft.sources = [source];
+    const saved = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 0, requestId: "remittance-evidence-save", data: draft });
+    expect(saved.status).toBe(200);
+    const persistedSource = saved.body.data.case.draft.sources[0] as ForeignIncomeSourceDraft;
+    const remittance = await pool.query<{ id: string }>("SELECT id FROM remittances WHERE source_id=$1", [persistedSource.id]);
+    expect(remittance.rows).toHaveLength(1);
+    await pool.query(
+      `INSERT INTO attachments(case_id, source_id, remittance_id, storage_environment, storage_store, storage_region,
+         storage_key, display_name, media_type, byte_size, sha256, kind, status)
+       VALUES ($1, NULL, $2, 'production', 'test-store', 'us-east-2', 'test/remittance-evidence', 'proof.pdf',
+         'application/pdf', 1, 'test-digest', 'remittance', 'ready')`,
+      [caseId, remittance.rows[0]!.id],
+    );
+
+    const cleared = structuredClone(saved.body.data.case.draft);
+    cleared.sources[0].remittance = null;
+    const clearResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "clear-linked-remittance", data: cleared });
+    expect(clearResponse.status).toBe(409);
+    expect(clearResponse.body.error.code).toBe("conflict");
+    expect(clearResponse.body.error.message).toContain("หลักฐาน");
+
+    const removed = structuredClone(saved.body.data.case.draft);
+    removed.sources = [];
+    const removeResponse = await agent.put(`/api/cases/${caseId}/draft`).set("Origin", origin).set("X-CSRF-Token", csrfToken)
+      .send({ expectedRevision: 1, requestId: "remove-linked-remittance", data: removed });
+    expect(removeResponse.status).toBe(409);
+    expect(removeResponse.body.error.code).toBe("conflict");
+    const reloaded = await agent.get(`/api/cases/${caseId}`).set("Origin", origin);
+    expect(reloaded.body.data.case.draft.revision).toBe(1);
+    expect(reloaded.body.data.case.draft.sources[0].id).toBe(persistedSource.id);
+    expect(reloaded.body.data.case.draft.sources[0].remittance).not.toBeNull();
+  });
+
+  it("blocks repeated bad passwords using persistent account-level limits", async () => {
+    const { app } = await setup();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const failed = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "wrong" });
+      expect(failed.status).toBe(401);
+    }
+    const limited = await request(app).post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "demo-password-1" });
+    expect(limited.status).toBe(429);
+  });
+
+  it("reserves login attempt capacity before password work under a concurrent wrong-password burst", async () => {
+    const { app } = await setup();
+    const attempts = await Promise.all(Array.from({ length: 20 }, () => request(app)
+      .post("/api/auth/login").set("Origin", origin).send({ loginName: "taxpayer-a", password: "wrong" })));
+    expect(attempts.filter((attempt) => attempt.status === 401)).toHaveLength(10);
+    expect(attempts.filter((attempt) => attempt.status === 429)).toHaveLength(10);
+    expect(attempts.every((attempt) => [401, 429].includes(attempt.status))).toBe(true);
+    expect((await request(app).post("/api/auth/login").set("Origin", origin)
+      .send({ loginName: "taxpayer-a", password: "demo-password-1" })).status).toBe(429);
+  });
+});
+
+describe("officer review worklist", () => {
+  it("uses immutable snapshot facts and submission time with concrete, non-approval review prompts", async () => {
+    const { app, pool } = await setup();
+    const taxpayer = await login(app, "taxpayer-a");
+    const officer = await login(app, "officer-a");
+    const created = await taxpayer.agent.post("/api/cases").set("Origin", origin)
+      .set("X-CSRF-Token", taxpayer.csrfToken).send({ requestId: "worklist-create-1" });
+    expect(created.status).toBe(201);
+
+    const caseId = created.body.data.case.id as string;
+    const inputs = structuredClone(created.body.data.case.draft);
+    inputs.taxYear = 2025;
+    inputs.thaiTax.amountBeforeFtc = "5000";
+    inputs.thaiTax.provenance = "จำนวนจากเอกสารภาษีไทยสำหรับทดสอบ";
+    const source = createEmptySource();
+    source.id = randomUUID();
+    source.countryCode = "US";
+    source.countryName = "United States";
+    source.incomeType = "salary_40_1";
+    source.earnedTaxYear = 2025;
+    source.earnedDate = "2025-03-01";
+    source.residenceDaysInEarnedYear = 180;
+    source.inputMode = "original_currency";
+    source.grossIncomeAmount = "1000";
+    source.currencyCode = "USD";
+    source.grossIncomeThb = "35000";
+    source.actualForeignTaxPaid = "100";
+    source.actualForeignTaxPaidThb = "3500";
+    source.eligibleForeignTax = "80";
+    source.eligibleForeignTaxThb = "2800";
+    source.eligibilityRationale = "Recorded taxpayer assumption";
+    source.remittance = { remittanceDate: "2025-04-01", transferTotalAmount: null, transferCurrencyCode: null,
+      transferTotalThb: null, classification: null, classificationNote: null };
+    source.remittedIncomeAmount = "1000";
+    source.remittedIncomeThb = "35000";
+    source.fxReference = { currencyCode: "USD", thbRate: "35", baseUnits: 1, effectiveDate: "2025-04-01",
+      rateType: "manual", sourceKind: "user_supplied", sourceLabel: "Manual rate", sourceUrl: null, educationalAssumption: null };
+    source.unsupportedClassification = "other";
+    source.unsupportedExplanation = "Recorded as an unsupported fact";
+    inputs.sources = [source];
+
+    const snapshot = createCalculationSnapshot({ id: randomUUID(), caseId, revision: inputs.revision, kind: "submitted",
+      inputs, evidence: [], createdAt: "2025-06-07T08:09:10.000Z" });
+    snapshot.result.allowableCredit = "321.09";
+    snapshot.result.outcome = "ready";
+    snapshot.result.validationMessages = [{ code: "source.remitted_exceeds_income", message: "เงินได้ที่นำเข้ามากกว่าเงินได้ต้นทาง",
+      path: ["sources", 0, "remittedIncomeAmount"] }];
+    await pool.query(
+      `INSERT INTO calculation_snapshots(id,case_id,revision,kind,inputs,result,evidence,policy,policy_id,engine_version,created_at)
+       VALUES ($1,$2,$3,'submitted',$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10::timestamptz)`,
+      [snapshot.id, caseId, snapshot.revision, JSON.stringify(snapshot.inputs), JSON.stringify(snapshot.result),
+        JSON.stringify(snapshot.evidence), JSON.stringify(snapshot.policy), snapshot.policy.id, snapshot.result.engineVersion, snapshot.createdAt],
+    );
+    await pool.query("INSERT INTO officer_case_assignments(case_id,officer_id,assigned_by) VALUES ($1,$2,$2)", [caseId, officer.user.id]);
+    await pool.query(
+      "UPDATE ftc_cases SET status='submitted',assigned_officer_id=$2,submitted_snapshot_id=$3,submitted_at=$4::timestamptz WHERE id=$1",
+      [caseId, officer.user.id, snapshot.id, "2025-08-09T10:11:12.000Z"],
+    );
+    const marker = await pool.query<{ marker_id: string }>("SELECT marker_id FROM active_hosting_environment WHERE singleton=true");
+    const countryOnlyDraft = structuredClone(created.body.data.case.draft as FtcCaseDraft);
+    const countryOnlySource = createEmptySource();
+    countryOnlySource.id = randomUUID();
+    countryOnlySource.countryCode = "US";
+    countryOnlySource.countryName = "United States";
+    countryOnlyDraft.sources = [countryOnlySource];
+    const clear = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officer.user.id,
+      environmentMarkerId: marker.rows[0]!.marker_id, draft: countryOnlyDraft,
+      createdAt: "2025-01-01T00:00:00.000Z", submittedAt: "2025-08-10T10:11:12.000Z" });
+    const olderFlaggedInputs = structuredClone(inputs);
+    olderFlaggedInputs.sources[0]!.id = randomUUID();
+    const olderFlagged = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officer.user.id,
+      environmentMarkerId: marker.rows[0]!.marker_id, draft: olderFlaggedInputs,
+      createdAt: "2025-06-06T08:09:10.000Z", submittedAt: "2025-08-11T10:11:12.000Z" });
+
+    const response = await officer.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(response.status).toBe(200);
+    expect(response.body.data.reviewScope).toContain("ไม่ใช่การอนุมัติ");
+    expect(response.body.data.cases).toHaveLength(3);
+    expect(response.body.data.cases.map((entry: { caseId: string }) => entry.caseId)).toEqual([caseId, olderFlagged.caseId, clear.caseId]);
+    const item = response.body.data.cases[0];
+    expect(item).toMatchObject({ caseId, reference: caseId, taxYear: 2025, sourceCount: 1, totalFtc: "321.09",
+      submittedAt: "2025-08-09T10:11:12.000Z", reviewStatus: "awaiting_review" });
+    expect(item.reviewPoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "unsupported", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "invalid", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "substantive", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "missingEvidence", sourceId: source.id, sourceIndex: 0 }),
+      expect.objectContaining({ category: "missingEvidence", sourceId: null, sourceIndex: null }),
+    ]));
+    expect(item.reviewPoints.every((point: { title: string; reason: string; nextAction: string }) =>
+      point.title.length > 0 && point.reason.length > 0 && point.nextAction.length > 0)).toBe(true);
+    expect(item.reviewPoints.map((point: { code: string }) => point.code)).toEqual(expect.arrayContaining([
+      "source.unsupported_classification", "fx.manual_reference", "source.actual_tax_differs_from_used", "source.missing_evidence",
+      "case.missing_thai_tax_evidence", "result.source.remitted_exceeds_income",
+    ]));
+    expect(item.reviewPointCount).toBe(item.reviewPoints.length);
+    expect((await officer.agent.get("/api/officer/worklist?status=awaiting_review&reviewPoints=with").set("Origin", origin)).body.data.cases).toHaveLength(2);
+    expect((await officer.agent.get("/api/officer/worklist?reviewPoints=without").set("Origin", origin)).body.data.cases).toHaveLength(1);
+    expect((await officer.agent.get("/api/officer/worklist?status=invalid").set("Origin", origin)).status).toBe(400);
+    expect((await taxpayer.agent.get("/api/officer/worklist").set("Origin", origin)).status).toBe(403);
+  });
+
+  it("shows only submitted cases with this officer's active assignment in the current environment", async () => {
+    const { app, pool } = await setup();
+    const taxpayer = await login(app, "taxpayer-a");
+    const officerA = await login(app, "officer-a");
+    const template = await taxpayer.agent.post("/api/cases").set("Origin", origin)
+      .set("X-CSRF-Token", taxpayer.csrfToken).send({ requestId: "worklist-scope-template" });
+    expect(template.status).toBe(201);
+    const mainMarker = await pool.query<{ marker_id: string }>("SELECT marker_id FROM active_hosting_environment WHERE singleton=true");
+    const mainMarkerId = mainMarker.rows[0]!.marker_id;
+    const isolatedMarker = await pool.query<{ id: string }>(
+      `INSERT INTO hosting_environment_markers(kind,database_fingerprint,storage_store,storage_region,deployment_context)
+       VALUES ('local',$1,'isolated-worklist-store','us-east-2','dev-isolated') RETURNING id`, ["ab".repeat(32)]);
+    const officerBId = randomUUID();
+    await pool.query("INSERT INTO app_users(id,login_name,display_name,password_hash,role) VALUES ($1,'officer-b','Officer B',$2,'officer')",
+      [officerBId, await hashPasswordForTest("demo-password-1")]);
+    const draft = template.body.data.case.draft as FtcCaseDraft;
+    const submittedAt = "2025-08-09T10:11:12.000Z";
+    const visible = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-05-01T00:00:00.000Z", submittedAt });
+    await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-01-01T00:00:00.000Z", submittedAt, activeAssignment: false });
+    const assignedToB = await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerBId,
+      environmentMarkerId: mainMarkerId, draft, createdAt: "2025-02-01T00:00:00.000Z", submittedAt });
+    await createStoredWorklistSubmission(pool, { ownerId: taxpayer.user.id, officerId: officerA.user.id,
+      environmentMarkerId: isolatedMarker.rows[0]!.id, draft, createdAt: "2025-03-01T00:00:00.000Z", submittedAt });
+
+    const officerAQueue = await officerA.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(officerAQueue.status).toBe(200);
+    expect(officerAQueue.body.data.cases.map((item: { caseId: string }) => item.caseId)).toEqual([visible.caseId]);
+    const officerB = await login(app, "officer-b");
+    const officerBQueue = await officerB.agent.get("/api/officer/worklist").set("Origin", origin);
+    expect(officerBQueue.body.data.cases.map((item: { caseId: string }) => item.caseId)).toEqual([assignedToB.caseId]);
+  });
+});

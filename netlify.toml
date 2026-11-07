@@ -1,0 +1,22 @@
+[build]
+  command = "npm ci && npm run verify:release"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api"
+  to = "/.netlify/functions/api"
+  status = 200
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[functions."preview-operator"]
+  included_files = ["server/fixtures/fictional-preview-evidence.pdf"]

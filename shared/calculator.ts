@@ -1,0 +1,455 @@
+import Decimal from "decimal.js";
+import type {
+  AttachmentMetadata,
+  CalculationLine,
+  CalculationResult,
+  CountryCalculationResult,
+  ExchangeRateReference,
+  FtcCaseDraft,
+  ForeignIncomeSourceDraft,
+  ValidationMessage,
+} from "./contracts.js";
+import { isSourceEligibilityConfirmationCurrent, isThaiTaxConfirmationCurrent } from "./confirmations.js";
+import { draftSchema } from "./draft.js";
+import { DEMO_POLICY, type DemoPolicy } from "./policy.js";
+import { assessResidenceYear, deriveResidenceDaysForDraft, validateResidencePeriods, validateResidenceYearPeriods } from "./residence.js";
+import { worksheetLabel } from "./labels.js";
+import { effectiveForeignTaxAmount, hasEligibleTaxAdjustment } from "./foreignTax.js";
+import { manualFxDateIssue } from "./manualFx.js";
+
+const CalcDecimal = Decimal.clone({ precision: DEMO_POLICY.precision, rounding: Decimal.ROUND_HALF_UP });
+type Outcome = CalculationResult["outcome"];
+interface Assessment { outcome: Outcome; messages: ValidationMessage[] }
+interface SourceAmounts { income: Decimal | null; actualTax: Decimal | null; eligibleTax: Decimal | null; remittedIncome: Decimal | null; }
+interface KnownIncomeTotals { totalRemittedIncome: string | null; totalAssessableIncome: string | null; }
+
+const msg = (code: string, message: string, path: Array<string | number> = []): ValidationMessage => ({ code, message, path });
+const required = (path: Array<string | number>) => msg("input.required", "กรุณากรอกข้อมูลนี้ให้ครบก่อนคำนวณ", path);
+const amount = (value: string | null): Decimal | null => value === null ? null : new CalcDecimal(value);
+const text = (value: Decimal): string => value.toFixed();
+const money = (value: Decimal): string => value.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toFixed(2);
+const issuePath = (path: PropertyKey[]): Array<string | number> => path.filter((part): part is string | number => typeof part === "string" || typeof part === "number");
+
+function assess(draft: FtcCaseDraft, policy: DemoPolicy): Assessment {
+  const parsed = draftSchema.safeParse(draft);
+  if (!parsed.success) {
+    return {
+      outcome: "incomplete",
+      messages: parsed.error.issues.map((issue) => msg("draft.invalid", "ข้อมูลร่างมีรูปแบบไม่ถูกต้อง กรุณาตรวจสอบช่องที่ระบุ", issuePath(issue.path))),
+    };
+  }
+  const value = deriveResidenceDaysForDraft(parsed.data);
+  const messages: ValidationMessage[] = [];
+  let incomplete = false;
+  let needsReview = false;
+  const addIncomplete = (message: ValidationMessage) => { incomplete = true; messages.push(message); };
+  const addReview = (message: ValidationMessage) => { needsReview = true; messages.push(message); };
+
+  if (value.residenceYears === undefined) {
+    for (const issue of validateResidencePeriods(value.residencePeriods ?? [])) {
+      const message = issue.code === "required" ? "กรุณาระบุวันแรกและวันสุดท้ายของช่วงพำนักให้ครบถ้วน"
+        : issue.code === "reversed" ? "วันสิ้นสุดต้องไม่มาก่อนวันเริ่มต้น"
+          : "วันที่ในช่วงพำนักไม่ถูกต้อง";
+      addIncomplete(msg(`residence.period_${issue.code}`, message, ["residencePeriods", issue.periodIndex, issue.field]));
+    }
+  }
+
+  const residenceRecords = new Map((value.residenceYears ?? []).map((record) => [record.earnedTaxYear, record]));
+  for (const issue of validateResidenceYearPeriods(value.residenceYears ?? [])) {
+    const message = issue.code === "required" ? "กรุณาระบุวันแรกและวันสุดท้ายของช่วงพำนักให้ครบถ้วน"
+      : issue.code === "reversed" ? "วันสิ้นสุดต้องไม่มาก่อนวันเริ่มต้น"
+        : "วันที่ในช่วงพำนักไม่ถูกต้อง";
+    addIncomplete(msg(`residence.period_${issue.code}`, message, ["residenceYears", issue.earnedTaxYear, "periods", issue.periodIndex, issue.field]));
+  }
+  if (value.residenceYears !== undefined) {
+    const relevantYears = new Set<number>(value.sources.flatMap((source) => source.earnedTaxYear === null ? [] : [source.earnedTaxYear]));
+    for (const year of relevantYears) {
+      const record = residenceRecords.get(year);
+      if (!record) {
+        addIncomplete(msg("residence.year_record_required", `กรุณาระบุช่วงวันที่พำนัก หรือยืนยันว่าพำนักอย่างน้อย 180 วัน สำหรับปี พ.ศ. ${year + 543}`, ["residenceYears", year]));
+        continue;
+      }
+      const assessment = assessResidenceYear(record, year);
+      if (assessment.status === "computed" && assessment.meets180Days === false) {
+        addReview(msg("residence.below_threshold", `จำนวนวันพำนักในปี พ.ศ. ${year + 543} ต่ำกว่าเกณฑ์ 180 วันตามมาตรา 41`, ["residenceYears", year]));
+      }
+    }
+  }
+
+  if (value.taxYear === null) addIncomplete(required(["taxYear"]));
+  else if (value.taxYear < 2024) addReview(msg("case.unsupported_year", "เครื่องมือนี้รองรับปีภาษีตั้งแต่ ค.ศ. 2024 เป็นต้นไป", ["taxYear"]));
+  if (value.domesticAssessableIncome === null) addIncomplete(required(["domesticAssessableIncome"]));
+  if (value.thaiTax.amountBeforeFtc === null) addIncomplete(required(["thaiTax", "amountBeforeFtc"]));
+  if (value.thaiTax.amountBeforeFtc !== null && !isThaiTaxConfirmationCurrent(value)) {
+    addReview(msg("confirmation.thai_tax_stale", "จำนวนภาษีไทยก่อนเครดิตหรือข้อมูลรายได้เปลี่ยนแล้ว กรุณายืนยันอีกครั้ง", ["thaiTax"]));
+  }
+  if (value.sources.length === 0) addIncomplete(msg("source.required", "เพิ่มแหล่งเงินได้ต่างประเทศอย่างน้อยหนึ่งรายการ", ["sources"]));
+  if (value.sources.length > policy.maximumSources) addReview(msg("source.too_many", "ต้นแบบรองรับแหล่งเงินได้ไม่เกิน 20 รายการ", ["sources"]));
+
+  value.sources.forEach((source, index) => {
+    const path = (field: string) => ["sources", index, field] as Array<string | number>;
+    assessSource(source, value.taxYear, policy, path, addIncomplete, addReview, value.residenceYears !== undefined);
+  });
+
+  if (needsReview) return { outcome: "needs_review", messages };
+  if (incomplete) return { outcome: "incomplete", messages };
+  return { outcome: "ready", messages };
+}
+
+function assessSource(
+  source: ForeignIncomeSourceDraft,
+  taxYear: number | null,
+  policy: DemoPolicy,
+  path: (field: string) => Array<string | number>,
+  addIncomplete: (message: ValidationMessage) => void,
+  addReview: (message: ValidationMessage) => void,
+  residenceYearsAreAuthoritative: boolean,
+): void {
+  const requiredFields: Array<[string, unknown]> = [
+    ["countryCode", source.countryCode], ["incomeType", source.incomeType], ["earnedTaxYear", source.earnedTaxYear],
+    ["earnedDate", source.earnedDate], ["inputMode", source.inputMode],
+    ["grossIncomeAmount", source.grossIncomeAmount], ["currencyCode", source.currencyCode], ["actualForeignTaxPaid", source.actualForeignTaxPaid],
+    ["remittedIncomeAmount", source.remittedIncomeAmount], ["remittance", source.remittance],
+  ];
+  if (!residenceYearsAreAuthoritative) requiredFields.splice(4, 0, ["residenceDaysInEarnedYear", source.residenceDaysInEarnedYear]);
+  for (const [field, fieldValue] of requiredFields) if (fieldValue === null) addIncomplete(required(path(field)));
+  const supportedCountry = source.countryCode !== null && Object.prototype.hasOwnProperty.call(policy.supportedCountries, source.countryCode)
+    ? policy.supportedCountries[source.countryCode]
+    : undefined;
+  if (source.countryCode !== null && supportedCountry === undefined) {
+    addReview(msg("source.unsupported_country", "เครื่องมือนี้ต้องใช้ประเทศแหล่งเงินได้ที่มี DTA กับไทยและอยู่ในรายชื่อประเทศคู่สัญญาที่กรมสรรพากรระบุ", path("countryCode")));
+  }
+  if (source.incomeType !== null) {
+    const allowedSubtypes = Object.prototype.hasOwnProperty.call(policy.supportedIncomeTypes, source.incomeType)
+      ? policy.supportedIncomeTypes[source.incomeType]
+      : undefined;
+    const requiresSubtype = source.incomeType === "other" || source.incomeType === "dividend_40_4";
+    const subtypeSupported = allowedSubtypes !== undefined
+      && (requiresSubtype ? source.subtype !== null && allowedSubtypes.includes(source.subtype) : source.subtype === null || allowedSubtypes.includes(source.subtype));
+    if (!subtypeSupported) addReview(msg("source.unsupported_type", "กรุณาจำแนกตามลักษณะจริงของเงินได้และหมวดมาตรา 40 ที่รายงานใน ภ.ง.ด.90/91; เครื่องมือนี้รองรับมาตรา 40(1)–(8)", path("incomeType")));
+  }
+  if (source.earnedTaxYear !== null && source.earnedTaxYear < 2024) {
+    addReview(msg("source.income_before_tool_window", "คู่มือเครื่องมือกรมสรรพากรกำหนดช่วงเงินได้จากต่างประเทศตั้งแต่วันที่ 1 มกราคม 2024", path("earnedTaxYear")));
+  }
+  if (source.unsupportedClassification !== null) {
+    addReview(msg("source.unsupported_classification", source.unsupportedExplanation ?? "ข้อเท็จจริงของแหล่งเงินได้นี้ยังไม่รองรับ ต้องตรวจสอบเพิ่มเติม", path("unsupportedClassification")));
+  }
+  if (supportedCountry !== undefined && source.countryName !== null && supportedCountry !== source.countryName) {
+    addReview(msg("source.country_name_mismatch", "ชื่อประเทศไม่ตรงกับรหัสประเทศที่เลือก", path("countryName")));
+  }
+  if (source.earnedDate !== null && source.earnedTaxYear !== null && source.earnedDate.slice(0, 4) !== String(source.earnedTaxYear)) {
+    addReview(msg("source.earned_date_year_mismatch", "ปีของวันที่เกิดเงินได้ต้องตรงกับปีภาษีที่ระบุว่าเกิดเงินได้", path("earnedDate")));
+  }
+  if (source.earnedDate !== null && taxYear !== null && source.earnedDate > `${taxYear}-12-31`) {
+    addReview(msg("source.earned_after_claim_year", "วันที่เกิดเงินได้ต้องไม่หลังวันสิ้นปีภาษีที่เลือก", path("earnedDate")));
+  }
+  if (!residenceYearsAreAuthoritative && source.residenceDaysInEarnedYear !== null && source.residenceDaysInEarnedYear < policy.minimumResidenceDays) {
+    addReview(msg("source.nonresident_earned_income", "เกณฑ์ตามมาตรา 41 กำหนดให้พำนักในประเทศไทยอย่างน้อย 180 วันในปีที่เกิดเงินได้สำหรับกรณีในเครื่องมือนี้", path("residenceDaysInEarnedYear")));
+  }
+  if (source.inputMode === "worksheet_thb" && source.currencyCode !== null && source.currencyCode !== "THB") {
+    addReview(msg("source.worksheet_currency", "จำนวนเงินในโหมดตารางต้องเป็น THB", path("currencyCode")));
+  }
+  if (source.inputMode === "original_currency") assessFx(source, policy, path, addIncomplete, addReview);
+
+  if (hasEligibleTaxAdjustment(source) && source.eligibleForeignTax !== null && source.actualForeignTaxPaid !== null && new CalcDecimal(source.eligibleForeignTax).gt(source.actualForeignTaxPaid)) {
+    addReview(msg("source.eligible_tax_exceeds_paid", `จำนวนที่ใช้คำนวณตาม ${worksheetLabel("E")} ต้องไม่เกินภาษีต่างประเทศที่ชำระจริง`, path("eligibleForeignTax")));
+  }
+  if (source.grossIncomeAmount !== null && source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(source.grossIncomeAmount)) {
+    addReview(msg("source.remitted_exceeds_income", "เงินได้ที่นำเข้าต้องไม่เกินเงินได้ต้นทางในกรณีตัวอย่างนี้", path("remittedIncomeAmount")));
+  }
+  if (source.grossIncomeAmount !== null && new CalcDecimal(source.grossIncomeAmount).isZero()) {
+    addReview(msg("source.zero_income_denominator", "เงินได้ต้นทางต้องมากกว่าศูนย์เพื่อใช้เป็นตัวหาร แม้ไม่มีเงินได้นำเข้า", path("grossIncomeAmount")));
+    const effectiveTax = effectiveForeignTaxAmount(source);
+    if (effectiveTax !== null && !new CalcDecimal(effectiveTax).isZero()) {
+      addReview(msg("source.tax_without_income", `ไม่มีเงินได้ต้นทาง แต่ระบุจำนวนภาษีต่างประเทศที่ใช้คำนวณตาม ${worksheetLabel("E")} มากกว่าศูนย์`, path("eligibleForeignTax")));
+    }
+  }
+  if (hasEligibleTaxAdjustment(source) && (source.eligibilityRationale === null || source.eligibilityRationale.trim() === "")) addIncomplete(required(path("eligibilityRationale")));
+  else if (effectiveForeignTaxAmount(source) !== null && !isSourceEligibilityConfirmationCurrent(source)) addReview(msg("confirmation.eligibility_stale", `กรุณาตรวจทานและยืนยันจำนวนภาษีต่างประเทศตาม ${worksheetLabel("E")} อีกครั้ง`, path("actualForeignTaxPaid")));
+
+  const remittance = source.remittance;
+  if (remittance === null) return;
+  if (remittance.remittanceDate === null) addIncomplete(required([...path("remittance"), "remittanceDate"]));
+  else {
+    if (taxYear !== null && remittance.remittanceDate.slice(0, 4) !== String(taxYear)) addReview(msg("source.cross_year_remittance", "วันที่นำเข้าไทยต้องอยู่ในปีภาษีที่เลือกสำหรับกรณีนี้", [...path("remittance"), "remittanceDate"]));
+    if (source.earnedDate !== null && remittance.remittanceDate < source.earnedDate) addReview(msg("source.remittance_before_earned", "วันที่นำเข้าไทยต้องไม่ก่อนวันที่เกิดเงินได้", [...path("remittance"), "remittanceDate"]));
+  }
+}
+
+function assessFx(
+  source: ForeignIncomeSourceDraft,
+  policy: DemoPolicy,
+  path: (field: string) => Array<string | number>,
+  addIncomplete: (message: ValidationMessage) => void,
+  addReview: (message: ValidationMessage) => void,
+): void {
+  const fx = source.fxReference;
+  if (fx === null) { addIncomplete(required(path("fxReference"))); return; }
+  const requiredFx: Array<[string, string | number | null]> = [
+    ["currencyCode", fx.currencyCode], ["thbRate", fx.thbRate], ["baseUnits", fx.baseUnits], ["effectiveDate", fx.effectiveDate],
+    ["rateType", fx.rateType], ["sourceKind", fx.sourceKind], ["sourceLabel", fx.sourceLabel],
+  ];
+  for (const [field, value] of requiredFx) if (value === null) addIncomplete(required([...path("fxReference"), field]));
+  if (fx.currencyCode !== null && source.currencyCode !== null && fx.currencyCode !== source.currencyCode) {
+    addReview(msg("fx.currency_mismatch", "สกุลเงินของอัตราแลกเปลี่ยนต้องตรงกับ D/E/F", [...path("fxReference"), "currencyCode"]));
+  }
+  if (fx.sourceKind === "user_supplied" && (fx.rateType === "bot_average_buying" || fx.rateType === "bank_buying")) {
+    if (!fx.sourceLabel?.trim() || !fx.educationalAssumption?.trim()) {
+      addReview(msg("fx.manual_provenance_missing", "อัตราที่กรอกเองต้องระบุแหล่งที่มาและแจ้งว่ายังไม่ผ่านการตรวจสอบ", path("fxReference")));
+    }
+    const dateIssue = manualFxDateIssue(fx.rateType, fx.effectiveDate, source.remittance?.remittanceDate);
+    if (dateIssue) addReview(msg(dateIssue.code, dateIssue.message, [...path("fxReference"), "effectiveDate"]));
+  } else if (fx.rateType === "manual") {
+    if (fx.sourceKind !== "user_supplied" || fx.sourceLabel?.trim() === "" || fx.effectiveDate === null || fx.educationalAssumption?.trim() === "") {
+      addReview(msg("fx.manual_provenance_missing", "อัตราที่กรอกเองต้องระบุวันที่ อัตรา แหล่งที่มา และสมมติฐานเพื่อการศึกษา", path("fxReference")));
+    }
+    const dateIssue = manualFxDateIssue(fx.rateType, fx.effectiveDate, source.remittance?.remittanceDate);
+    if (dateIssue) addReview(msg(dateIssue.code, dateIssue.message, [...path("fxReference"), "thbRate"]));
+  } else if (!policy.approvedFxReferences.some((approved) =>
+    exactFxReferenceMatch(fx, approved.reference) && source.remittance?.remittanceDate === approved.remittanceDate)) {
+    addReview(msg("fx.reference_unverified", "อัตรานี้ยังไม่มีแหล่งอ้างอิงที่ตรวจสอบและอนุมัติไว้สำหรับวันที่นำเข้านี้", path("fxReference")));
+  }
+}
+
+function exactFxReferenceMatch(left: ExchangeRateReference, right: ExchangeRateReference): boolean {
+  return left.currencyCode === right.currencyCode
+    && left.thbRate === right.thbRate
+    && left.baseUnits === right.baseUnits
+    && left.effectiveDate === right.effectiveDate
+    && left.rateType === right.rateType
+    && left.sourceKind === right.sourceKind
+    && left.sourceLabel === right.sourceLabel
+    && left.sourceUrl === right.sourceUrl
+    && left.educationalAssumption === right.educationalAssumption;
+}
+
+function sourceThbRate(source: ForeignIncomeSourceDraft, requireCompleteReference = false): Decimal | null {
+  if (source.inputMode === "worksheet_thb") return source.currencyCode === "THB" ? new CalcDecimal(1) : null;
+  if (source.inputMode !== "original_currency" || source.fxReference === null) return null;
+  const fx = source.fxReference;
+  if (source.currencyCode === null || fx.currencyCode !== source.currencyCode || fx.thbRate === null || fx.baseUnits === null) return null;
+  if (requireCompleteReference && (fx.effectiveDate === null || fx.rateType === null || fx.sourceKind === null || fx.sourceLabel === null)) return null;
+  const rate = new CalcDecimal(fx.thbRate);
+  const units = new CalcDecimal(fx.baseUnits);
+  return rate.gt(0) && units.gt(0) ? rate.div(units) : null;
+}
+
+function sourceAmounts(source: ForeignIncomeSourceDraft): SourceAmounts {
+  const rate = sourceThbRate(source);
+  const convert = (raw: string | null): Decimal | null => raw === null || rate === null ? null : new CalcDecimal(raw).mul(rate);
+  return {
+    income: convert(source.grossIncomeAmount),
+    actualTax: convert(source.actualForeignTaxPaid),
+    eligibleTax: convert(effectiveForeignTaxAmount(source)),
+    remittedIncome: convert(source.remittedIncomeAmount),
+  };
+}
+
+function knownIncomeTotals(draft: FtcCaseDraft): KnownIncomeTotals {
+  const unavailable = { totalRemittedIncome: null, totalAssessableIncome: null };
+  const parsed = draftSchema.safeParse(draft);
+  if (!parsed.success || parsed.data.sources.length === 0) return unavailable;
+  try {
+    const remitted = parsed.data.sources.map((source) => sourceAmounts(source).remittedIncome);
+    if (remitted.some((value) => value === null)) return unavailable;
+    const totalRemitted = (remitted as Decimal[]).reduce((sum, value) => sum.plus(value), new CalcDecimal(0));
+    const domestic = amount(parsed.data.domesticAssessableIncome);
+    return {
+      totalRemittedIncome: text(totalRemitted),
+      totalAssessableIncome: domestic === null ? null : text(domestic.plus(totalRemitted)),
+    };
+  } catch {
+    return unavailable;
+  }
+}
+
+/** Rebuilds cached THB fields from raw inputs for server persistence and snapshots. */
+export function withCanonicalThbAmounts(draft: FtcCaseDraft): FtcCaseDraft {
+  const parsed = deriveResidenceDaysForDraft(draftSchema.parse(draft));
+  return {
+    ...parsed,
+    sources: parsed.sources.map((source) => {
+      const rate = sourceThbRate(source, true);
+      const convert = (raw: string | null) => raw === null || rate === null ? null : text(new CalcDecimal(raw).mul(rate));
+      const transferCurrencyMatches = source.remittance?.transferCurrencyCode === source.currencyCode;
+      return {
+        ...source,
+        grossIncomeThb: convert(source.grossIncomeAmount),
+        actualForeignTaxPaidThb: convert(source.actualForeignTaxPaid),
+        eligibleForeignTaxThb: convert(effectiveForeignTaxAmount(source)),
+        remittedIncomeThb: convert(source.remittedIncomeAmount),
+        remittance: source.remittance === null ? null : {
+          ...source.remittance,
+          transferTotalThb: transferCurrencyMatches ? convert(source.remittance.transferTotalAmount) : null,
+        },
+      };
+    }),
+  };
+}
+
+function fxDescription(source: ForeignIncomeSourceDraft): string {
+  if (source.inputMode === "worksheet_thb") return "รับค่า D/E/F จากช่องจำนวนเงิน THB ในตาราง; ไม่ใช้ค่าที่ส่งมาในฟิลด์ *Thb";
+  const fx = source.fxReference!;
+  return `แปลงด้วย ${fx.thbRate} THB ต่อ ${fx.baseUnits} ${fx.currencyCode} ณ ${fx.effectiveDate} (${fx.rateType}; ${fx.sourceKind}; ${fx.sourceLabel}; ${fx.educationalAssumption ?? "ไม่มีสมมติฐานเพิ่มเติม"})`;
+}
+
+function invalidResult(outcome: Exclude<Outcome, "ready">, messages: ValidationMessage[], policy: DemoPolicy, incomeTotals: KnownIncomeTotals): CalculationResult {
+  return {
+    outcome,
+    allowableCredit: null,
+    unroundedCountryCreditTotal: null,
+    displayRoundingReconciliation: null,
+    domesticAssessableIncome: null,
+    totalRemittedIncome: incomeTotals.totalRemittedIncome,
+    totalAssessableIncome: incomeTotals.totalAssessableIncome,
+    thaiTaxBeforeFtc: null,
+    countries: [],
+    lines: [],
+    validationMessages: messages,
+    assumptions: [...policy.assumptions],
+    policyVersion: policy.id,
+    engineVersion: policy.engineVersion,
+    roundingPolicy: policy.roundingPolicy,
+  };
+}
+
+/** Pure calculator: trusts only raw D/E/F strings, never client-provided derived THB totals. */
+export function calculateFTC(draft: FtcCaseDraft, policy: DemoPolicy = DEMO_POLICY): CalculationResult {
+  const validation = assess(draft, policy);
+  if (validation.outcome !== "ready") return invalidResult(validation.outcome, validation.messages, policy, knownIncomeTotals(draft));
+
+  const domestic = amount(draft.domesticAssessableIncome)!;
+  const thaiTax = amount(draft.thaiTax.amountBeforeFtc)!;
+  const lines: CalculationLine[] = [];
+  const sourceRows = draft.sources.map((source) => {
+    const converted = sourceAmounts(source);
+    const income = converted.income!;
+    const actualTax = converted.actualTax!;
+    const eligibleTax = converted.eligibleTax!;
+    const remittedIncome = converted.remittedIncome!;
+    const share = income.isZero() ? new CalcDecimal(0) : remittedIncome.div(income);
+    const attributableTax = remittedIncome.isZero() || income.isZero()
+      ? new CalcDecimal(0)
+      : share.mul(eligibleTax);
+    const explanation = fxDescription(source);
+    const values: Array<[string, string, Decimal]> = [
+      ["source_D", "D — เงินได้ต่างประเทศที่เกี่ยวข้อง (THB)", income],
+      ["source_E_paid", "ภาษีต่างประเทศที่ชำระจริง (THB)", actualTax],
+      ["source_E_eligible", `${worksheetLabel("E")} · จำนวนที่ใช้คำนวณ (บาท)`, eligibleTax],
+      ["source_F", "F — เงินได้ที่นำเข้าไทย (THB)", remittedIncome],
+      ["source_share", "สัดส่วน F/D", share],
+      ["source_G", "G — ภาษีต่างประเทศที่จัดสรรให้ F (THB)", attributableTax],
+    ];
+    for (const [code, label, value] of values) lines.push({ code, label, countryCode: source.countryCode, sourceId: source.id, value: text(value), explanation });
+    if (remittedIncome.isZero()) lines.push({ code: "source.zero_contribution", label: "ไม่มีเงินได้จากรายการนี้ที่นำเข้าไทย", countryCode: source.countryCode, sourceId: source.id, value: "0", explanation: "รายการนี้ไม่ก่อให้เกิดเครดิต และไม่หารด้วย D=0" });
+    return { source, income, actualTax, eligibleTax, remittedIncome, share, attributableTax };
+  });
+
+  const totalRemitted = sourceRows.reduce((sum, row) => sum.plus(row.remittedIncome), new CalcDecimal(0));
+  const totalAssessable = domestic.plus(totalRemitted);
+  const countryCodes = [...new Set(sourceRows.map(({ source }) => source.countryCode!))].sort();
+  const countries: CountryCalculationResult[] = [];
+  let unroundedTotal = new CalcDecimal(0);
+  for (const countryCode of countryCodes) {
+    const rows = sourceRows.filter(({ source }) => source.countryCode === countryCode);
+    const remittedIncome = rows.reduce((sum, row) => sum.plus(row.remittedIncome), new CalcDecimal(0));
+    const attributableTax = rows.reduce((sum, row) => sum.plus(row.attributableTax), new CalcDecimal(0));
+    const limit = remittedIncome.isZero() || totalAssessable.isZero()
+      ? new CalcDecimal(0)
+      : remittedIncome.div(totalAssessable).mul(thaiTax);
+    const credit = CalcDecimal.min(attributableTax, limit);
+    const countryName = policy.supportedCountries[countryCode] ?? rows[0]?.source.countryName ?? countryCode;
+    const result: CountryCalculationResult = {
+      countryCode,
+      countryName,
+      remittedIncome: text(remittedIncome),
+      attributableForeignTax: text(attributableTax),
+      thaiTaxLimit: text(limit),
+      allowableCredit: text(credit),
+      displayedAllowableCredit: money(credit),
+    };
+    countries.push(result);
+    unroundedTotal = unroundedTotal.plus(credit);
+    const countryExplanation = `รวม ${rows.length} รายการจากประเทศเดียวกัน; ไม่รวมเพดานที่เหลือจากประเทศอื่น`;
+    for (const [code, label, value] of [
+      ["country_N", "N — เงินได้ที่นำเข้ารวมตามประเทศ", remittedIncome],
+      ["country_O", "O — ภาษีต่างประเทศที่จัดสรรรวมตามประเทศ", attributableTax],
+      ["country_P", "P — เพดานภาษีไทยตามประเทศ", limit],
+      ["country_Q", "Q — เครดิตที่ใช้ได้ตามประเทศ", credit],
+    ] as Array<[string, string, Decimal]>) {
+      lines.push({ code, label, countryCode, sourceId: null, value: text(value), explanation: countryExplanation });
+    }
+  }
+
+  const finalTotal = unroundedTotal.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const displayedCountries = countries.reduce((sum, country) => sum.plus(country.displayedAllowableCredit), new CalcDecimal(0));
+  const reconciliation = finalTotal.minus(displayedCountries);
+  lines.push({ code: "case_J", label: "J — เงินได้พึงประเมินในประเทศ", countryCode: null, sourceId: null, value: text(domestic), explanation: "ผู้ใช้ระบุจากตัวอย่างที่จัดเตรียมไว้ ไม่ได้คำนวณจากข้อมูลนี้" });
+  lines.push({ code: "case_I", label: "I — เงินได้ต่างประเทศที่นำเข้ารวม", countryCode: null, sourceId: null, value: text(totalRemitted), explanation: "ผลรวม F ที่แปลงเป็น THB ด้วยแหล่งอัตราที่แสดงในแต่ละรายการ" });
+  lines.push({ code: "case_K", label: "K — เงินได้พึงประเมินรวมก่อนหักรายการอื่น", countryCode: null, sourceId: null, value: text(totalAssessable), explanation: "K = J + I" });
+  lines.push({ code: "case_L", label: "L — ภาษีไทยก่อนเครดิตภาษีต่างประเทศ", countryCode: null, sourceId: null, value: text(thaiTax), explanation: draft.thaiTax.provenance?.trim() ? draft.thaiTax.provenance : "ผู้ใช้ระบุจำนวนภาษีไทยก่อนเครดิต (L)" });
+  lines.push({ code: "case_total_credit", label: "เครดิตรวมหลังปัดเศษ", countryCode: null, sourceId: null, value: money(finalTotal), explanation: "รวม Q ที่ยังไม่ปัดเศษก่อน แล้วปัดยอดรวมเป็นสองตำแหน่ง" });
+  if (!reconciliation.isZero()) lines.push({ code: "case_display_reconciliation", label: "ยอดปรับให้ตารางแสดงตรงกับเครดิตรวม", countryCode: null, sourceId: null, value: text(reconciliation), explanation: "ยอดรวมสุดท้ายลบผลรวมเครดิตรายประเทศที่แสดงสองตำแหน่ง" });
+
+  return {
+    outcome: "ready",
+    allowableCredit: money(finalTotal),
+    unroundedCountryCreditTotal: text(unroundedTotal),
+    displayRoundingReconciliation: reconciliation.isZero() ? "0" : text(reconciliation),
+    domesticAssessableIncome: text(domestic),
+    totalRemittedIncome: text(totalRemitted),
+    totalAssessableIncome: text(totalAssessable),
+    thaiTaxBeforeFtc: text(thaiTax),
+    countries,
+    lines,
+    validationMessages: [],
+    assumptions: [
+      ...policy.assumptions,
+      ...(draft.residenceYears ?? []).flatMap((record) => record.mode === "declared"
+        ? [`ผู้ใช้ยืนยันว่าพำนักในประเทศไทยอย่างน้อย 180 วันในปี พ.ศ. ${record.earnedTaxYear + 543}; ข้อมูลนี้ยังไม่ผ่านการตรวจสอบ`]
+        : []),
+    ],
+    policyVersion: policy.id,
+    engineVersion: policy.engineVersion,
+    roundingPolicy: policy.roundingPolicy,
+  };
+}
+
+export interface SubmissionValidationContext {
+  currentRevision: number;
+  previewRevision: number | null;
+  /** Full case attachment list, including pending/failed uploads to block unresolved submissions. */
+  attachments: readonly AttachmentMetadata[];
+}
+
+/** Submission adds confirmations, a current preview, positive remittance and ready evidence. */
+export function validateSubmission(
+  draft: FtcCaseDraft,
+  result: CalculationResult,
+  context: SubmissionValidationContext,
+): ValidationMessage[] {
+  const messages: ValidationMessage[] = [];
+  if (result.outcome !== "ready") messages.push(msg("submit.calculation_not_ready", "กรุณาแก้ไขข้อมูลให้คำนวณได้ครบถ้วนก่อนส่งตรวจ", []));
+  if (!isThaiTaxConfirmationCurrent(draft)) messages.push(msg("confirmation.thai_tax_stale", "กรุณายืนยันจำนวนและที่มาของภาษีไทยกับข้อมูลปัจจุบัน", ["thaiTax"]));
+  draft.sources.forEach((source, index) => {
+    if (!isSourceEligibilityConfirmationCurrent(source)) messages.push(msg("confirmation.eligibility_stale", `กรุณายืนยันจำนวนภาษีต่างประเทศตาม ${worksheetLabel("E")} ของแหล่งเงินได้นี้`, ["sources", index, "actualForeignTaxPaid"]));
+  });
+  const hasPositiveRemittance = draft.sources.some((source) => source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(0));
+  if (!hasPositiveRemittance) messages.push(msg("submit.no_positive_remittance", "ต้องมีแหล่งเงินได้ที่รองรับและมีจำนวนเงินนำเข้าไทยมากกว่าศูนย์", ["sources"]));
+  if (context.previewRevision === null || context.previewRevision !== context.currentRevision) {
+    messages.push(msg("submit.preview_stale", "กรุณาคำนวณตัวอย่างใหม่หลังบันทึกการแก้ไขล่าสุด", []));
+  }
+  context.attachments.forEach((evidence) => {
+    if (evidence.status === "pending" || evidence.status === "failed") {
+      messages.push(msg("submit.evidence_unresolved", `ไฟล์ “${evidence.displayName}” ${evidence.status === "pending" ? "กำลังอัปโหลด" : "อัปโหลดไม่สำเร็จ"} กรุณารอหรือแก้ไขไฟล์นี้ก่อนส่งตรวจ`, ["evidence", evidence.id]));
+    }
+  });
+  draft.sources.forEach((source, index) => {
+    const hasPositiveF = source.remittedIncomeAmount !== null && new CalcDecimal(source.remittedIncomeAmount).gt(0);
+    if (!hasPositiveF) return;
+    if (source.id === null) {
+      messages.push(msg("submit.source_id_missing", "บันทึกแหล่งเงินได้ก่อนแนบหลักฐาน", ["sources", index, "id"]));
+    }
+  });
+  return messages;
+}
